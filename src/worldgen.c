@@ -14,15 +14,21 @@
 #include "generator.h"
 
 static Generator g;
+static SurfaceNoise surface_noise_biome;
 static OctavePerlinNoiseSampler surface_noise;
 static OctavePerlinNoiseSampler detail_noise;
 static int gen_initialized = 0;
+
+// Height cache for smooth chunk generation (covers 32x32 area for seamless borders)
+static int cache_cx = 0x7FFFFFFF, cache_cz = 0x7FFFFFFF;
+static uint8_t height_cache[36][36];  // 32x32 + 2 block border on each side
 
 void init_worldgen() {
     if (gen_initialized) return;
     setupGenerator(&g, MC_1_20, 0);
     applySeed(&g, DIM_OVERWORLD, (uint64_t)world_seed);
-    
+    initSurfaceNoise(&surface_noise_biome, DIM_OVERWORLD, (uint64_t)world_seed);
+
     octave_init(&surface_noise, (uint64_t)world_seed, 4);
     octave_init(&detail_noise, (uint64_t)world_seed + 1, 2);
     gen_initialized = 1;
@@ -41,8 +47,19 @@ uint32_t getChunkHash (short x, short z) {
 
 uint8_t getChunkBiome (short x, short z) {
   init_worldgen();
-  // Cubiomes uses block coordinates for getBiomeAt if scale is 1
-  int biomeID = getBiomeAt(&g, 1, x * 16 + 8, 64, z * 16 + 8);
+  
+  // Sample biome at an estimated surface height instead of fixed Y=64
+  // This prevents ocean biomes from being detected where terrain should be above sea level
+  int surface_x = x * 16 + 8;
+  int surface_z = z * 16 + 8;
+  
+  // Get approximate height at this location to sample biome at surface level
+  float height;
+  int biomeID;
+  if (mapApproxHeight(&height, &biomeID, &g, &surface_noise_biome, surface_x >> 2, surface_z >> 2, 1, 1) == 0) {
+      // Fallback: sample at Y=64 if mapApproxHeight fails
+      biomeID = getBiomeAt(&g, 1, surface_x, 64, surface_z);
+  }
   
   // Map cubiomes IDs to our registry IDs (W_ constants generated from build_registries.js)
   switch (biomeID) {
@@ -95,48 +112,102 @@ uint8_t getCornerHeight (uint32_t hash, uint8_t biome) {
   return TERRAIN_BASE_HEIGHT;
 }
 
-// Get terrain height at the given coordinates
+// Raw height calculation with smooth biome blending across chunk boundaries
+static uint8_t getHeightAtRaw (int x, int z) {
+  double noise = octave_sample(&surface_noise, x * 0.0125, 0, z * 0.0125);
+  double detail = octave_sample(&detail_noise, x * 0.05, 0, z * 0.05);
+
+  // Sample biomes on a fixed 16-block grid for consistent blending
+  int gx = div_floor(x, 16);  // Grid cell X
+  int gz = div_floor(z, 16);  // Grid cell Z
+  int lx = mod_abs(x, 16);    // Local position in cell (0-15)
+  int lz = mod_abs(z, 16);
+  
+  float wx = lx / 16.0f;
+  float wz = lz / 16.0f;
+  
+  // Sample biomes at 4 grid corners
+  uint8_t b00 = getChunkBiome(gx, gz);
+  uint8_t b10 = getChunkBiome(gx + 1, gz);
+  uint8_t b01 = getChunkBiome(gx, gz + 1);
+  uint8_t b11 = getChunkBiome(gx + 1, gz + 1);
+  
+  // Get base height and scale for each biome
+  double base00 = 64.0, scale00 = 12.0;
+  double base10 = 64.0, scale10 = 12.0;
+  double base01 = 64.0, scale01 = 12.0;
+  double base11 = 64.0, scale11 = 12.0;
+  
+  #define SET_BIOME_HEIGHT(biome, base, scale) \
+    if (biome == W_desert) { base = 66.0; scale = 8.0; } \
+    else if (biome == W_snowy_plains || biome == W_snowy_taiga) { base = 68.0; scale = 15.0; } \
+    else if (biome == W_savanna || biome == W_badlands || biome == W_windswept_hills) { base = 75.0; scale = 25.0; } \
+    else if (biome == W_stony_peaks || biome == W_jagged_peaks || biome == W_frozen_peaks) { base = 100.0; scale = 40.0; } \
+    else if (biome == W_cherry_grove) { base = 80.0; scale = 15.0; } \
+    else if (biome == W_ocean || biome == W_deep_ocean || biome == W_frozen_ocean) { base = 50.0; scale = 10.0; } \
+    else if (biome == W_river || biome == W_frozen_river) { base = 60.0; scale = 2.0; } \
+    else if (biome == W_beach) { base = 62.0; scale = 2.0; } \
+    else if (biome == W_mangrove_swamp || biome == W_swamp) { base = 62.0; scale = 3.0; }
+  
+  SET_BIOME_HEIGHT(b00, base00, scale00);
+  SET_BIOME_HEIGHT(b10, base10, scale10);
+  SET_BIOME_HEIGHT(b01, base01, scale01);
+  SET_BIOME_HEIGHT(b11, base11, scale11);
+  
+  #undef SET_BIOME_HEIGHT
+  
+  // Bilinear interpolation of base height and scale
+  double base_height = base00 * (1-wx) * (1-wz) + base10 * wx * (1-wz) + 
+                       base01 * (1-wx) * wz + base11 * wx * wz;
+  double scale = scale00 * (1-wx) * (1-wz) + scale10 * wx * (1-wz) + 
+                 scale01 * (1-wx) * wz + scale11 * wx * wz;
+
+  return (uint8_t)(base_height + noise * scale + detail * 2.0);
+}
+
+// Build height cache for a 32x32 superchunk (including 2-block border)
+// This ensures seamless transitions between adjacent 16x16 chunk sections
+static void buildHeightCache (int cx, int cz) {
+  // Use 32x32 superchunks to ensure adjacent 16x16 sections share cache
+  int scx = cx >> 1;  // Superchunk X
+  int scz = cz >> 1;
+  
+  if (cache_cx == scx && cache_cz == scz) return;  // Already cached
+  
+  cache_cx = scx;
+  cache_cz = scz;
+  
+  int base_x = scx * 32;
+  int base_z = scz * 32;
+  
+  // Generate raw heights for 36x36 area (32x32 superchunk + 2 block border)
+  for (int dz = 0; dz < 36; dz++) {
+    for (int dx = 0; dx < 36; dx++) {
+      height_cache[dx][dz] = getHeightAtRaw(base_x + dx - 2, base_z + dz - 2);
+    }
+  }
+}
+
+// Get terrain height at the given coordinates with caching
 // Does *not* account for block changes
 uint8_t getHeightAt (int x, int z) {
   init_worldgen();
   
-  double noise = octave_sample(&surface_noise, x * 0.0125, 0, z * 0.0125);
-  double detail = octave_sample(&detail_noise, x * 0.05, 0, z * 0.05);
+  // Calculate which 16x16 section this coordinate belongs to
+  int cx = div_floor(x, 16);
+  int cz = div_floor(z, 16);
+  int lx = mod_abs(x, 16);
+  int lz = mod_abs(z, 16);
   
-  uint8_t biome = getChunkBiome(div_floor(x, 16), div_floor(z, 16));
+  // Build cache for the superchunk containing this section
+  buildHeightCache(cx, cz);
   
-  double base_height = 64.0;
-  double scale = 12.0;
+  // Calculate position in the 36x36 cache
+  // cx & 1 gives us which 16x16 section within the 32x32 superchunk
+  int cache_x = 2 + (cx & 1) * 16 + lx;
+  int cache_z = 2 + (cz & 1) * 16 + lz;
   
-  // Simple height heuristics per biome group
-  if (biome == W_desert) {
-      scale = 8.0;
-  } else if (biome == W_snowy_plains || biome == W_snowy_taiga) {
-      scale = 15.0;
-  } else if (biome == W_savanna || biome == W_badlands || biome == W_windswept_hills) {
-      base_height = 75.0;
-      scale = 25.0;
-  } else if (biome == W_stony_peaks || biome == W_jagged_peaks || biome == W_frozen_peaks) {
-      base_height = 100.0;
-      scale = 40.0;
-  } else if (biome == W_cherry_grove) {
-      base_height = 80.0;
-      scale = 15.0;
-  } else if (biome == W_ocean || biome == W_deep_ocean || biome == W_frozen_ocean) {
-      base_height = 50.0;
-      scale = 10.0;
-  } else if (biome == W_river || biome == W_frozen_river) {
-      base_height = 60.0;
-      scale = 2.0;
-  } else if (biome == W_beach) {
-      base_height = 62.0;
-      scale = 2.0;
-  } else if (biome == W_mangrove_swamp || biome == W_swamp) {
-      base_height = 62.0;
-      scale = 3.0;
-  }
-  
-  return (uint8_t)(base_height + noise * scale + detail * 2.0);
+  return height_cache[cache_x][cache_z];
 }
 
 uint8_t getHeightAtFromAnchors (int rx, int rz, ChunkAnchor *anchor_ptr) {
