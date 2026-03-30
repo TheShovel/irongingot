@@ -222,21 +222,21 @@ uint8_t getHeightAtFromHash (int rx, int rz, int _x, int _z, uint32_t chunk_hash
 uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor anchor, ChunkFeature feature, uint8_t height) {
 
   if (y >= 64 && y >= height && feature.y != 255) switch (anchor.biome) {
-    case W_plains: { // Generate trees in the plains biome
-
+    case W_plains: { // Generate oak trees and grass in plains
+      
       // Don't generate trees underwater
       if (feature.y < 64) break;
-
-      // Handle tree stem and the dirt under it
+      
+      // Handle tree trunk and dirt
       if (x == feature.x && z == feature.z) {
         if (y == feature.y - 1) return B_dirt;
         if (y >= feature.y && y < feature.y - feature.variant + 6) return B_oak_log;
       }
-
+      
       // Get X/Z distance from center of tree
       uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
       uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
-
+      
       // Generate leaf clusters
       if (dx < 3 && dz < 3 && y > feature.y - feature.variant + 2 && y < feature.y - feature.variant + 5) {
         if (y == feature.y - feature.variant + 4 && dx == 2 && dz == 2) break;
@@ -246,9 +246,259 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
         if (y == feature.y - feature.variant + 6 && dx == 1 && dz == 1) break;
         return B_oak_leaves;
       }
-
+      
       // Since we're sure that we're above sea level and in a plains biome,
       // there's no need to drop down to decide the surrounding blocks.
+      if (y == height) return B_grass_block;
+      return B_air;
+    }
+    
+    case W_forest: { // Generate oak and birch trees in forests
+      
+      // Don't generate trees underwater
+      if (feature.y < 64) break;
+      
+      // Use hash to decide between oak and birch
+      uint8_t is_birch = (anchor.hash >> 3) & 1;
+      
+      if (x == feature.x && z == feature.z) {
+        if (y == feature.y - 1) return B_dirt;
+        // Birch trees are taller and thinner
+        if (is_birch) {
+          if (y >= feature.y && y < feature.y + 5 - feature.variant) return B_birch_log;
+        } else {
+          if (y >= feature.y && y < feature.y - feature.variant + 6) return B_oak_log;
+        }
+      }
+      
+      // Get X/Z distance from center of tree
+      uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
+      uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+      
+      // Generate leaf clusters
+      if (is_birch) {
+        // Birch leaves - more spread out
+        if (dx < 2 && dz < 2 && y > feature.y + 1 && y < feature.y + 6) {
+          return B_birch_leaves;
+        }
+        if (dx < 3 && dz < 3 && y == feature.y + 4) {
+          return B_birch_leaves;
+        }
+      } else {
+        // Oak leaves
+        if (dx < 3 && dz < 3 && y > feature.y - feature.variant + 2 && y < feature.y - feature.variant + 5) {
+          if (y == feature.y - feature.variant + 4 && dx == 2 && dz == 2) break;
+          return B_oak_leaves;
+        }
+        if (dx < 2 && dz < 2 && y >= feature.y - feature.variant + 5 && y <= feature.y - feature.variant + 6) {
+          if (y == feature.y - feature.variant + 6 && dx == 1 && dz == 1) break;
+          return B_oak_leaves;
+        }
+      }
+      
+      if (y == height) return B_grass_block;
+      return B_air;
+    }
+    
+    case W_taiga: // Generate spruce trees in taiga
+    case W_old_growth_pine_taiga: {
+      
+      // Don't generate trees underwater
+      if (feature.y < 64) break;
+      
+      // Spruce trees are tall and conical
+      if (x == feature.x && z == feature.z) {
+        if (y == feature.y - 1) return B_dirt;
+        if (y >= feature.y && y < feature.y + 8 - feature.variant * 2) return B_spruce_log;
+      }
+      
+      // Get X/Z distance from center of tree
+      uint8_t tree_dx = x > feature.x ? x - feature.x : feature.x - x;
+      uint8_t tree_dz = z > feature.z ? z - feature.z : feature.z - z;
+      uint8_t dist_from_center = tree_dx + tree_dz;
+      
+      // Conical spruce leaves
+      uint8_t leaf_start = feature.y + 3;
+      uint8_t leaf_end = feature.y + 10 - feature.variant * 2;
+      
+      if (y >= leaf_start && y <= leaf_end) {
+        uint8_t max_radius = (leaf_end - y) / 2 + 1;
+        if (dist_from_center <= max_radius && dist_from_center > 0) {
+          return B_spruce_leaves;
+        }
+      }
+      
+      if (y == height) return B_grass_block;
+      return B_air;
+    }
+    
+    case W_snowy_taiga: { // Generate spruce trees with snow in cold taiga
+      
+      // Don't generate trees underwater
+      if (feature.y < 64) break;
+      
+      if (x == feature.x && z == feature.z) {
+        if (y == feature.y - 1) return B_dirt;
+        if (y >= feature.y && y < feature.y + 7 - feature.variant) return B_spruce_log;
+      }
+      
+      // Get X/Z distance from center of tree
+      uint8_t tree_dx = x > feature.x ? x - feature.x : feature.x - x;
+      uint8_t tree_dz = z > feature.z ? z - feature.z : feature.z - z;
+      uint8_t dist_from_center = tree_dx + tree_dz;
+      
+      // Conical spruce leaves with snow
+      uint8_t leaf_start = feature.y + 2;
+      uint8_t leaf_end = feature.y + 9 - feature.variant;
+      
+      if (y >= leaf_start && y <= leaf_end) {
+        uint8_t max_radius = (leaf_end - y) / 2 + 1;
+        if (dist_from_center <= max_radius && dist_from_center > 0) {
+          return B_spruce_leaves;
+        }
+      }
+      
+      if (y == height) return B_snowy_grass_block;
+      return B_air;
+    }
+    
+    case W_jungle: // Generate jungle trees with vines
+    case W_bamboo_jungle: {
+      
+      // Don't generate trees underwater
+      if (feature.y < 64) break;
+      
+      // Jungle trees are very tall
+      if (x == feature.x && z == feature.z) {
+        if (y == feature.y - 1) return B_dirt;
+        if (y >= feature.y && y < feature.y + 12 - feature.variant * 3) return B_jungle_log;
+      }
+      
+      // Get X/Z distance from center of tree
+      uint8_t tree_dx = x > feature.x ? x - feature.x : feature.x - x;
+      uint8_t tree_dz = z > feature.z ? z - feature.z : feature.z - z;
+      
+      // Large jungle leaf canopy
+      if (tree_dx < 4 && tree_dz < 4 && y > feature.y + 8 - feature.variant * 3 && y < feature.y + 14 - feature.variant * 2) {
+        if (tree_dx == 3 && tree_dz == 3 && y < feature.y + 12 - feature.variant * 2) break;
+        return B_jungle_leaves;
+      }
+      
+      if (y == height) return B_grass_block;
+      return B_air;
+    }
+    
+    case W_savanna: { // Generate acacia trees in savanna
+      
+      // Don't generate trees underwater
+      if (feature.y < 64) break;
+      
+      // Acacia trees have a distinctive shape
+      if (x == feature.x && z == feature.z) {
+        if (y == feature.y - 1) return B_dirt;
+        if (y >= feature.y && y < feature.y + 4) return B_acacia_log;
+        // Acacia trunk curves - simplified as diagonal
+        if (y >= feature.y + 4 && y < feature.y + 7) {
+          if (x == feature.x + (y - feature.y - 4)) return B_acacia_log;
+        }
+      }
+      
+      // Get X/Z distance from center of tree
+      uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
+      uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+      
+      // Acacia leaf canopy (flat top)
+      uint8_t canopy_y = feature.y + 6;
+      if (y >= canopy_y && y <= canopy_y + 1) {
+        uint8_t canopy_dx = dx > 2 ? dx - 2 : 0;
+        uint8_t canopy_dz = dz > 2 ? dz - 2 : 0;
+        if (canopy_dx < 3 && canopy_dz < 3) {
+          return B_acacia_leaves;
+        }
+      }
+      
+      if (y == height) return B_grass_block;
+      return B_air;
+    }
+    
+    case W_dark_forest: { // Generate dark oak trees (2x2 trunks)
+      
+      // Don't generate trees underwater
+      if (feature.y < 64) break;
+      
+      // Dark oak trees have 2x2 trunks
+      int base_x = feature.x & ~1;  // Round down to even
+      int base_z = feature.z & ~1;
+      
+      if (x >= base_x && x < base_x + 2 && z >= base_z && z < base_z + 2) {
+        if (y == feature.y - 1) return B_dirt;
+        if (y >= feature.y && y < feature.y + 6) return B_dark_oak_log;
+      }
+      
+      // Get X/Z distance from center of tree
+      uint8_t dx = x > (base_x + 1) ? x - (base_x + 1) : (base_x + 1) - x;
+      uint8_t dz = z > (base_z + 1) ? z - (base_z + 1) : (base_z + 1) - z;
+      
+      // Large dark oak canopy
+      if (dx < 4 && dz < 4 && y > feature.y + 3 && y < feature.y + 7) {
+        if (dx == 3 && dz == 3) break;
+        return B_dark_oak_leaves;
+      }
+      
+      if (y == height) return B_grass_block;
+      return B_air;
+    }
+    
+    case W_birch_forest: { // Generate only birch trees
+      
+      // Don't generate trees underwater
+      if (feature.y < 64) break;
+      
+      if (x == feature.x && z == feature.z) {
+        if (y == feature.y - 1) return B_dirt;
+        if (y >= feature.y && y < feature.y + 6 - feature.variant) return B_birch_log;
+      }
+      
+      // Get X/Z distance from center of tree
+      uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
+      uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+      
+      // Birch leaves
+      if (dx < 2 && dz < 2 && y > feature.y + 1 && y < feature.y + 6) {
+        return B_birch_leaves;
+      }
+      if (dx < 3 && dz < 3 && y == feature.y + 4) {
+        return B_birch_leaves;
+      }
+      
+      if (y == height) return B_grass_block;
+      return B_air;
+    }
+    
+    case W_cherry_grove: { // Generate cherry blossom trees
+      
+      // Don't generate trees underwater
+      if (feature.y < 64) break;
+      
+      if (x == feature.x && z == feature.z) {
+        if (y == feature.y - 1) return B_dirt;
+        if (y >= feature.y && y < feature.y + 5) return B_cherry_log;
+      }
+      
+      // Get X/Z distance from center of tree
+      uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
+      uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+      
+      // Cherry blossom canopy (wide and flat)
+      if (dx < 4 && dz < 4 && y >= feature.y + 3 && y <= feature.y + 5) {
+        if (dx == 3 && dz == 3 && y == feature.y + 3) break;
+        return B_cherry_leaves;
+      }
+      // Falling petals effect (sparse leaves below canopy)
+      if (y == feature.y + 2 && (anchor.hash >> (x + z)) % 8 == 0) {
+        if (dx < 5 && dz < 5) return B_cherry_leaves;
+      }
+      
       if (y == height) return B_grass_block;
       return B_air;
     }
@@ -285,12 +535,34 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       break;
     }
 
-    case W_snowy_plains: { // Generate grass stubs in snowy plains
+    case W_snowy_plains: { // Generate grass stubs and snow in snowy plains
 
       if (x == feature.x && z == feature.z && y == height + 1 && height >= 64) {
         return B_short_grass;
       }
 
+      break;
+    }
+    
+    case W_swamp: { // Generate swamp vegetation
+      
+      if (x == feature.x && z == feature.z && y == 64 && height < 63) {
+        return B_lily_pad;
+      }
+      
+      // Occasional oak trees with vines
+      if (feature.y >= 64 && x == feature.x && z == feature.z) {
+        if (y == feature.y - 1) return B_dirt;
+        if (y >= feature.y && y < feature.y + 5) return B_oak_log;
+        // Vines
+        if (y > feature.y + 1 && y < feature.y + 4) {
+          uint8_t vine_dx = x > feature.x ? x - feature.x : feature.x - x;
+          uint8_t vine_dz = z > feature.z ? z - feature.z : feature.z - z;
+          if (vine_dx == 1 && vine_dz == 0) return B_oak_leaves;  // Use leaves instead of vines for now
+          if (vine_dx == 0 && vine_dz == 1) return B_oak_leaves;
+        }
+      }
+      
       break;
     }
 

@@ -383,6 +383,7 @@ void spawnPlayer (PlayerData *player) {
   // Send surrounding chunks to prevent falling through world borders
   // Send in a 5x5 area (chunks at distance 0-2 from center)
   player->visited_next = 0;
+  player->chunk_refresh_ring = 0;  // Initialize chunk refresh state
   // Initialize all slots as invalid
   for (int i = 0; i < VISITED_HISTORY; i++) {
     player->visited_x[i] = 32767;
@@ -1685,6 +1686,10 @@ void handleServerTick (int64_t time_since_last_tick) {
     // Send Keep Alive and Update Time packets
     sc_keepAlive(player->client_fd);
     sc_updateTime(player->client_fd, world_time);
+    
+    // Refresh chunks around player gradually (one ring per second)
+    refreshChunksAroundPlayer(player);
+    
     // Tick damage from lava
     uint8_t block = getBlockAt(player->x, player->y, player->z);
     if (block >= B_lava && block < B_lava + 4) {
@@ -2010,4 +2015,49 @@ int sizeEntityMetadata (EntityData *metadata, size_t length) {
     total_size += size;
   }
   return total_size;
+}
+
+// Forcefully refresh chunks around a player gradually over multiple ticks
+// Called every second, sends one ring of chunks per call
+// Full refresh completes over 4 seconds (one ring per second)
+void refreshChunksAroundPlayer (PlayerData *player) {
+  if (player->client_fd == -1) return;
+  
+  short cx = div_floor(player->x, 16);
+  short cz = div_floor(player->z, 16);
+  int refresh_radius = 4;  // 4 rings = completes in 4 seconds
+  
+  // Send center chunk first (only on first ring)
+  if (player->chunk_refresh_ring == 0) {
+    sc_setCenterChunk(player->client_fd, cx, cz);
+  }
+  
+  // Send one ring per tick
+  int ring = player->chunk_refresh_ring;
+  if (ring <= refresh_radius) {
+    // Top and bottom rows
+    for (int dx = -ring; dx <= ring; dx++) {
+      sc_chunkDataAndUpdateLight(player->client_fd, cx + dx, cz - ring);
+      task_yield();
+    }
+    for (int dx = -ring; dx <= ring; dx++) {
+      sc_chunkDataAndUpdateLight(player->client_fd, cx + dx, cz + ring);
+      task_yield();
+    }
+    // Left and right columns (excluding corners)
+    for (int dz = -ring + 1; dz < ring; dz++) {
+      sc_chunkDataAndUpdateLight(player->client_fd, cx - ring, cz + dz);
+      task_yield();
+    }
+    for (int dz = -ring + 1; dz < ring; dz++) {
+      sc_chunkDataAndUpdateLight(player->client_fd, cx + ring, cz + dz);
+      task_yield();
+    }
+  }
+  
+  // Move to next ring, wrap around after completing all rings
+  player->chunk_refresh_ring++;
+  if (player->chunk_refresh_ring > refresh_radius) {
+    player->chunk_refresh_ring = 0;
+  }
 }

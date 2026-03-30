@@ -209,6 +209,7 @@ typedef struct {
   short visited_x[VISITED_HISTORY];
   short visited_z[VISITED_HISTORY];
   uint16_t visited_next;  // Next slot to write in circular buffer
+  uint8_t chunk_refresh_ring;  // Current ring being refreshed (0-4)
   #ifdef SCALE_MOVEMENT_UPDATES_TO_PLAYER_COUNT
     uint16_t packets_since_update;
   #endif
