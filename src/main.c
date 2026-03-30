@@ -40,6 +40,23 @@
 #include "procedures.h"
 #include "serialize.h"
 
+// Check if a chunk has been visited (sent to player)
+static int isChunkVisited(PlayerData *player, int x, int z) {
+  for (int i = 0; i < VISITED_HISTORY; i++) {
+    if (player->visited_x[i] == x && player->visited_z[i] == z) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+// Mark a chunk as visited (sent to player) using circular buffer
+static void markChunkVisited(PlayerData *player, int x, int z) {
+  player->visited_x[player->visited_next] = x;
+  player->visited_z[player->visited_next] = z;
+  player->visited_next = (player->visited_next + 1) % VISITED_HISTORY;
+}
+
 /**
  * Routes an incoming packet to its packet handler or procedure.
  *
@@ -329,101 +346,84 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
         player->y = cy;
         player->z = cz;
 
-        // Exit early if no chunk borders were crossed
-        if (dx == 0 && dz == 0) break;
-
-        // Check if the player has recently been in this chunk
-        int found = false;
-        for (int i = 0; i < VISITED_HISTORY; i ++) {
-          if (player->visited_x[i] == _x && player->visited_z[i] == _z) {
-            found = true;
-            break;
-          }
-        }
-        if (found) break;
-
-        // Update player's recently visited chunks
-        for (int i = 0; i < VISITED_HISTORY - 1; i ++) {
-          player->visited_x[i] = player->visited_x[i + 1];
-          player->visited_z[i] = player->visited_z[i + 1];
-        }
-        player->visited_x[VISITED_HISTORY - 1] = _x;
-        player->visited_z[VISITED_HISTORY - 1] = _z;
-
-        uint32_t r = fast_rand();
-        // One in every 4 new chunks spawns a mob
-        if ((r & 3) == 0) {
-          // The mob is placed in the middle of the new chunk row,
-          // at a random position within the chunk
-          short mob_x = (_x + dx * VIEW_DISTANCE) * 16 + ((r >> 4) & 15);
-          short mob_z = (_z + dz * VIEW_DISTANCE) * 16 + ((r >> 8) & 15);
-          // Start at the Y coordinate of the spawning player and move upward
-          // until a valid space is found
-          uint8_t mob_y = cy - 8;
-          uint8_t b_low = getBlockAt(mob_x, mob_y - 1, mob_z);
-          uint8_t b_mid = getBlockAt(mob_x, mob_y, mob_z);
-          uint8_t b_top = getBlockAt(mob_x, mob_y + 1, mob_z);
-          while (mob_y < 255) {
-            if ( // Solid block below, non-solid(spawnable) at feet and above
-              !isPassableBlock(b_low) &&
-              isPassableSpawnBlock(b_mid) &&
-              isPassableSpawnBlock(b_top)
-            ) break;
-            b_low = b_mid;
-            b_mid = b_top;
-            b_top = getBlockAt(mob_x, mob_y + 2, mob_z);
-            mob_y ++;
-          }
-          if (mob_y != 255) {
-            // Spawn passive mobs above ground during the day,
-            // or hostiles underground and during the night
-            if ((world_time < 13000 || world_time > 23460) && mob_y > 48) {
-              uint32_t mob_choice = (r >> 12) & 3;
-              if (mob_choice == 0) spawnMob(25, mob_x, mob_y, mob_z, 4); // Chicken
-              else if (mob_choice == 1) spawnMob(28, mob_x, mob_y, mob_z, 10); // Cow
-              else if (mob_choice == 2) spawnMob(95, mob_x, mob_y, mob_z, 10); // Pig
-              else if (mob_choice == 3) spawnMob(106, mob_x, mob_y, mob_z, 8); // Sheep
-            } else {
-              spawnMob(145, mob_x, mob_y, mob_z, 20); // Zombie
-            }
-          }
-        }
-
-        int count = 0;
+        // Stream chunks on every movement packet - this creates smooth terrain loading
+        // Send only a few chunks per packet to avoid lag spikes
+        int chunks_per_tick = 8;
+        int sent_this_tick = 0;
+        
         #ifdef DEV_LOG_CHUNK_GENERATION
-          printf("Sending new chunks (%d, %d)\n", _x, _z);
+          printf("Streaming chunks at (%d, %d)\n", _x, _z);
           clock_t start, end;
           start = clock();
+          int count = 0;
         #endif
 
         sc_setCenterChunk(client_fd, _x, _z);
-
-        while (dx != 0) {
-          sc_chunkDataAndUpdateLight(client_fd, _x + dx * VIEW_DISTANCE, _z);
-          count ++;
-          for (int i = 1; i <= VIEW_DISTANCE; i ++) {
-            sc_chunkDataAndUpdateLight(client_fd, _x + dx * VIEW_DISTANCE, _z - i);
-            sc_chunkDataAndUpdateLight(client_fd, _x + dx * VIEW_DISTANCE, _z + i);
-            count += 2;
+        
+        // Search for unvisited chunks in a spiral pattern from player position
+        for (int ring = 1; ring <= VIEW_DISTANCE && sent_this_tick < chunks_per_tick; ring++) {
+          // Top row
+          for (int dx_ring = -ring; dx_ring <= ring && sent_this_tick < chunks_per_tick; dx_ring++) {
+            int check_x = _x + dx_ring;
+            int check_z = _z - ring;
+            if (!isChunkVisited(player, check_x, check_z)) {
+              sc_chunkDataAndUpdateLight(client_fd, check_x, check_z);
+              markChunkVisited(player, check_x, check_z);
+              #ifdef DEV_LOG_CHUNK_GENERATION
+                count++;
+              #endif
+              sent_this_tick++;
+              task_yield();
+            }
           }
-          dx += dx > 0 ? -1 : 1;
-        }
-        while (dz != 0) {
-          sc_chunkDataAndUpdateLight(client_fd, _x, _z + dz * VIEW_DISTANCE);
-          count ++;
-          for (int i = 1; i <= VIEW_DISTANCE; i ++) {
-            sc_chunkDataAndUpdateLight(client_fd, _x - i, _z + dz * VIEW_DISTANCE);
-            sc_chunkDataAndUpdateLight(client_fd, _x + i, _z + dz * VIEW_DISTANCE);
-            count += 2;
+          // Bottom row
+          for (int dx_ring = -ring; dx_ring <= ring && sent_this_tick < chunks_per_tick; dx_ring++) {
+            int check_x = _x + dx_ring;
+            int check_z = _z + ring;
+            if (!isChunkVisited(player, check_x, check_z)) {
+              sc_chunkDataAndUpdateLight(client_fd, check_x, check_z);
+              markChunkVisited(player, check_x, check_z);
+              #ifdef DEV_LOG_CHUNK_GENERATION
+                count++;
+              #endif
+              sent_this_tick++;
+              task_yield();
+            }
           }
-          dz += dz > 0 ? -1 : 1;
+          // Left and right columns (excluding corners)
+          for (int dz_ring = -ring + 1; dz_ring < ring && sent_this_tick < chunks_per_tick; dz_ring++) {
+            int check_x = _x - ring;
+            int check_z = _z + dz_ring;
+            if (!isChunkVisited(player, check_x, check_z)) {
+              sc_chunkDataAndUpdateLight(client_fd, check_x, check_z);
+              markChunkVisited(player, check_x, check_z);
+              #ifdef DEV_LOG_CHUNK_GENERATION
+                count++;
+              #endif
+              sent_this_tick++;
+              task_yield();
+            }
+            check_x = _x + ring;
+            if (!isChunkVisited(player, check_x, check_z)) {
+              sc_chunkDataAndUpdateLight(client_fd, check_x, check_z);
+              markChunkVisited(player, check_x, check_z);
+              #ifdef DEV_LOG_CHUNK_GENERATION
+                count++;
+              #endif
+              sent_this_tick++;
+              task_yield();
+            }
+          }
         }
-
+        
         #ifdef DEV_LOG_CHUNK_GENERATION
           end = clock();
           double total_ms = (double)(end - start) / CLOCKS_PER_SEC * 1000;
-          printf("Generated %d chunks in %.0f ms (%.2f ms per chunk)\n", count, total_ms, total_ms / (double)count);
+          printf("Streamed %d chunks in %.0f ms\n", count, total_ms);
         #endif
+
+        // Exit early if no chunk borders were crossed (skip mob spawning etc.)
+        if (dx == 0 && dz == 0) break;
 
       }
       break;

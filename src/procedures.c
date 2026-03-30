@@ -377,15 +377,37 @@ void spawnPlayer (PlayerData *player) {
 
   task_yield(); // Check task timer between packets
 
-  // Send spawn chunk first
+  // Send spawn chunk
   sc_chunkDataAndUpdateLight(player->client_fd, _x, _z);
-  for (int i = -VIEW_DISTANCE; i <= VIEW_DISTANCE; i ++) {
-    for (int j = -VIEW_DISTANCE; j <= VIEW_DISTANCE; j ++) {
+  
+  // Send surrounding chunks to prevent falling through world borders
+  // Send in a 5x5 area (chunks at distance 0-2 from center)
+  player->visited_next = 0;
+  // Initialize all slots as invalid
+  for (int i = 0; i < VISITED_HISTORY; i++) {
+    player->visited_x[i] = 32767;
+    player->visited_z[i] = 32767;
+  }
+  // Mark center chunk as visited
+  player->visited_x[player->visited_next] = _x;
+  player->visited_z[player->visited_next] = _z;
+  player->visited_next = (player->visited_next + 1) % VISITED_HISTORY;
+  
+  for (int i = -2; i <= 2; i ++) {
+    for (int j = -2; j <= 2; j ++) {
       if (i == 0 && j == 0) continue;
+      task_yield();
       sc_chunkDataAndUpdateLight(player->client_fd, _x + i, _z + j);
+      // Mark this chunk as visited
+      player->visited_x[player->visited_next] = _x + i;
+      player->visited_z[player->visited_next] = _z + j;
+      player->visited_next = (player->visited_next + 1) % VISITED_HISTORY;
     }
   }
-  // Re-teleport player after all chunks have been sent
+
+  task_yield(); // Check task timer between packets
+
+  // Re-teleport player after chunks have been sent
   sc_synchronizePlayerPosition(player->client_fd, spawn_x, spawn_y, spawn_z, spawn_yaw, spawn_pitch);
 
   task_yield(); // Check task timer between packets

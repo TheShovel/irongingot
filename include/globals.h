@@ -68,7 +68,9 @@
 // How many visited chunk coordinates to "remember"
 // The server will not re-send chunks that the player has recently been in
 // Must be at least 1, otherwise chunks will be sent on each position update
-#define VISITED_HISTORY 4
+// Set to cover the entire view area (21x21 = 441 for VIEW_DISTANCE=10) plus extra
+// for the circular buffer to wrap without losing visible chunks
+#define VISITED_HISTORY 1024
 
 // How many player-made block changes to allow
 // Determines the fixed amount of memory allocated to blocks
@@ -206,6 +208,7 @@ typedef struct {
   short z;
   short visited_x[VISITED_HISTORY];
   short visited_z[VISITED_HISTORY];
+  uint16_t visited_next;  // Next slot to write in circular buffer
   #ifdef SCALE_MOVEMENT_UPDATES_TO_PLAYER_COUNT
     uint16_t packets_since_update;
   #endif

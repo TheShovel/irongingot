@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(./build.sh)",
-      "Bash(gcc *)"
+      "Bash(gcc *)",
+      "Bash(rm *)",
+      "Bash(timeout *)"
     ]
   },
   "$version": 3
