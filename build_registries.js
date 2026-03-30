@@ -3,38 +3,21 @@ const path = require("path");
 
 // Overrides for block-to-item conversion
 const blockToItemOverrides = {
-  "grass_block": "dirt",
-  "snowy_grass_block": "dirt",
-  "stone": "cobblestone",
-  "diamond_ore": "diamond",
-  "gold_ore": "raw_gold",
-  "redstone_ore": "redstone",
-  "iron_ore": "raw_iron",
-  "coal_ore": "coal",
-  "copper_ore": "raw_copper",
-  "snow": "snowball",
-  "dead_bush": "stick"
+  grass_block: "dirt",
+  snowy_grass_block: "dirt",
+  stone: "cobblestone",
+  diamond_ore: "diamond",
+  gold_ore: "raw_gold",
+  redstone_ore: "redstone",
+  iron_ore: "raw_iron",
+  coal_ore: "coal",
+  copper_ore: "raw_copper",
+  snow: "snowball",
+  dead_bush: "stick",
 };
 
 // Blacklisted block name strings
-const blockBlacklist = [
-  "spruce_",
-  "birch_",
-  "jungle_",
-  "acacia_",
-  "dark_oak_",
-  "mangrove_",
-  "cherry_",
-  "pale_oak_",
-  "crimson_",
-  "warped_",
-  "bamboo_",
-  "deepslate",
-  "infested_",
-  "stained_",
-  "_terracotta",
-  "_head"
-];
+const blockBlacklist = ["infested_", "stained_", "_head"];
 
 // Whitelisted blocks, i.e. guaranteed to be included
 const blockWhitelist = [
@@ -60,27 +43,97 @@ const blockWhitelist = [
   "composter",
   "coal_block",
   "copper_ore",
-  "copper_block"
+  "copper_block",
+  "mycelium",
+  "podzol",
+  "red_sand",
+  "terracotta",
+  "white_terracotta",
+  "orange_terracotta",
+  "yellow_terracotta",
+  "brown_terracotta",
+  "red_terracotta",
+  "light_gray_terracotta",
+  "calcite",
+  "snow_block",
+  "packed_ice",
+  "blue_ice",
+  "magma_block",
+  "spruce_log",
+  "spruce_leaves",
+  "birch_log",
+  "birch_leaves",
+  "jungle_log",
+  "jungle_leaves",
+  "acacia_log",
+  "acacia_leaves",
+  "dark_oak_log",
+  "dark_oak_leaves",
+  "cherry_log",
+  "cherry_leaves",
+  "mangrove_log",
+  "mangrove_leaves",
+  "bamboo_block",
+  "cactus",
+  "lily_pad",
+  "snow",
+  "redstone_block",
+  "redstone_ore",
+  "ice",
+  "short_grass",
+  "sugar_cane",
 ];
 
-// Currently, only 4 biome types are supported, excluding "beach"
+// Supported biomes
 const biomes = [
+  "ocean",
   "plains",
-  "mangrove_swamp",
   "desert",
+  "windswept_hills",
+  "forest",
+  "taiga",
+  "swamp",
+  "river",
+  "frozen_ocean",
+  "frozen_river",
   "snowy_plains",
-  "beach"
+  "mushroom_fields",
+  "beach",
+  "jungle",
+  "birch_forest",
+  "dark_forest",
+  "snowy_taiga",
+  "savanna",
+  "badlands",
+  "deep_ocean",
+  "mangrove_swamp",
+  "stony_peaks",
+  "jagged_peaks",
+  "frozen_peaks",
+  "meadow",
+  "cherry_grove",
+  "old_growth_pine_taiga",
+  "bamboo_jungle",
 ];
 
 // Extract item and block data from registry dump
-async function extractItemsAndBlocks () {
-
+async function extractItemsAndBlocks() {
   // Block network IDs are defined in their own JSON file
   // The item JSON file doesn't define IDs, we get those from the registries
-  const blockSource = JSON.parse(await fs.readFile(`${__dirname}/notchian/generated/reports/blocks.json`, "utf8"));
+  const blockSource = JSON.parse(
+    await fs.readFile(
+      `${__dirname}/notchian/generated/reports/blocks.json`,
+      "utf8",
+    ),
+  );
 
   // Get registry data for extracting item IDs
-  const registriesJSON = JSON.parse(await fs.readFile(`${__dirname}/notchian/generated/reports/registries.json`, "utf8"));
+  const registriesJSON = JSON.parse(
+    await fs.readFile(
+      `${__dirname}/notchian/generated/reports/registries.json`,
+      "utf8",
+    ),
+  );
   const itemSource = registriesJSON["minecraft:item"].entries;
   // Retrieve the registry list for blocks too, used later in tags
   const blockRegistrySource = registriesJSON["minecraft:block"].entries;
@@ -89,18 +142,19 @@ async function extractItemsAndBlocks () {
   // Since we're only storing 256 blocks, this prioritizes the "common" ones first
   const sortedBlocks = Object.entries(blockSource);
   sortedBlocks.sort((a, b) => {
-    const aState = a[1].states.find(c => c.default);
+    const aState = a[1].states.find((c) => c.default);
     if (!aState) return 1;
-    const bState = b[1].states.find(c => c.default);
+    const bState = b[1].states.find((c) => c.default);
     if (!bState) return -1;
     return aState.id - bState.id;
   });
 
   // Create name-id pair objects for easier parsing
-  const blocks = {}, items = {};
+  const blocks = {},
+    items = {};
 
   for (const entry of sortedBlocks) {
-    const defaultState = entry[1].states.find(c => c.default);
+    const defaultState = entry[1].states.find((c) => c.default);
     if (!defaultState) continue;
     // Check if a part of this block's name is in the blacklist
     let found = false;
@@ -115,13 +169,14 @@ async function extractItemsAndBlocks () {
     blocks[entry[0].replace("minecraft:", "")] = defaultState.id;
     // Include "snowy" variants of blocks as well
     if ("properties" in defaultState && "snowy" in defaultState.properties) {
-      const snowyState = entry[1].states.find(c => c.properties.snowy);
+      const snowyState = entry[1].states.find((c) => c.properties.snowy);
       blocks["snowy_" + entry[0].replace("minecraft:", "")] = snowyState.id;
     }
     // Include levels for fluids
     if ("fluid" in entry[1].definition) {
-      for (let i = 1; i <= 7; i ++) {
-        blocks[entry[0].replace("minecraft:", "") + "_" + i] = defaultState.id + i;
+      for (let i = 1; i <= 7; i++) {
+        blocks[entry[0].replace("minecraft:", "") + "_" + i] =
+          defaultState.id + i;
       }
     }
   }
@@ -139,13 +194,16 @@ async function extractItemsAndBlocks () {
   const palette = {};
 
   // While we're at it, map block IDs to item IDs
-  const mapping = [], mappingWithOverrides = [];
+  const mapping = [],
+    mappingWithOverrides = [];
 
   // Handle explicitly whitelisted blocks first
   for (const block of blockWhitelist) {
     palette[block] = blocks[block];
     mapping.push(items[block] || 0);
-    mappingWithOverrides.push(items[blockToItemOverrides[block]] || items[block] || 0);
+    mappingWithOverrides.push(
+      items[blockToItemOverrides[block]] || items[block] || 0,
+    );
     if (mapping.length === 256) break;
   }
 
@@ -155,7 +213,9 @@ async function extractItemsAndBlocks () {
     if (blockWhitelist.includes(block)) continue;
     palette[block] = blocks[block];
     mapping.push(items[block] || 0);
-    mappingWithOverrides.push(items[blockToItemOverrides[block]] || items[block] || 0);
+    mappingWithOverrides.push(
+      items[blockToItemOverrides[block]] || items[block] || 0,
+    );
     if (mapping.length === 256) break;
   }
 
@@ -163,30 +223,39 @@ async function extractItemsAndBlocks () {
   // Tags refer to these IDs, not the actual blocks
   const blockRegistry = {};
   for (const block in blockRegistrySource) {
-    blockRegistry[block.replace("minecraft:", "")] = blockRegistrySource[block].protocol_id;
+    blockRegistry[block.replace("minecraft:", "")] =
+      blockRegistrySource[block].protocol_id;
   }
 
-  return { blocks, items, palette, mapping, mappingWithOverrides, blockRegistry };
-
+  return {
+    blocks,
+    items,
+    palette,
+    mapping,
+    mappingWithOverrides,
+    blockRegistry,
+  };
 }
 
 // Write an integer as a VarInt
-function writeVarInt (value) {
+function writeVarInt(value) {
   const bytes = [];
   while (true) {
-    if ((value & ~0x7F) === 0) {
+    if ((value & ~0x7f) === 0) {
       bytes.push(value);
       return Buffer.from(bytes);
     }
-    bytes.push((value & 0x7F) | 0x80);
+    bytes.push((value & 0x7f) | 0x80);
     value >>>= 7;
   }
 }
 
 // Scan directory recursively to find all JSON files
-async function scanDirectory (basePath, currentPath = "") {
+async function scanDirectory(basePath, currentPath = "") {
   const entries = {};
-  const items = await fs.readdir(path.join(basePath, currentPath), { withFileTypes: true });
+  const items = await fs.readdir(path.join(basePath, currentPath), {
+    withFileTypes: true,
+  });
 
   for (const item of items) {
     const relativePath = path.join(currentPath, item.name);
@@ -209,7 +278,7 @@ async function scanDirectory (basePath, currentPath = "") {
 }
 
 // Serialize a single registry
-function serializeRegistry (name, entries) {
+function serializeRegistry(name, entries) {
   const parts = [];
 
   // Packet ID for Registry Data
@@ -241,18 +310,17 @@ function serializeRegistry (name, entries) {
 }
 
 // Serialize a tag update
-function serializeTags (tags) {
+function serializeTags(tags) {
   const parts = [];
 
   // Packet ID for Update Tags
-  parts.push(Buffer.from([0x0D]));
+  parts.push(Buffer.from([0x0d]));
 
   // Tag type count
   parts.push(writeVarInt(Object.keys(tags).length));
 
   // Tag registry entry
   for (const type in tags) {
-
     // Tag registry identifier
     const identifier = Buffer.from(type, "utf8");
     parts.push(writeVarInt(identifier.length));
@@ -273,7 +341,6 @@ function serializeTags (tags) {
         parts.push(writeVarInt(id));
       }
     }
-
   }
 
   // Combine all parts
@@ -285,7 +352,7 @@ function serializeTags (tags) {
   return Buffer.concat([lengthBuf, fullData]);
 }
 
-function toVarIntBuffer (array) {
+function toVarIntBuffer(array) {
   const parts = [];
   for (const num of array) {
     parts.push(writeVarInt(num));
@@ -294,8 +361,10 @@ function toVarIntBuffer (array) {
 }
 
 // Convert to C-style hex byte array string
-function toCArray (buffer) {
-  const hexBytes = [...buffer].map(b => `0x${b.toString(16).padStart(2, "0")}`);
+function toCArray(buffer) {
+  const hexBytes = [...buffer].map(
+    (b) => `0x${b.toString(16).padStart(2, "0")}`,
+  );
   const lines = [];
   for (let i = 0; i < hexBytes.length; i += 12) {
     lines.push("  " + hexBytes.slice(i, i + 12).join(", "));
@@ -312,11 +381,10 @@ const requiredRegistries = [
   "pig_variant",
   "wolf_sound_variant",
   "wolf_variant",
-  "damage_type"
+  "damage_type",
 ];
 
-async function convert () {
-
+async function convert() {
   const inputPath = __dirname + "/notchian/generated/data/minecraft";
   const outputPath = __dirname + "/src/registries.c";
   const headerPath = __dirname + "/include/registries.h";
@@ -335,7 +403,9 @@ async function convert () {
       if (registries[registry].includes("temperate")) {
         registryBuffers.push(serializeRegistry(registry, ["temperate"]));
       } else {
-        const shortest = registries[registry].sort((a, b) => a.length - b.length)[0];
+        const shortest = registries[registry].sort(
+          (a, b) => a.length - b.length,
+        )[0];
         registryBuffers.push(serializeRegistry(registry, [shortest]));
       }
     } else {
@@ -351,12 +421,12 @@ async function convert () {
   const itemsAndBlocks = await extractItemsAndBlocks();
 
   const tagBuffer = serializeTags({
-    "fluid": {
+    fluid: {
       // Water and lava, both flowing and still states
-      "water": [ 1, 2 ],
-      "lava": [ 3, 4 ]
+      water: [1, 2],
+      lava: [3, 4],
     },
-    "block": {
+    block: {
       "mineable/pickaxe": [
         itemsAndBlocks.blockRegistry["stone"],
         itemsAndBlocks.blockRegistry["stone_slab"],
@@ -377,7 +447,7 @@ async function convert () {
         itemsAndBlocks.blockRegistry["diamond_block"],
         itemsAndBlocks.blockRegistry["redstone_block"],
         itemsAndBlocks.blockRegistry["coal_block"],
-        itemsAndBlocks.blockRegistry["copper_block"]
+        itemsAndBlocks.blockRegistry["copper_block"],
       ],
       "mineable/axe": [
         itemsAndBlocks.blockRegistry["oak_log"],
@@ -385,7 +455,7 @@ async function convert () {
         itemsAndBlocks.blockRegistry["oak_wood"],
         itemsAndBlocks.blockRegistry["oak_slab"],
         itemsAndBlocks.blockRegistry["crafting_table"],
-        itemsAndBlocks.blockRegistry["chest"]
+        itemsAndBlocks.blockRegistry["chest"],
       ],
       "mineable/shovel": [
         itemsAndBlocks.blockRegistry["grass_block"],
@@ -393,20 +463,18 @@ async function convert () {
         itemsAndBlocks.blockRegistry["sand"],
         itemsAndBlocks.blockRegistry["snow"],
         itemsAndBlocks.blockRegistry["snow_block"],
-        itemsAndBlocks.blockRegistry["mud"]
+        itemsAndBlocks.blockRegistry["mud"],
       ],
-      "leaves": [
-        itemsAndBlocks.blockRegistry["oak_leaves"]
-      ]
+      leaves: [itemsAndBlocks.blockRegistry["oak_leaves"]],
     },
-    "item": {
-      "planks": [
-        itemsAndBlocks.items["oak_planks"]
-      ]
-    }
+    item: {
+      planks: [itemsAndBlocks.items["oak_planks"]],
+    },
   });
 
-  const networkBlockPalette = toVarIntBuffer(Object.values(itemsAndBlocks.palette));
+  const networkBlockPalette = toVarIntBuffer(
+    Object.values(itemsAndBlocks.palette),
+  );
 
   const sourceCode = `\
 #include <stdint.h>
@@ -433,7 +501,7 @@ uint16_t B_to_I[] = { ${itemsAndBlocks.mappingWithOverrides.join(", ")} };
 // Item-to-block mapping
 uint8_t I_to_B (uint16_t item) {
   switch (item) {
-    ${itemsAndBlocks.mapping.map((c, i) => c ? `case ${c}: return ${i};\n    ` : "").join("")}
+    ${itemsAndBlocks.mapping.map((c, i) => (c ? `case ${c}: return ${i};\n    ` : "")).join("")}
     default: break;
   }
   return 0;
@@ -456,10 +524,14 @@ extern uint16_t B_to_I[256]; // Block-to-item mapping
 uint8_t I_to_B (uint16_t item); // Item-to-block mapping
 
 // Block identifiers
-${Object.keys(itemsAndBlocks.palette).map((c, i) => `#define B_${c} ${i}`).join("\n")}
+${Object.keys(itemsAndBlocks.palette)
+  .map((c, i) => `#define B_${c} ${i}`)
+  .join("\n")}
 
 // Item identifiers
-${Object.entries(itemsAndBlocks.items).map(c => `#define I_${c[0]} ${c[1]}`).join("\n")}
+${Object.entries(itemsAndBlocks.items)
+  .map((c) => `#define I_${c[0]} ${c[1]}`)
+  .join("\n")}
 
 // Biome identifiers
 ${biomes.map((c, i) => `#define W_${c} ${i}`).join("\n")}
@@ -473,7 +545,6 @@ ${registries["damage_type"].map((c, i) => `#define D_${c} ${i}`).join("\n")}
   await fs.writeFile(outputPath, sourceCode);
   await fs.writeFile(headerPath, headerCode);
   console.log("Done. Wrote to `registries.c` and `registries.h`");
-
 }
 
 convert().catch(console.error);

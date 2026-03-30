@@ -3,12 +3,30 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #include "globals.h"
 #include "tools.h"
 #include "registries.h"
 #include "procedures.h"
 #include "worldgen.h"
+#include "perlin.h"
+#include "generator.h"
+
+static Generator g;
+static OctavePerlinNoiseSampler surface_noise;
+static OctavePerlinNoiseSampler detail_noise;
+static int gen_initialized = 0;
+
+void init_worldgen() {
+    if (gen_initialized) return;
+    setupGenerator(&g, MC_1_20, 0);
+    applySeed(&g, DIM_OVERWORLD, (uint64_t)world_seed);
+    
+    octave_init(&surface_noise, (uint64_t)world_seed, 4);
+    octave_init(&detail_noise, (uint64_t)world_seed + 1, 2);
+    gen_initialized = 1;
+}
 
 uint32_t getChunkHash (short x, short z) {
 
@@ -22,153 +40,113 @@ uint32_t getChunkHash (short x, short z) {
 }
 
 uint8_t getChunkBiome (short x, short z) {
+  init_worldgen();
+  // Cubiomes uses block coordinates for getBiomeAt if scale is 1
+  int biomeID = getBiomeAt(&g, 1, x * 16 + 8, 64, z * 16 + 8);
+  
+  // Map cubiomes IDs to our registry IDs (W_ constants generated from build_registries.js)
+  switch (biomeID) {
+    case ocean: return W_ocean;
+    case plains: return W_plains;
+    case sunflower_plains: return W_plains;
+    case desert: return W_desert;
+    case desert_lakes: return W_desert;
+    case windswept_hills: return W_windswept_hills;
+    case forest: return W_forest;
+    case flower_forest: return W_forest;
+    case taiga: return W_taiga;
+    case taiga_mountains: return W_taiga;
+    case swamp: return W_swamp;
+    case swamp_hills: return W_swamp;
+    case river: return W_river;
+    case frozen_ocean: return W_frozen_ocean;
+    case frozen_river: return W_frozen_river;
+    case ice_spikes: return W_snowy_plains;
+    case beach: return W_beach;
+    case desertHills: return W_desert;
+    case forestHills: return W_forest;
+    case taigaHills: return W_taiga;
+    case jungle: return W_jungle;
 
-  // Center biomes on 0;0
-  x += BIOME_RADIUS;
-  z += BIOME_RADIUS;
-
-  // Calculate distance from biome center
-  int8_t dx = BIOME_RADIUS - mod_abs(x, BIOME_SIZE);
-  int8_t dz = BIOME_RADIUS - mod_abs(z, BIOME_SIZE);
-  // Each biome is a circular island, with beaches in-between
-  // Determine whether the given chunk is within the island
-  if (dx * dx + dz * dz > BIOME_RADIUS * BIOME_RADIUS) return W_beach;
-
-  // Calculate "biome coordinates" (one step above chunk coordinates)
-  short biome_x = div_floor(x, BIOME_SIZE);
-  short biome_z = div_floor(z, BIOME_SIZE);
-
-  // The biome itself is plucked directly from the world seed.
-  // The 32-bit seed is treated as a 4x4 biome matrix, with each biome
-  // taking up 2 bytes. This is why there are only 4 biomes, excluding
-  // beaches. Using the world seed as a repeating pattern avoids
-  // having to generate and layer yet another hash.
-  uint8_t index = abs((biome_x & 3) + ((biome_z * 4) & 15));
-  return (world_seed >> (index * 2)) & 3;
-
+    case modified_jungle: return W_jungle;
+    case deep_ocean: return W_deep_ocean;
+    case birch_forest: return W_birch_forest;
+    case tall_birch_forest: return W_birch_forest;
+    case dark_forest: return W_dark_forest;
+    case snowy_taiga: return W_snowy_taiga;
+    case savanna: return W_savanna;
+    case shattered_savanna: return W_savanna;
+    case badlands: return W_badlands;
+    case eroded_badlands: return W_badlands;
+    case mangrove_swamp: return W_mangrove_swamp;
+    
+    default:
+        // Use isSnowy helper from cubiomes
+        if (isSnowy(biomeID)) return W_snowy_plains;
+        if (isDeepOcean(biomeID)) return W_deep_ocean;
+        if (isOceanic(biomeID)) return W_ocean;
+        if (isMesa(biomeID)) return W_badlands;
+        return W_plains;
+  }
 }
 
 uint8_t getCornerHeight (uint32_t hash, uint8_t biome) {
-
-  // When calculating the height, parts of the hash are used as random values.
-  // Often, multiple values are stacked to stabilize the distribution while
-  // allowing for occasionally larger variances.
-  uint8_t height = TERRAIN_BASE_HEIGHT;
-
-  switch (biome) {
-
-    case W_mangrove_swamp: {
-      height += (
-        (hash % 3) +
-        ((hash >> 4) % 3) +
-        ((hash >> 8) % 3) +
-        ((hash >> 12) % 3)
-      );
-      // If height dips below sea level, push it down further
-      // This ends up creating many large ponds of water
-      if (height < 64) height -= (hash >> 24) & 3;
-      break;
-    }
-
-    case W_plains: {
-      height += (
-        (hash & 3) +
-        (hash >> 4 & 3) +
-        (hash >> 8 & 3) +
-        (hash >> 12 & 3)
-      );
-      break;
-    }
-
-    case W_desert: {
-      height += 4 + (
-        (hash & 3) +
-        (hash >> 4 & 3)
-      );
-      break;
-    }
-
-    case W_beach: {
-      // Start slightly below sea level to ensure it's all water
-      height = 62 - (
-        (hash & 3) +
-        (hash >> 4 & 3) +
-        (hash >> 8 & 3)
-      );
-      break;
-    }
-
-    case W_snowy_plains: {
-      // Use fewer components with larger ranges to create hills
-      height += (
-        (hash & 7) +
-        (hash >> 4 & 7)
-      );
-      break;
-    }
-
-    default: break;
-  }
-
-  return height;
-
-}
-
-uint8_t interpolate (uint8_t a, uint8_t b, uint8_t c, uint8_t d, int x, int z) {
-  uint16_t top    = a * (CHUNK_SIZE - x) + b * x;
-  uint16_t bottom = c * (CHUNK_SIZE - x) + d * x;
-  return (top * (CHUNK_SIZE - z) + bottom * z) / (CHUNK_SIZE * CHUNK_SIZE);
-}
-
-// Calculates terrain height using a pointer to an array of anchors
-// The pointer should point towards the minichunk containing the desired
-// coordinates, with available neighbors on +X and +Z.
-uint8_t getHeightAtFromAnchors (int rx, int rz, ChunkAnchor *anchor_ptr) {
-
-  if (rx == 0 && rz == 0) {
-    int height = getCornerHeight(anchor_ptr[0].hash, anchor_ptr[0].biome);
-    if (height > 67) return height - 1;
-  }
-  return interpolate(
-    getCornerHeight(anchor_ptr[0].hash, anchor_ptr[0].biome),
-    getCornerHeight(anchor_ptr[1].hash, anchor_ptr[1].biome),
-    getCornerHeight(anchor_ptr[16 / CHUNK_SIZE + 1].hash, anchor_ptr[16 / CHUNK_SIZE + 1].biome),
-    getCornerHeight(anchor_ptr[16 / CHUNK_SIZE + 2].hash, anchor_ptr[16 / CHUNK_SIZE + 2].biome),
-    rx, rz
-  );
-
-}
-
-uint8_t getHeightAtFromHash (int rx, int rz, int _x, int _z, uint32_t chunk_hash, uint8_t biome) {
-
-  if (rx == 0 && rz == 0) {
-    int height = getCornerHeight(chunk_hash, biome);
-    if (height > 67) return height - 1;
-  }
-  return interpolate(
-    getCornerHeight(chunk_hash, biome),
-    getCornerHeight(getChunkHash(_x + 1, _z), getChunkBiome(_x + 1, _z)),
-    getCornerHeight(getChunkHash(_x, _z + 1), getChunkBiome(_x, _z + 1)),
-    getCornerHeight(getChunkHash(_x + 1, _z + 1), getChunkBiome(_x + 1, _z + 1)),
-    rx, rz
-  );
-
+  // This function is kept for legacy support if needed, but we'll use noise instead
+  return TERRAIN_BASE_HEIGHT;
 }
 
 // Get terrain height at the given coordinates
 // Does *not* account for block changes
 uint8_t getHeightAt (int x, int z) {
-
-  int _x = div_floor(x, CHUNK_SIZE);
-  int _z = div_floor(z, CHUNK_SIZE);
-  int rx = mod_abs(x, CHUNK_SIZE);
-  int rz = mod_abs(z, CHUNK_SIZE);
-  uint32_t chunk_hash = getChunkHash(_x, _z);
-  uint8_t biome = getChunkBiome(_x, _z);
-
-  return getHeightAtFromHash(rx, rz, _x, _z, chunk_hash, biome);
-
+  init_worldgen();
+  
+  double noise = octave_sample(&surface_noise, x * 0.0125, 0, z * 0.0125);
+  double detail = octave_sample(&detail_noise, x * 0.05, 0, z * 0.05);
+  
+  uint8_t biome = getChunkBiome(div_floor(x, 16), div_floor(z, 16));
+  
+  double base_height = 64.0;
+  double scale = 12.0;
+  
+  // Simple height heuristics per biome group
+  if (biome == W_desert) {
+      scale = 8.0;
+  } else if (biome == W_snowy_plains || biome == W_snowy_taiga) {
+      scale = 15.0;
+  } else if (biome == W_savanna || biome == W_badlands || biome == W_windswept_hills) {
+      base_height = 75.0;
+      scale = 25.0;
+  } else if (biome == W_stony_peaks || biome == W_jagged_peaks || biome == W_frozen_peaks) {
+      base_height = 100.0;
+      scale = 40.0;
+  } else if (biome == W_cherry_grove) {
+      base_height = 80.0;
+      scale = 15.0;
+  } else if (biome == W_ocean || biome == W_deep_ocean || biome == W_frozen_ocean) {
+      base_height = 50.0;
+      scale = 10.0;
+  } else if (biome == W_river || biome == W_frozen_river) {
+      base_height = 60.0;
+      scale = 2.0;
+  } else if (biome == W_beach) {
+      base_height = 62.0;
+      scale = 2.0;
+  } else if (biome == W_mangrove_swamp || biome == W_swamp) {
+      base_height = 62.0;
+      scale = 3.0;
+  }
+  
+  return (uint8_t)(base_height + noise * scale + detail * 2.0);
 }
+
+uint8_t getHeightAtFromAnchors (int rx, int rz, ChunkAnchor *anchor_ptr) {
+  return getHeightAt(anchor_ptr[0].x * CHUNK_SIZE + rx, anchor_ptr[0].z * CHUNK_SIZE + rz);
+}
+
+uint8_t getHeightAtFromHash (int rx, int rz, int _x, int _z, uint32_t chunk_hash, uint8_t biome) {
+  return getHeightAt(_x * CHUNK_SIZE + rx, _z * CHUNK_SIZE + rz);
+}
+
 
 uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor anchor, ChunkFeature feature, uint8_t height) {
 
@@ -357,7 +335,7 @@ ChunkFeature getFeatureFromAnchor (ChunkAnchor anchor) {
 
 uint8_t getTerrainAt (int x, int y, int z, ChunkAnchor anchor) {
 
-  if (y > 80) return B_air;
+  if (y > 150) return B_air;
 
   int rx = x % CHUNK_SIZE;
   int rz = z % CHUNK_SIZE;
@@ -365,7 +343,7 @@ uint8_t getTerrainAt (int x, int y, int z, ChunkAnchor anchor) {
   if (rz < 0) rz += CHUNK_SIZE;
 
   ChunkFeature feature = getFeatureFromAnchor(anchor);
-  uint8_t height = getHeightAtFromHash(rx, rz, anchor.x, anchor.z, anchor.hash, anchor.biome);
+  uint8_t height = getHeightAt(x, z);
 
   return getTerrainAtFromCache(x, y, z, rx, rz, anchor, feature, height);
 
