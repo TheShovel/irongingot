@@ -4,7 +4,11 @@
       "Bash(./build.sh)",
       "Bash(gcc *)",
       "Bash(rm *)",
-      "Bash(timeout *)"
+      "Bash(timeout *)",
+      "Bash(bash *)",
+      "Bash(sleep *)",
+      "Bash(kill *)",
+      "Bash(true)"
     ]
   },
   "$version": 3

@@ -96,7 +96,8 @@ uint8_t getChunkBiome (short x, short z) {
     case badlands: return W_badlands;
     case eroded_badlands: return W_badlands;
     case mangrove_swamp: return W_mangrove_swamp;
-    
+    case meadow: return W_meadow;
+
     default:
         // Use isSnowy helper from cubiomes
         if (isSnowy(biomeID)) return W_snowy_plains;
@@ -260,6 +261,26 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       // Since we're sure that we're above sea level and in a plains biome,
       // there's no need to drop down to decide the surrounding blocks.
       if (y == height) return B_grass_block;
+      
+      // Flower and grass decorations
+      if (y == height + 1) {
+        uint8_t decor_hash = (anchor.hash >> (x + z)) & 255;
+        
+        // 20% chance for short grass
+        if (decor_hash < 51) return B_short_grass;
+        
+        // 3% chance for flowers
+        if (decor_hash >= 51 && decor_hash < 59) {
+          uint8_t flower_type = (decor_hash >> 3) % 6;
+          if (flower_type == 0) return B_dandelion;
+          if (flower_type == 1) return B_poppy;
+          if (flower_type == 2) return B_azure_bluet;
+          if (flower_type == 3) return B_oxeye_daisy;
+          if (flower_type == 4) return B_cornflower;
+          if (flower_type == 5) return B_allium;
+        }
+      }
+      
       return B_air;
     }
     
@@ -330,11 +351,33 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
         // Top layer
         if (y == trunk_top + 2 && dist <= 1) return B_oak_leaves;
       }
-      
+
       if (y == height) return B_grass_block;
+      
+      // Flower and grass decorations - forests have more vegetation
+      if (y == height + 1) {
+        uint8_t decor_hash = (anchor.hash >> (x + z)) & 255;
+        
+        // 25% chance for short grass
+        if (decor_hash < 64) return B_short_grass;
+        
+        // 5% chance for flowers (forests have more flowers)
+        if (decor_hash >= 64 && decor_hash < 77) {
+          uint8_t flower_type = (decor_hash >> 3) % 8;
+          if (flower_type == 0) return B_dandelion;
+          if (flower_type == 1) return B_poppy;
+          if (flower_type == 2) return B_azure_bluet;
+          if (flower_type == 3) return B_oxeye_daisy;
+          if (flower_type == 4) return B_allium;
+          if (flower_type == 5) return B_red_tulip;
+          if (flower_type == 6) return B_orange_tulip;
+          if (flower_type == 7) return B_lily_of_the_valley;
+        }
+      }
+      
       return B_air;
     }
-    
+
     case W_taiga: // Generate spruce trees in taiga
     case W_old_growth_pine_taiga: {
       
@@ -366,11 +409,26 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       }
       // Top of the tree
       if (y == leaf_top + 1 && dist == 0) return B_spruce_leaves;
-      
+
       if (y == height) return B_grass_block;
+      
+      // Taiga decorations - ferns and grass
+      if (y == height + 1) {
+        uint8_t decor_hash = (anchor.hash >> (x + z)) & 255;
+        
+        // 30% chance for ferns (taiga has lots of ferns)
+        if (decor_hash < 77) return B_fern;
+        
+        // 15% chance for short grass
+        if (decor_hash >= 77 && decor_hash < 115) return B_short_grass;
+        
+        // 2% chance for berries (bush)
+        if (decor_hash >= 115 && decor_hash < 120) return B_bush;
+      }
+      
       return B_air;
     }
-    
+
     case W_snowy_taiga: { // Generate spruce trees with snow in cold taiga
       
       // Don't generate trees underwater
@@ -398,11 +456,23 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
         }
       }
       if (y == leaf_top + 1 && dist == 0) return B_spruce_leaves;
-      
+
       if (y == height) return B_grass_block;
+      
+      // Snowy taiga decorations - ferns and grass stubs under snow
+      if (y == height + 1) {
+        uint8_t decor_hash = (anchor.hash >> (x + z)) & 255;
+        
+        // 20% chance for ferns
+        if (decor_hash < 51) return B_fern;
+        
+        // 10% chance for short grass (appears under snow layer)
+        if (decor_hash >= 51 && decor_hash < 77) return B_short_grass;
+      }
+      
       return B_air;
     }
-    
+
     case W_jungle: // Generate jungle trees with vines
     case W_bamboo_jungle: {
       
@@ -441,11 +511,26 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       // Upper canopy
       if (y == canopy_top + 1 && dist <= 2) return B_jungle_leaves;
       if (y == canopy_top + 2 && dist <= 1) return B_jungle_leaves;
-      
+
       if (y == height) return B_grass_block;
+      
+      // Jungle decorations - dense ferns and tall grass
+      if (y == height + 1) {
+        uint8_t decor_hash = (anchor.hash >> (x + z)) & 255;
+        
+        // 35% chance for ferns (jungles have lots of vegetation)
+        if (decor_hash < 90) return B_fern;
+        
+        // 15% chance for tall grass
+        if (decor_hash >= 90 && decor_hash < 128) return B_short_grass;
+        
+        // 3% chance for melon stems (bush as placeholder)
+        if (decor_hash >= 128 && decor_hash < 136) return B_bush;
+      }
+      
       return B_air;
     }
-    
+
     case W_savanna: { // Generate acacia trees in savanna
       
       // Don't generate trees underwater
@@ -485,11 +570,26 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       }
       // Top layer
       if (y == canopy_y + 2 && dist <= 2) return B_acacia_leaves;
-      
+
       if (y == height) return B_grass_block;
+      
+      // Savanna decorations - dry grass and sparse flowers
+      if (y == height + 1) {
+        uint8_t decor_hash = (anchor.hash >> (x + z)) & 255;
+        
+        // 25% chance for tall dry grass
+        if (decor_hash < 64) return B_tall_dry_grass;
+        
+        // 10% chance for short dry grass
+        if (decor_hash >= 64 && decor_hash < 90) return B_short_dry_grass;
+        
+        // 2% chance for dandelions (hardy flowers)
+        if (decor_hash >= 90 && decor_hash < 95) return B_dandelion;
+      }
+      
       return B_air;
     }
-    
+
     case W_dark_forest: { // Generate dark oak trees (2x2 trunks)
       
       // Don't generate trees underwater
@@ -604,8 +704,25 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       if (y == trunk_top - 2 && dist == 3) {
         if ((anchor.hash >> (x + z)) & 3) return B_cherry_leaves;
       }
-      
+
       if (y == height) return B_grass_block;
+      
+      // Cherry grove decorations - grass and pink flowers
+      if (y == height + 1) {
+        uint8_t decor_hash = (anchor.hash >> (x + z)) & 255;
+        
+        // 25% chance for short grass
+        if (decor_hash < 64) return B_short_grass;
+        
+        // 8% chance for pink flowers (tulips)
+        if (decor_hash >= 64 && decor_hash < 84) {
+          uint8_t flower_type = (decor_hash >> 3) % 3;
+          if (flower_type == 0) return B_pink_tulip;
+          if (flower_type == 1) return B_red_tulip;
+          if (flower_type == 2) return B_poppy;
+        }
+      }
+      
       return B_air;
     }
 
@@ -649,7 +766,42 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
 
       break;
     }
-    
+
+    case W_meadow: { // Generate dense flowers and tall grass in meadows
+
+      if (y == height) return B_grass_block;
+      
+      // Meadow decorations - very dense flowers and tall grass
+      if (y == height + 1) {
+        uint8_t decor_hash = (anchor.hash >> (x + z)) & 255;
+        
+        // 30% chance for short grass
+        if (decor_hash < 77) return B_short_grass;
+        
+        // 15% chance for dandelions (common in meadows)
+        if (decor_hash >= 77 && decor_hash < 115) return B_dandelion;
+        
+        // 10% chance for various flowers
+        if (decor_hash >= 115 && decor_hash < 141) {
+          uint8_t flower_type = (decor_hash >> 3) % 6;
+          if (flower_type == 0) return B_poppy;
+          if (flower_type == 1) return B_blue_orchid;
+          if (flower_type == 2) return B_allium;
+          if (flower_type == 3) return B_azure_bluet;
+          if (flower_type == 4) return B_red_tulip;
+          if (flower_type == 5) return B_oxeye_daisy;
+        }
+        
+        // 5% chance for cornflowers
+        if (decor_hash >= 141 && decor_hash < 154) return B_cornflower;
+        
+        // 3% chance for lilac (using bush as placeholder for tall flowers)
+        if (decor_hash >= 154 && decor_hash < 162) return B_bush;
+      }
+      
+      break;
+    }
+
     case W_swamp: { // Generate swamp vegetation with oak trees and vines
       
       if (x == feature.x && z == feature.z && y == 64 && height < 63) {
