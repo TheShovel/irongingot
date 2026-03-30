@@ -230,22 +230,32 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       // Handle tree trunk and dirt
       if (x == feature.x && z == feature.z) {
         if (y == feature.y - 1) return B_dirt;
-        if (y >= feature.y && y < feature.y - feature.variant + 6) return B_oak_log;
+        if (y >= feature.y && y < feature.y + 4 + feature.variant) return B_oak_log;
       }
       
       // Get X/Z distance from center of tree
       uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
       uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+      uint8_t dist = dx + dz;
       
-      // Generate leaf clusters
-      if (dx < 3 && dz < 3 && y > feature.y - feature.variant + 2 && y < feature.y - feature.variant + 5) {
-        if (y == feature.y - feature.variant + 4 && dx == 2 && dz == 2) break;
+      // Oak canopy - starts partway up trunk, rounded shape
+      uint8_t trunk_top = feature.y + 4 + feature.variant;
+      // Leaves start 1 block below trunk top
+      if (y == trunk_top - 1 && dist <= 2) {
+        if (dist == 2 && (dx == 2 || dz == 2)) break;
         return B_oak_leaves;
       }
-      if (dx < 2 && dz < 2 && y >= feature.y - feature.variant + 5 && y <= feature.y - feature.variant + 6) {
-        if (y == feature.y - feature.variant + 6 && dx == 1 && dz == 1) break;
+      // Middle layers
+      if (y == trunk_top && dist <= 2) {
+        if (dx == 2 && dz == 2) break;
         return B_oak_leaves;
       }
+      if (y == trunk_top + 1 && dist <= 2) {
+        if (dx == 2 && dz == 2) break;
+        return B_oak_leaves;
+      }
+      // Top layer
+      if (y == trunk_top + 2 && dist <= 1) return B_oak_leaves;
       
       // Since we're sure that we're above sea level and in a plains biome,
       // there's no need to drop down to decide the surrounding blocks.
@@ -263,37 +273,62 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       
       if (x == feature.x && z == feature.z) {
         if (y == feature.y - 1) return B_dirt;
-        // Birch trees are taller and thinner
+        // Birch trees are taller with distinctive white bark
         if (is_birch) {
-          if (y >= feature.y && y < feature.y + 5 - feature.variant) return B_birch_log;
+          if (y >= feature.y && y < feature.y + 5 + feature.variant) return B_birch_log;
         } else {
-          if (y >= feature.y && y < feature.y - feature.variant + 6) return B_oak_log;
+          if (y >= feature.y && y < feature.y + 4 + feature.variant) return B_oak_log;
         }
       }
       
       // Get X/Z distance from center of tree
       uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
       uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+      uint8_t dist = dx + dz;
       
       // Generate leaf clusters
       if (is_birch) {
-        // Birch leaves - more spread out
-        if (dx < 2 && dz < 2 && y > feature.y + 1 && y < feature.y + 6) {
+        // Birch leaves - sparse and spread out, typical birch shape
+        uint8_t trunk_top = feature.y + 5 + feature.variant;
+        // Leaves start partway up trunk
+        if (y == trunk_top - 1 && dist <= 2) {
+          if (dist == 2 && (dx == 2 || dz == 2)) break;
           return B_birch_leaves;
         }
-        if (dx < 3 && dz < 3 && y == feature.y + 4) {
+        // Main canopy layers
+        if (y == trunk_top && dist <= 2) {
+          if (dx == 2 && dz == 2) break;
           return B_birch_leaves;
+        }
+        if (y == trunk_top + 1 && dist <= 2) {
+          if (dx == 2 && dz == 2) break;
+          return B_birch_leaves;
+        }
+        // Top layer
+        if (y == trunk_top + 2 && dist <= 1) return B_birch_leaves;
+        // Occasional lower leaves
+        if (y == trunk_top - 2 && dist == 2 && (dx == 2 || dz == 2)) {
+          if ((anchor.hash >> (y + x + z)) & 1) return B_birch_leaves;
         }
       } else {
-        // Oak leaves
-        if (dx < 3 && dz < 3 && y > feature.y - feature.variant + 2 && y < feature.y - feature.variant + 5) {
-          if (y == feature.y - feature.variant + 4 && dx == 2 && dz == 2) break;
+        // Oak leaves - rounded canopy
+        uint8_t trunk_top = feature.y + 4 + feature.variant;
+        // Leaves start partway up trunk
+        if (y == trunk_top - 1 && dist <= 2) {
+          if (dist == 2 && (dx == 2 || dz == 2)) break;
           return B_oak_leaves;
         }
-        if (dx < 2 && dz < 2 && y >= feature.y - feature.variant + 5 && y <= feature.y - feature.variant + 6) {
-          if (y == feature.y - feature.variant + 6 && dx == 1 && dz == 1) break;
+        // Middle layers
+        if (y == trunk_top && dist <= 2) {
+          if (dx == 2 && dz == 2) break;
           return B_oak_leaves;
         }
+        if (y == trunk_top + 1 && dist <= 2) {
+          if (dx == 2 && dz == 2) break;
+          return B_oak_leaves;
+        }
+        // Top layer
+        if (y == trunk_top + 2 && dist <= 1) return B_oak_leaves;
       }
       
       if (y == height) return B_grass_block;
@@ -309,24 +344,28 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       // Spruce trees are tall and conical
       if (x == feature.x && z == feature.z) {
         if (y == feature.y - 1) return B_dirt;
-        if (y >= feature.y && y < feature.y + 8 - feature.variant * 2) return B_spruce_log;
+        if (y >= feature.y && y < feature.y + 6 + feature.variant * 2) return B_spruce_log;
       }
       
       // Get X/Z distance from center of tree
-      uint8_t tree_dx = x > feature.x ? x - feature.x : feature.x - x;
-      uint8_t tree_dz = z > feature.z ? z - feature.z : feature.z - z;
-      uint8_t dist_from_center = tree_dx + tree_dz;
+      uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
+      uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+      uint8_t dist = dx + dz;
       
-      // Conical spruce leaves
-      uint8_t leaf_start = feature.y + 3;
-      uint8_t leaf_end = feature.y + 10 - feature.variant * 2;
+      // Conical spruce leaves - starts partway up the trunk
+      uint8_t leaf_base = feature.y + 3;
+      uint8_t leaf_top = feature.y + 9 + feature.variant * 2;
       
-      if (y >= leaf_start && y <= leaf_end) {
-        uint8_t max_radius = (leaf_end - y) / 2 + 1;
-        if (dist_from_center <= max_radius && dist_from_center > 0) {
+      // Spruce tree leaves form a cone shape
+      for (int ly = leaf_base; ly <= leaf_top; ly++) {
+        int dist_from_top = leaf_top - ly;
+        int max_radius = (dist_from_top / 2) + 1;
+        if (y == ly && dist <= max_radius && dist > 0) {
           return B_spruce_leaves;
         }
       }
+      // Top of the tree
+      if (y == leaf_top + 1 && dist == 0) return B_spruce_leaves;
       
       if (y == height) return B_grass_block;
       return B_air;
@@ -339,26 +378,28 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       
       if (x == feature.x && z == feature.z) {
         if (y == feature.y - 1) return B_dirt;
-        if (y >= feature.y && y < feature.y + 7 - feature.variant) return B_spruce_log;
+        if (y >= feature.y && y < feature.y + 5 + feature.variant * 2) return B_spruce_log;
       }
       
       // Get X/Z distance from center of tree
-      uint8_t tree_dx = x > feature.x ? x - feature.x : feature.x - x;
-      uint8_t tree_dz = z > feature.z ? z - feature.z : feature.z - z;
-      uint8_t dist_from_center = tree_dx + tree_dz;
+      uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
+      uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+      uint8_t dist = dx + dz;
       
       // Conical spruce leaves with snow
-      uint8_t leaf_start = feature.y + 2;
-      uint8_t leaf_end = feature.y + 9 - feature.variant;
+      uint8_t leaf_base = feature.y + 2;
+      uint8_t leaf_top = feature.y + 8 + feature.variant * 2;
       
-      if (y >= leaf_start && y <= leaf_end) {
-        uint8_t max_radius = (leaf_end - y) / 2 + 1;
-        if (dist_from_center <= max_radius && dist_from_center > 0) {
+      for (int ly = leaf_base; ly <= leaf_top; ly++) {
+        int dist_from_top = leaf_top - ly;
+        int max_radius = (dist_from_top / 2) + 1;
+        if (y == ly && dist <= max_radius && dist > 0) {
           return B_spruce_leaves;
         }
       }
+      if (y == leaf_top + 1 && dist == 0) return B_spruce_leaves;
       
-      if (y == height) return B_snowy_grass_block;
+      if (y == height) return B_grass_block;
       return B_air;
     }
     
@@ -368,21 +409,38 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       // Don't generate trees underwater
       if (feature.y < 64) break;
       
-      // Jungle trees are very tall
-      if (x == feature.x && z == feature.z) {
+      // Jungle trees are very tall with 2x2 trunks
+      int base_x = feature.x & ~1;
+      int base_z = feature.z & ~1;
+      int trunk_height = 10 + feature.variant * 4;
+      
+      // 2x2 trunk
+      if (x >= base_x && x < base_x + 2 && z >= base_z && z < base_z + 2) {
         if (y == feature.y - 1) return B_dirt;
-        if (y >= feature.y && y < feature.y + 12 - feature.variant * 3) return B_jungle_log;
+        if (y >= feature.y && y < feature.y + trunk_height) return B_jungle_log;
       }
       
-      // Get X/Z distance from center of tree
-      uint8_t tree_dx = x > feature.x ? x - feature.x : feature.x - x;
-      uint8_t tree_dz = z > feature.z ? z - feature.z : feature.z - z;
+      // Get distance from tree center
+      uint8_t cx = base_x + 1;
+      uint8_t cz = base_z + 1;
+      uint8_t dx = x > cx ? x - cx : cx - x;
+      uint8_t dz = z > cz ? z - cz : cz - z;
+      uint8_t dist = (dx > dz ? dx : dz);  // Chebyshev distance for square shape
       
-      // Large jungle leaf canopy
-      if (tree_dx < 4 && tree_dz < 4 && y > feature.y + 8 - feature.variant * 3 && y < feature.y + 14 - feature.variant * 2) {
-        if (tree_dx == 3 && tree_dz == 3 && y < feature.y + 12 - feature.variant * 2) break;
-        return B_jungle_leaves;
+      // Large jungle leaf canopy - wide and flat
+      uint8_t canopy_base = feature.y + trunk_height - 2;
+      uint8_t canopy_top = feature.y + trunk_height + 2;
+      
+      // Main canopy layers
+      if (y >= canopy_base && y <= canopy_top) {
+        if (dist <= 3) {
+          if (y == canopy_base && dist == 3) break;
+          return B_jungle_leaves;
+        }
       }
+      // Upper canopy
+      if (y == canopy_top + 1 && dist <= 2) return B_jungle_leaves;
+      if (y == canopy_top + 2 && dist <= 1) return B_jungle_leaves;
       
       if (y == height) return B_grass_block;
       return B_air;
@@ -393,29 +451,40 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       // Don't generate trees underwater
       if (feature.y < 64) break;
       
-      // Acacia trees have a distinctive shape
+      // Acacia trees have a distinctive curved shape
+      int trunk_height = 4 + feature.variant;
+      
+      // Main trunk (straight part)
       if (x == feature.x && z == feature.z) {
         if (y == feature.y - 1) return B_dirt;
-        if (y >= feature.y && y < feature.y + 4) return B_acacia_log;
-        // Acacia trunk curves - simplified as diagonal
-        if (y >= feature.y + 4 && y < feature.y + 7) {
-          if (x == feature.x + (y - feature.y - 4)) return B_acacia_log;
+        if (y >= feature.y && y < feature.y + trunk_height) return B_acacia_log;
+      }
+      
+      // Curved trunk section (extends in +X direction)
+      for (int i = 1; i <= 3; i++) {
+        if (x == feature.x + i && z == feature.z) {
+          if (y >= feature.y + trunk_height && y < feature.y + trunk_height + 2) {
+            return B_acacia_log;
+          }
         }
       }
       
-      // Get X/Z distance from center of tree
-      uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
+      // Get distance from canopy center (offset from trunk)
+      uint8_t canopy_cx = feature.x + 2;
+      uint8_t dx = x > canopy_cx ? x - canopy_cx : canopy_cx - x;
       uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+      uint8_t dist = dx + dz;
       
-      // Acacia leaf canopy (flat top)
-      uint8_t canopy_y = feature.y + 6;
+      // Acacia leaf canopy (wide, flat umbrella shape)
+      uint8_t canopy_y = feature.y + trunk_height + 2;
       if (y >= canopy_y && y <= canopy_y + 1) {
-        uint8_t canopy_dx = dx > 2 ? dx - 2 : 0;
-        uint8_t canopy_dz = dz > 2 ? dz - 2 : 0;
-        if (canopy_dx < 3 && canopy_dz < 3) {
+        if (dist <= 3) {
+          if (y == canopy_y && dist == 3) break;
           return B_acacia_leaves;
         }
       }
+      // Top layer
+      if (y == canopy_y + 2 && dist <= 2) return B_acacia_leaves;
       
       if (y == height) return B_grass_block;
       return B_air;
@@ -429,21 +498,31 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       // Dark oak trees have 2x2 trunks
       int base_x = feature.x & ~1;  // Round down to even
       int base_z = feature.z & ~1;
+      int trunk_height = 6 + feature.variant;
       
       if (x >= base_x && x < base_x + 2 && z >= base_z && z < base_z + 2) {
         if (y == feature.y - 1) return B_dirt;
-        if (y >= feature.y && y < feature.y + 6) return B_dark_oak_log;
+        if (y >= feature.y && y < feature.y + trunk_height) return B_dark_oak_log;
       }
       
-      // Get X/Z distance from center of tree
-      uint8_t dx = x > (base_x + 1) ? x - (base_x + 1) : (base_x + 1) - x;
-      uint8_t dz = z > (base_z + 1) ? z - (base_z + 1) : (base_z + 1) - z;
+      // Get distance from tree center
+      uint8_t cx = base_x + 1;
+      uint8_t cz = base_z + 1;
+      uint8_t dx = x > cx ? x - cx : cx - x;
+      uint8_t dz = z > cz ? z - cz : cz - z;
+      uint8_t dist = dx + dz;
       
-      // Large dark oak canopy
-      if (dx < 4 && dz < 4 && y > feature.y + 3 && y < feature.y + 7) {
-        if (dx == 3 && dz == 3) break;
-        return B_dark_oak_leaves;
+      // Large dark oak canopy - dome shape
+      uint8_t canopy_base = feature.y + trunk_height;
+      if (y >= canopy_base && y <= canopy_base + 3) {
+        int layer = y - canopy_base;
+        int max_dist = 3 - layer;
+        if (dist <= max_dist + 1 && dist > 0) {
+          return B_dark_oak_leaves;
+        }
       }
+      // Top of canopy
+      if (y == canopy_base + 4 && dist <= 1) return B_dark_oak_leaves;
       
       if (y == height) return B_grass_block;
       return B_air;
@@ -456,19 +535,35 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       
       if (x == feature.x && z == feature.z) {
         if (y == feature.y - 1) return B_dirt;
-        if (y >= feature.y && y < feature.y + 6 - feature.variant) return B_birch_log;
+        if (y >= feature.y && y < feature.y + 5 + feature.variant) return B_birch_log;
       }
       
       // Get X/Z distance from center of tree
       uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
       uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+      uint8_t dist = dx + dz;
       
-      // Birch leaves
-      if (dx < 2 && dz < 2 && y > feature.y + 1 && y < feature.y + 6) {
+      // Birch leaves - sparse and spread out
+      uint8_t trunk_top = feature.y + 5 + feature.variant;
+      // Leaves start partway up trunk
+      if (y == trunk_top - 1 && dist <= 2) {
+        if (dist == 2 && (dx == 2 || dz == 2)) break;
         return B_birch_leaves;
       }
-      if (dx < 3 && dz < 3 && y == feature.y + 4) {
+      // Main canopy layers
+      if (y == trunk_top && dist <= 2) {
+        if (dx == 2 && dz == 2) break;
         return B_birch_leaves;
+      }
+      if (y == trunk_top + 1 && dist <= 2) {
+        if (dx == 2 && dz == 2) break;
+        return B_birch_leaves;
+      }
+      // Top layer
+      if (y == trunk_top + 2 && dist <= 1) return B_birch_leaves;
+      // Occasional lower leaves
+      if (y == trunk_top - 2 && dist == 2 && (dx == 2 || dz == 2)) {
+        if ((anchor.hash >> (y + x + z)) & 1) return B_birch_leaves;
       }
       
       if (y == height) return B_grass_block;
@@ -482,21 +577,32 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       
       if (x == feature.x && z == feature.z) {
         if (y == feature.y - 1) return B_dirt;
-        if (y >= feature.y && y < feature.y + 5) return B_cherry_log;
+        if (y >= feature.y && y < feature.y + 3 + feature.variant) return B_cherry_log;
       }
       
       // Get X/Z distance from center of tree
       uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
       uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+      uint8_t dist = dx + dz;
       
-      // Cherry blossom canopy (wide and flat)
-      if (dx < 4 && dz < 4 && y >= feature.y + 3 && y <= feature.y + 5) {
-        if (dx == 3 && dz == 3 && y == feature.y + 3) break;
+      // Cherry blossom canopy (wide, flat, with hanging edges)
+      uint8_t trunk_top = feature.y + 3 + feature.variant;
+      // Leaves start partway up trunk
+      if (y == trunk_top - 1 && dist <= 3) {
+        if (dist == 3 && (dx == 3 || dz == 3)) break;
         return B_cherry_leaves;
       }
-      // Falling petals effect (sparse leaves below canopy)
-      if (y == feature.y + 2 && (anchor.hash >> (x + z)) % 8 == 0) {
-        if (dx < 5 && dz < 5) return B_cherry_leaves;
+      // Main canopy - wide and flat
+      if (y == trunk_top && dist <= 3) {
+        if (dist == 3) break;
+        return B_cherry_leaves;
+      }
+      if (y == trunk_top + 1 && dist <= 2) return B_cherry_leaves;
+      // Top layer
+      if (y == trunk_top + 2 && dist <= 2) return B_cherry_leaves;
+      // Hanging edges (petals falling)
+      if (y == trunk_top - 2 && dist == 3) {
+        if ((anchor.hash >> (x + z)) & 3) return B_cherry_leaves;
       }
       
       if (y == height) return B_grass_block;
@@ -544,7 +650,7 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       break;
     }
     
-    case W_swamp: { // Generate swamp vegetation
+    case W_swamp: { // Generate swamp vegetation with oak trees and vines
       
       if (x == feature.x && z == feature.z && y == 64 && height < 63) {
         return B_lily_pad;
@@ -553,14 +659,39 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       // Occasional oak trees with vines
       if (feature.y >= 64 && x == feature.x && z == feature.z) {
         if (y == feature.y - 1) return B_dirt;
-        if (y >= feature.y && y < feature.y + 5) return B_oak_log;
-        // Vines
-        if (y > feature.y + 1 && y < feature.y + 4) {
+        if (y >= feature.y && y < feature.y + 4 + feature.variant) return B_oak_log;
+        // Vines on trunk
+        if (y > feature.y + 1 && y < feature.y + 4 + feature.variant) {
           uint8_t vine_dx = x > feature.x ? x - feature.x : feature.x - x;
           uint8_t vine_dz = z > feature.z ? z - feature.z : feature.z - z;
-          if (vine_dx == 1 && vine_dz == 0) return B_oak_leaves;  // Use leaves instead of vines for now
-          if (vine_dx == 0 && vine_dz == 1) return B_oak_leaves;
+          if (vine_dx == 1 && vine_dz == 0 && (anchor.hash >> y) & 1) return B_oak_leaves;
+          if (vine_dx == 0 && vine_dz == 1 && (anchor.hash >> y) & 1) return B_oak_leaves;
         }
+      }
+      
+      // Oak canopy for swamp trees
+      if (feature.y >= 64) {
+        uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
+        uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+        uint8_t dist = dx + dz;
+        uint8_t trunk_top = feature.y + 4 + feature.variant;
+        
+        // Leaves start partway up trunk
+        if (y == trunk_top - 1 && dist <= 2) {
+          if (dist == 2 && (dx == 2 || dz == 2)) break;
+          return B_oak_leaves;
+        }
+        // Middle layers
+        if (y == trunk_top && dist <= 2) {
+          if (dx == 2 && dz == 2) break;
+          return B_oak_leaves;
+        }
+        if (y == trunk_top + 1 && dist <= 2) {
+          if (dx == 2 && dz == 2) break;
+          return B_oak_leaves;
+        }
+        // Top layer
+        if (y == trunk_top + 2 && dist <= 1) return B_oak_leaves;
       }
       
       break;
@@ -573,13 +704,13 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
   if (height >= 63) {
     if (y == height) {
       if (anchor.biome == W_mangrove_swamp) return B_mud;
-      if (anchor.biome == W_snowy_plains) return B_snowy_grass_block;
       if (anchor.biome == W_desert) return B_sand;
       if (anchor.biome == W_beach) return B_sand;
       return B_grass_block;
     }
-    if (anchor.biome == W_snowy_plains && y == height + 1) {
-      return B_snow;
+    // Snow layer on top of grass in snowy biomes
+    if (anchor.biome == W_snowy_plains || anchor.biome == W_snowy_taiga) {
+      if (y == height + 1) return B_snow;
     }
   }
   // Starting at 4 blocks below terrain level, generate minerals and caves

@@ -1332,7 +1332,6 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       if ( // Saplings can only grow when placed on these blocks
         target_below == B_dirt ||
         target_below == B_grass_block ||
-        target_below == B_snowy_grass_block ||
         target_below == B_mud
       ) {
         // Bone meal has a 25% chance of growing a tree from a sapling
