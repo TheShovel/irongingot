@@ -162,7 +162,7 @@ static uint8_t getHeightAtRaw (int x, int z) {
   double base11 = 64.0, scale11 = 12.0;
 
   #define SET_BIOME_HEIGHT(biome, base, scale) \
-    if (biome == W_desert) { base = 66.0; scale = 8.0; } \
+    if (biome == W_desert) { base = 64.0; scale = 4.0; } \
     else if (biome == W_snowy_plains || biome == W_snowy_taiga) { base = 70.0; scale = 20.0; } \
     else if (biome == W_savanna) { base = 80.0; scale = 40.0; } \
     else if (biome == W_windswept_savanna) { base = 85.0; scale = 50.0; } \
@@ -173,13 +173,14 @@ static uint8_t getHeightAtRaw (int x, int z) {
     else if (biome == W_snowy_slopes) { base = 105.0; scale = 90.0; } \
     else if (biome == W_grove) { base = 90.0; scale = 60.0; } \
     else if (biome == W_cherry_grove) { base = 85.0; scale = 35.0; } \
-    else if (biome == W_ocean || biome == W_deep_ocean || biome == W_frozen_ocean) { base = 45.0; scale = 12.0; } \
+    else if (biome == W_ocean || biome == W_frozen_ocean) { base = 38.0; scale = 15.0; } \
+    else if (biome == W_deep_ocean) { base = 30.0; scale = 18.0; } \
     else if (biome == W_river || biome == W_frozen_river) { base = 58.0; scale = 3.0; } \
     else if (biome == W_beach) { base = 60.0; scale = 3.0; } \
     else if (biome == W_mangrove_swamp || biome == W_swamp) { base = 61.0; scale = 4.0; } \
     else if (biome == W_meadow) { base = 90.0; scale = 45.0; } \
-    else if (biome == W_forest || biome == W_birch_forest || biome == W_dark_forest) { base = 70.0; scale = 18.0; } \
-    else if (biome == W_flower_forest) { base = 75.0; scale = 25.0; } \
+    else if (biome == W_forest || biome == W_birch_forest || biome == W_dark_forest) { base = 70.0; scale = 25.0; } \
+    else if (biome == W_flower_forest) { base = 75.0; scale = 30.0; } \
     else if (biome == W_taiga || biome == W_snowy_taiga || biome == W_old_growth_pine_taiga) { base = 72.0; scale = 22.0; } \
     else if (biome == W_jungle || biome == W_bamboo_jungle) { base = 75.0; scale = 20.0; } \
     else if (biome == W_plains || biome == W_sunflower_plains) { base = 68.0; scale = 12.0; } \
@@ -218,6 +219,18 @@ static uint8_t getHeightAtRaw (int x, int z) {
                          b11 == W_snowy_slopes || b11 == W_grove ||
                          b11 == W_windswept_forest || b11 == W_windswept_savanna);
 
+  // Check if this is an ocean biome
+  uint8_t is_ocean = (b00 == W_ocean || b00 == W_deep_ocean || b00 == W_frozen_ocean ||
+                      b10 == W_ocean || b10 == W_deep_ocean || b10 == W_frozen_ocean ||
+                      b01 == W_ocean || b01 == W_deep_ocean || b01 == W_frozen_ocean ||
+                      b11 == W_ocean || b11 == W_deep_ocean || b11 == W_frozen_ocean);
+
+  // Check if this is a forest biome (for forest mountains)
+  uint8_t is_forest = (b00 == W_forest || b00 == W_birch_forest || b00 == W_dark_forest || b00 == W_flower_forest ||
+                       b10 == W_forest || b10 == W_birch_forest || b10 == W_dark_forest || b10 == W_flower_forest ||
+                       b01 == W_forest || b01 == W_birch_forest || b01 == W_dark_forest || b01 == W_flower_forest ||
+                       b11 == W_forest || b11 == W_birch_forest || b11 == W_dark_forest || b11 == W_flower_forest);
+
   if (is_mountain) {
     // Sample mountain noise for large peak shapes (low frequency)
     double mountain = octave_sample(&mountain_noise, x * 0.005, 0, z * 0.005);
@@ -235,6 +248,61 @@ static uint8_t getHeightAtRaw (int x, int z) {
 
     // Extra detail for rugged mountain surfaces (reduced)
     base_height += detail * (5.0 + mountain_factor * 10.0);
+  }
+
+  // Ocean biomes: generate hills that rise above water level
+  if (is_ocean && !is_mountain) {
+    // Sample ocean hill noise (low frequency for large underwater ridges)
+    double ocean_hill = octave_sample(&mountain_noise, x * 0.008, 0, z * 0.008);
+
+    // Normalize to [0, 1]
+    double ocean_hill_factor = (ocean_hill + 1.0) / 2.0;
+
+    // Ocean hills: some hills should rise above sea level (63)
+    // Deep ocean has taller hills to reach above water
+    double ocean_hill_height = (b00 == W_deep_ocean) ? 35.0 : 28.0;
+
+    // Only the highest hills (top 30%) break the surface
+    if (ocean_hill_factor > 0.7) {
+      // Scale the hill to potentially reach above sea level
+      double hill_bonus = (ocean_hill_factor - 0.7) * ocean_hill_height * 3.33;
+      base_height += hill_bonus;
+      scale += 5.0;
+    }
+
+    // Add extra detail for underwater terrain variation
+    base_height += detail * 3.0;
+  }
+
+  // Forest biomes: add mountains and hills for more dramatic terrain
+  if (is_forest && !is_mountain) {
+    // Sample forest mountain noise
+    double forest_mountain = octave_sample(&mountain_noise, x * 0.006, 0, z * 0.006);
+
+    // Normalize to [0, 1]
+    double forest_mountain_factor = (forest_mountain + 1.0) / 2.0;
+
+    // Forest mountains are smaller than proper mountain biomes but still significant
+    // Only the highest areas (top 40%) get mountains
+    if (forest_mountain_factor > 0.6) {
+      double mountain_bonus = (forest_mountain_factor - 0.6) * 60.0;
+      base_height += mountain_bonus;
+      scale += forest_mountain_factor * 15.0;
+    }
+
+    // Extra detail for forest terrain
+    base_height += detail * 4.0;
+  }
+
+  // Desert biomes: flatter terrain with small rolling hills
+  uint8_t is_desert = (b00 == W_desert || b10 == W_desert || b01 == W_desert || b11 == W_desert);
+  if (is_desert && !is_mountain) {
+    // Reduce scale for flatter terrain
+    scale *= 0.6;
+
+    // Add very small dune-like hills using detail noise
+    double dune_noise = octave_sample(&detail_noise, x * 0.02, 0, z * 0.02);
+    base_height += dune_noise * 2.0;
   }
 
   return (uint8_t)(base_height + noise * scale + detail * 2.0);
