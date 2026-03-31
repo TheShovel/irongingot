@@ -390,11 +390,11 @@ void spawnPlayer (PlayerData *player) {
   sc_startWaitingForChunks(player->client_fd);
   sc_setCenterChunk(player->client_fd, _x, _z);
 
-  // Send spawn chunk
+  // Send only the spawn chunk initially (1 chunk total)
+  // Surrounding chunks will be loaded by the worker thread as player moves
   sc_chunkDataAndUpdateLight(player->client_fd, _x, _z);
 
-  // Send surrounding chunks to prevent falling through world borders
-  // Send in a 5x5 area (chunks at distance 0-2 from center)
+  // Initialize visited chunks tracking
   player->visited_next = 0;
   // Initialize all slots as invalid
   for (int i = 0; i < VISITED_HISTORY; i++) {
@@ -405,17 +405,6 @@ void spawnPlayer (PlayerData *player) {
   player->visited_x[player->visited_next] = _x;
   player->visited_z[player->visited_next] = _z;
   player->visited_next = (player->visited_next + 1) % VISITED_HISTORY;
-  
-  for (int i = -2; i <= 2; i ++) {
-    for (int j = -2; j <= 2; j ++) {
-      if (i == 0 && j == 0) continue;
-      sc_chunkDataAndUpdateLight(player->client_fd, _x + i, _z + j);
-      // Mark this chunk as visited
-      player->visited_x[player->visited_next] = _x + i;
-      player->visited_z[player->visited_next] = _z + j;
-      player->visited_next = (player->visited_next + 1) % VISITED_HISTORY;
-    }
-  }
 
   // Re-teleport player after chunks have been sent
   sc_synchronizePlayerPosition(player->client_fd, spawn_x, spawn_y, spawn_z, spawn_yaw, spawn_pitch);
