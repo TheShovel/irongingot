@@ -18,6 +18,7 @@ static SurfaceNoise surface_noise_biome;
 static OctavePerlinNoiseSampler surface_noise;
 static OctavePerlinNoiseSampler detail_noise;
 static OctavePerlinNoiseSampler cave_noise;
+static OctavePerlinNoiseSampler mountain_noise;
 static int gen_initialized = 0;
 
 // Height cache for smooth chunk generation (covers 32x32 area for seamless borders)
@@ -34,6 +35,8 @@ void init_worldgen() {
     octave_init(&detail_noise, (uint64_t)world_seed + 1, 2);
     // Cave noise uses same settings as surface noise but different seed and scale
     octave_init(&cave_noise, (uint64_t)world_seed + 0x5DEECE66D, 4);
+    // Mountain noise for large mountain peaks (low frequency, high amplitude)
+    octave_init(&mountain_noise, (uint64_t)world_seed + 0x12345678, 3);
     gen_initialized = 1;
 }
 
@@ -126,16 +129,16 @@ static uint8_t getHeightAtRaw (int x, int z) {
   int gz = div_floor(z, 16);  // Grid cell Z
   int lx = mod_abs(x, 16);    // Local position in cell (0-15)
   int lz = mod_abs(z, 16);
-  
+
   float wx = lx / 16.0f;
   float wz = lz / 16.0f;
-  
+
   // Sample biomes at 4 grid corners
   uint8_t b00 = getChunkBiome(gx, gz);
   uint8_t b10 = getChunkBiome(gx + 1, gz);
   uint8_t b01 = getChunkBiome(gx, gz + 1);
   uint8_t b11 = getChunkBiome(gx + 1, gz + 1);
-  
+
   // Get base height and scale for each biome
   double base00 = 64.0, scale00 = 12.0;
   double base10 = 64.0, scale10 = 12.0;
@@ -170,8 +173,7 @@ static uint8_t getHeightAtRaw (int x, int z) {
   double scale = scale00 * (1-wx) * (1-wz) + scale10 * wx * (1-wz) +
                  scale01 * (1-wx) * wz + scale11 * wx * wz;
 
-  // Add extra variation for mountain biomes using detail noise
-  // Apply cliff noise only to mountain biomes
+  // Check if this is a mountain biome
   uint8_t is_mountain = (b00 == W_windswept_hills || b00 == W_jagged_peaks ||
                          b00 == W_frozen_peaks || b00 == W_stony_peaks ||
                          b10 == W_windswept_hills || b10 == W_jagged_peaks ||
@@ -182,8 +184,22 @@ static uint8_t getHeightAtRaw (int x, int z) {
                          b11 == W_frozen_peaks || b11 == W_stony_peaks);
 
   if (is_mountain) {
-    // Use detail noise for mountain variation (already sampled, reuse it)
-    base_height += detail * 8.0;
+    // Sample mountain noise for large peak shapes (low frequency)
+    double mountain = octave_sample(&mountain_noise, x * 0.008, 0, z * 0.008);
+    
+    // Normalize mountain noise to [0, 1]
+    double mountain_factor = (mountain + 1.0) / 2.0;
+    
+    // Mountain peaks: use mountain_factor to add dramatic height variation
+    // Peaks can reach 50+ blocks above base height for massive mountains
+    double peak_bonus = mountain_factor * mountain_factor * 85.0;
+    
+    // Add detail variation scaled by mountain factor
+    base_height += peak_bonus;
+    scale += mountain_factor * 20.0;
+    
+    // Extra detail for rugged mountain surfaces
+    base_height += detail * (5.0 + mountain_factor * 15.0);
   }
 
   return (uint8_t)(base_height + noise * scale + detail * 2.0);
@@ -929,22 +945,27 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
     if (floor_hash < 100) return B_gravel;
     return B_sand;
   }
-  
-  // Generate cliffs in mountain biomes - create overhangs and steep faces
-  // Using hash-based approach for better performance
+
+  // Generate cliffs and overhangs in mountain biomes
   if (anchor.biome == W_windswept_hills || anchor.biome == W_jagged_peaks ||
       anchor.biome == W_frozen_peaks || anchor.biome == W_stony_peaks) {
-    if (y > height && y <= height + 8) {
-      // Use chunk hash for deterministic "noise" without expensive sampling
+    
+    // Extended cliff range for big mountains (up to 15 blocks above terrain)
+    if (y > height && y <= height + 15) {
+      // Use mountain noise for natural cliff shapes
+      double cliff_noise = octave_sample(&mountain_noise, x * 0.015, y * 0.02, z * 0.015);
+      double cliff_factor = (cliff_noise + 1.0) / 2.0;
+      
+      // Higher terrain = more overhangs
+      uint8_t overhang_chance = 70 + (uint8_t)(cliff_factor * 100);
       uint8_t cliff_hash = (anchor.hash >> ((x + y + z) & 7)) & 255;
-      // Higher values = more likely to have blocks (overhangs)
-      // Threshold of 90 gives ~35% overhang coverage
-      if (cliff_hash > 90) {
+      
+      if (cliff_hash > (255 - overhang_chance)) {
         return B_stone;
       }
     }
   }
-  
+
   // Starting at 4 blocks below terrain level, generate minerals and caves
   if (y <= height - 4) {
     // Check for caves using surface-like noise for natural shapes
