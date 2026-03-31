@@ -32,10 +32,15 @@
 #define GAMEMODE 1
 
 // Max render distance, determines how many chunks to send
-#define VIEW_DISTANCE 10
+#define VIEW_DISTANCE 5
 
-// Time between server ticks in microseconds (default = 1s)
-#define TIME_BETWEEN_TICKS 1000000
+// Half-angle of the player's view cone in degrees (total cone = 2 * this value)
+// Only chunks within this cone in front of the player will be loaded
+// Recommended values: 30-60 degrees (60-120 total cone)
+#define VIEW_CONE_HALF_ANGLE 45
+
+// Time between server ticks in microseconds (default = 50ms for 20 TPS)
+#define TIME_BETWEEN_TICKS 50000
 
 // Calculated from TIME_BETWEEN_TICKS
 #define TICKS_PER_SECOND ((float)1000000 / TIME_BETWEEN_TICKS)

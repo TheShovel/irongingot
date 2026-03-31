@@ -354,10 +354,9 @@ int sc_setCenterChunk (int client_fd, int x, int y) {
 // S->C Chunk Data and Update Light
 int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
 
-  // Use a local buffer to build the chunk data part
-  // This is necessary to calculate the actual chunk_data_size
-  uint8_t *data_buf = malloc(MAX_PACKET_LEN);
-  if (!data_buf) return 1;
+  // Use a static buffer to build the chunk data part
+  // This avoids the overhead of allocating 1MB on every chunk send
+  static uint8_t data_buf[MAX_PACKET_LEN];
   int data_offset = 0;
 
   int x = _x * 16, z = _z * 16, y;
@@ -476,8 +475,10 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
   // sky light array
   writeVarInt(client_fd, 26);
   // Reuse chunk_section as temporary buffer for light data
-  for (int i = 0; i < 2048; i ++) chunk_section[i] = 0xFF;
-  for (int i = 2048; i < 4096; i ++) chunk_section[i] = 0;
+  memset(chunk_section, 0xFF, 2048);
+  memset(chunk_section + 2048, 0, 2048);
+  
+  // Cache VarInt for 2048
   for (int i = 0; i < 8; i ++) {
     writeVarInt(client_fd, 2048);
     send_all(client_fd, chunk_section + 2048, 2048);
@@ -490,8 +491,6 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
   writeVarInt(client_fd, 0);
 
   endPacket(client_fd);
-
-  free(data_buf);
 
   // Sending block updates
   for (int i = 0; i < block_changes_count; i ++) {

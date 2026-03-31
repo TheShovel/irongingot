@@ -503,27 +503,33 @@ uint8_t buildChunkSectionFromTemplate(int cx, int cy, int cz) {
         }
     }
     
-    // Generate 4096 blocks using original logic
+    // Generate 4096 blocks using optimized tri-nested loop
     extern uint8_t getTerrainAtFromCache(int x, int y, int z, int rx, int rz,
                                          ChunkAnchor anchor, ChunkFeature feature, uint8_t height);
     
-    for (int j = 0; j < 4096; j += 8) {
-        int y = j / 256 + cy;
-        int rz = j / 16 % 16;
-        int rz_mod = rz % CHUNK_SIZE;
-        feature_index = (j % 16) / CHUNK_SIZE + (j / 16 % 16) / CHUNK_SIZE * (16 / CHUNK_SIZE);
-        anchor_index = (j % 16) / CHUNK_SIZE + (j / 16 % 16) / CHUNK_SIZE * (16 / CHUNK_SIZE + 1);
-        
-        for (int offset = 7; offset >= 0; offset--) {
-            int k = j + offset;
-            int rx = k % 16;
-            chunk_section[j + 7 - offset] = getTerrainAtFromCache(
-                rx + cx, y, rz + cz,
-                rx % CHUNK_SIZE, rz_mod,
-                chunk_anchors[anchor_index],
-                chunk_features[feature_index],
-                chunk_section_height[rx][rz]
-            );
+    for (int dy = 0; dy < 16; dy++) {
+        int y = cy + dy;
+        for (int dz = 0; dz < 16; dz++) {
+            int z = cz + dz;
+            int rz_mod = dz % CHUNK_SIZE;
+            int rz_idx = dz / CHUNK_SIZE * (16 / CHUNK_SIZE);
+            int anchor_base = dz / CHUNK_SIZE * (16 / CHUNK_SIZE + 1);
+
+            for (int dx = 0; dx < 16; dx++) {
+                int address = dx + (dz << 4) + (dy << 8);
+                int index = (address & ~7) | (7 - (address & 7));
+
+                int feature_idx = dx / CHUNK_SIZE + rz_idx;
+                int anchor_idx = dx / CHUNK_SIZE + anchor_base;
+
+                chunk_section[index] = getTerrainAtFromCache(
+                    cx + dx, y, z,
+                    dx % CHUNK_SIZE, rz_mod,
+                    chunk_anchors[anchor_idx],
+                    chunk_features[feature_idx],
+                    chunk_section_height[dx][dz]
+                );
+            }
         }
     }
     
