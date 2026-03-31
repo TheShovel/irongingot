@@ -20,7 +20,14 @@
       "Bash(fi)",
       "Bash(done)",
       "Bash(time *)",
-      "Bash(echo *)"
+      "Bash(echo *)",
+      "Bash(nohup *)",
+      "Bash(md5sum *)",
+      "Bash(strings *)",
+      "Bash(netstat *)",
+      "Bash(ss *)",
+      "Bash(sed *)",
+      "Bash(lsof *)"
     ]
   },
   "$version": 3

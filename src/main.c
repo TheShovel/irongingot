@@ -375,7 +375,6 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
                 count++;
               #endif
               sent_this_tick++;
-              task_yield();
             }
           }
         }
@@ -711,8 +710,23 @@ int main () {
         strm.avail_out = MAX_PACKET_LEN;
         strm.next_out = in_packet_buffer;
 
-        inflateInit(&strm);
-        inflate(&strm, Z_FINISH);
+        int ret = inflateInit(&strm);
+        if (ret != Z_OK) {
+          fprintf(stderr, "inflateInit failed: %d\n", ret);
+          free(compressed_buf);
+          disconnectClient(&clients[client_index], 8);
+          continue;
+        }
+
+        ret = inflate(&strm, Z_FINISH);
+        if (ret != Z_STREAM_END) {
+          fprintf(stderr, "inflate failed: %d\n", ret);
+          inflateEnd(&strm);
+          free(compressed_buf);
+          disconnectClient(&clients[client_index], 8);
+          continue;
+        }
+
         in_packet_buffer_len = strm.total_out;
         inflateEnd(&strm);
 
@@ -721,7 +735,7 @@ int main () {
         in_packet_buffer_offset = 0;
         packet_id = readVarInt(client_fd);
         handlePacket(client_fd, in_packet_buffer_len - sizeVarInt(packet_id), packet_id, getClientState(client_fd));
-        
+
         // Clear in_packet_buffer after use
         in_packet_buffer_len = 0;
       }

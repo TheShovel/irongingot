@@ -358,8 +358,6 @@ void spawnPlayer (PlayerData *player) {
   // Teleport player to spawn coordinates (first pass)
   sc_synchronizePlayerPosition(player->client_fd, spawn_x, spawn_y, spawn_z, spawn_yaw, spawn_pitch);
 
-  task_yield(); // Check task timer between packets
-
   // Clear crafting grid residue, unlock craft_items
   for (int i = 0; i < 9; i++) {
     player->craft_items[i] = 0;
@@ -392,8 +390,6 @@ void spawnPlayer (PlayerData *player) {
   sc_startWaitingForChunks(player->client_fd);
   sc_setCenterChunk(player->client_fd, _x, _z);
 
-  task_yield(); // Check task timer between packets
-
   // Send spawn chunk
   sc_chunkDataAndUpdateLight(player->client_fd, _x, _z);
 
@@ -413,7 +409,6 @@ void spawnPlayer (PlayerData *player) {
   for (int i = -2; i <= 2; i ++) {
     for (int j = -2; j <= 2; j ++) {
       if (i == 0 && j == 0) continue;
-      task_yield();
       sc_chunkDataAndUpdateLight(player->client_fd, _x + i, _z + j);
       // Mark this chunk as visited
       player->visited_x[player->visited_next] = _x + i;
@@ -422,12 +417,8 @@ void spawnPlayer (PlayerData *player) {
     }
   }
 
-  task_yield(); // Check task timer between packets
-
   // Re-teleport player after chunks have been sent
   sc_synchronizePlayerPosition(player->client_fd, spawn_x, spawn_y, spawn_z, spawn_yaw, spawn_pitch);
-
-  task_yield(); // Check task timer between packets
 
 }
 
@@ -1167,14 +1158,13 @@ void playPickupAnimation (PlayerData *player, uint16_t item, double x, double y,
   sc_spawnEntity(player->client_fd, -1, (uint8_t *)player->name, 69, x + 0.5, y + 0.5, z + 0.5, 0, 0);
 
   // Write a Set Entity Metadata packet for the item
-  // There's no packets.c entry for this, as it's not cheaply generalizable
-  writeVarInt(player->client_fd, 12 + sizeVarInt(item));
-  writeByte(player->client_fd, 0x5C);
-  writeVarInt(player->client_fd, -1);
+  // Using startPacket/endPacket to properly handle compression
+  startPacket(0x5C);
+  writeVarInt(player->client_fd, -1);  // Entity ID
 
   // Describe slot data array entry
-  writeByte(player->client_fd, 8);
-  writeByte(player->client_fd, 7);
+  writeByte(player->client_fd, 8);  // String NBT tag type
+  writeByte(player->client_fd, 7);  // String length (item as string? Actually this is metadata index)
   // Send slot data
   writeByte(player->client_fd, 1);
   writeVarInt(player->client_fd, item);
@@ -1182,6 +1172,7 @@ void playPickupAnimation (PlayerData *player, uint16_t item, double x, double y,
   writeByte(player->client_fd, 0);
   // Terminate entity metadata array
   writeByte(player->client_fd, 0xFF);
+  endPacket(player->client_fd);
 
   // Send the Pickup Item packet targeting this entity
   sc_pickupItem(player->client_fd, -1, player->client_fd, 1);

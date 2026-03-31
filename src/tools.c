@@ -176,9 +176,11 @@ void endPacket (int client_fd) {
 
   if (threshold > 0 && uncompressed_len >= threshold) {
     // Compressed format: [Packet Length] [Data Length] [Compressed(Packet ID + Data)]
-    
+
     // 1. Compress the data
-    uint8_t *compressed_buf = malloc(uncompressed_len + 128); // Zlib needs some extra space
+    // Zlib may produce output larger than input for incompressible data, so allocate generously
+    size_t max_compressed_len = compressBound(uncompressed_len);
+    uint8_t *compressed_buf = malloc(max_compressed_len);
     if (!compressed_buf) {
       perror("Failed to allocate compression buffer");
       return;
@@ -190,12 +192,44 @@ void endPacket (int client_fd) {
     strm.opaque = Z_NULL;
     strm.avail_in = uncompressed_len;
     strm.next_in = packet_buffer;
-    strm.avail_out = uncompressed_len + 128;
+    strm.avail_out = max_compressed_len;
     strm.next_out = compressed_buf;
 
-    deflateInit(&strm, Z_DEFAULT_COMPRESSION);
-    deflate(&strm, Z_FINISH);
+    int ret = deflateInit(&strm, Z_DEFAULT_COMPRESSION);
+    if (ret != Z_OK) {
+      fprintf(stderr, "deflateInit failed: %d\n", ret);
+      free(compressed_buf);
+      return;
+    }
+
+    ret = deflate(&strm, Z_FINISH);
+    if (ret != Z_STREAM_END) {
+      fprintf(stderr, "deflate failed: %d\n", ret);
+      // Fallback: send uncompressed
+      deflateEnd(&strm);
+      free(compressed_buf);
+      // Fall through to uncompressed path below
+      goto send_uncompressed;
+    }
+    
+    // Verify all input was compressed
+    if (strm.avail_in != 0) {
+      fprintf(stderr, "deflate did not consume all input: %u bytes remaining\n", strm.avail_in);
+      deflateEnd(&strm);
+      free(compressed_buf);
+      goto send_uncompressed;
+    }
+
     int compressed_len = strm.total_out;
+    
+    // Verify zlib header is present (first two bytes should be valid)
+    if (compressed_len < 2) {
+      fprintf(stderr, "Compression produced invalid output (too short: %d bytes)\n", compressed_len);
+      deflateEnd(&strm);
+      free(compressed_buf);
+      goto send_uncompressed;
+    }
+    
     deflateEnd(&strm);
 
     // 2. Send the packet
@@ -207,7 +241,13 @@ void endPacket (int client_fd) {
     send_all(client_fd, compressed_buf, compressed_len);
 
     free(compressed_buf);
-  } else if (threshold > 0) {
+    return;
+
+send_uncompressed:
+    threshold = 0;  // Force uncompressed path
+  }
+
+  if (threshold > 0) {
     // Compressed format (but not compressed): [Packet Length] [0] [Packet ID + Data]
     int data_length_size = sizeVarInt(0);
     int packet_length = data_length_size + uncompressed_len;

@@ -437,7 +437,6 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
     // biome data
     data_buf[data_offset++] = 0; // bits per entry
     data_buf[data_offset++] = biome; // biome palette
-    task_yield();
   }
 
   // send 8 chunk sections (up to Y=192) with no blocks (air)
