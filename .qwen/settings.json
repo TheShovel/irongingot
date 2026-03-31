@@ -8,7 +8,19 @@
       "Bash(bash *)",
       "Bash(sleep *)",
       "Bash(kill *)",
-      "Bash(true)"
+      "Bash(true)",
+      "Bash(pkill *)",
+      "Bash(./bareiron)",
+      "Bash(cd *)",
+      "Bash(ls *)",
+      "Bash(head *)",
+      "Bash(do)",
+      "Bash(then)",
+      "Bash(break)",
+      "Bash(fi)",
+      "Bash(done)",
+      "Bash(time *)",
+      "Bash(echo *)"
     ]
   },
   "$version": 3
