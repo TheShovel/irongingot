@@ -83,9 +83,9 @@ uint8_t getChunkBiome (short x, short z) {
     case desert_lakes: return W_desert;
     case windswept_hills: return W_windswept_hills;
     case forest: return W_forest;
-    case flower_forest: return W_forest;
+    case flower_forest: return W_flower_forest;
     case taiga: return W_taiga;
-    case taiga_mountains: return W_taiga;
+    case taiga_mountains: return W_windswept_hills;
     case swamp: return W_swamp;
     case swamp_hills: return W_swamp;
     case river: return W_river;
@@ -107,7 +107,7 @@ uint8_t getChunkBiome (short x, short z) {
     case savanna: return W_savanna;
     case shattered_savanna: return W_savanna;
     case badlands: return W_badlands;
-    case eroded_badlands: return W_badlands;
+    case eroded_badlands: return W_eroded_badlands;
     case mangrove_swamp: return W_mangrove_swamp;
     case meadow: return W_meadow;
 
@@ -131,16 +131,17 @@ static uint8_t getHeightAtRaw (int x, int z) {
   double noise = octave_sample(&surface_noise, x * 0.0125, 0, z * 0.0125);
   double detail = octave_sample(&detail_noise, x * 0.05, 0, z * 0.05);
 
-  // Sample biomes on a fixed 16-block grid for consistent blending
-  int gx = div_floor(x, 16);  // Grid cell X
-  int gz = div_floor(z, 16);  // Grid cell Z
-  int lx = mod_abs(x, 16);    // Local position in cell (0-15)
-  int lz = mod_abs(z, 16);
+  // Sample biomes on a 32-block grid for smoother blending
+  // This aligns better with chunk boundaries and reduces visible seams
+  int gx = div_floor(x, 32);  // Grid cell X (32-block spacing)
+  int gz = div_floor(z, 32);  // Grid cell Z
+  int lx = mod_abs(x, 32);    // Local position in cell (0-31)
+  int lz = mod_abs(z, 32);
 
-  float wx = lx / 16.0f;
-  float wz = lz / 16.0f;
+  float wx = lx / 32.0f;
+  float wz = lz / 32.0f;
 
-  // Sample biomes at 4 grid corners
+  // Sample biomes at 4 grid corners (32 blocks apart)
   uint8_t b00 = getChunkBiome(gx, gz);
   uint8_t b10 = getChunkBiome(gx + 1, gz);
   uint8_t b01 = getChunkBiome(gx, gz + 1);
@@ -155,21 +156,28 @@ static uint8_t getHeightAtRaw (int x, int z) {
   #define SET_BIOME_HEIGHT(biome, base, scale) \
     if (biome == W_desert) { base = 66.0; scale = 8.0; } \
     else if (biome == W_snowy_plains || biome == W_snowy_taiga) { base = 70.0; scale = 20.0; } \
-    else if (biome == W_savanna || biome == W_badlands) { base = 80.0; scale = 35.0; } \
-    else if (biome == W_windswept_hills) { base = 90.0; scale = 55.0; } \
-    else if (biome == W_jagged_peaks) { base = 100.0; scale = 80.0; } \
-    else if (biome == W_frozen_peaks) { base = 95.0; scale = 70.0; } \
-    else if (biome == W_stony_peaks) { base = 105.0; scale = 75.0; } \
-    else if (biome == W_cherry_grove) { base = 85.0; scale = 25.0; } \
+    else if (biome == W_savanna) { base = 80.0; scale = 40.0; } \
+    else if (biome == W_windswept_savanna) { base = 85.0; scale = 50.0; } \
+    else if (biome == W_windswept_hills || biome == W_windswept_forest) { base = 95.0; scale = 70.0; } \
+    else if (biome == W_jagged_peaks) { base = 120.0; scale = 110.0; } \
+    else if (biome == W_frozen_peaks) { base = 110.0; scale = 95.0; } \
+    else if (biome == W_stony_peaks) { base = 115.0; scale = 100.0; } \
+    else if (biome == W_snowy_slopes) { base = 105.0; scale = 90.0; } \
+    else if (biome == W_grove) { base = 90.0; scale = 60.0; } \
+    else if (biome == W_cherry_grove) { base = 85.0; scale = 35.0; } \
     else if (biome == W_ocean || biome == W_deep_ocean || biome == W_frozen_ocean) { base = 45.0; scale = 12.0; } \
     else if (biome == W_river || biome == W_frozen_river) { base = 58.0; scale = 3.0; } \
     else if (biome == W_beach) { base = 60.0; scale = 3.0; } \
     else if (biome == W_mangrove_swamp || biome == W_swamp) { base = 61.0; scale = 4.0; } \
-    else if (biome == W_meadow) { base = 85.0; scale = 30.0; } \
+    else if (biome == W_meadow) { base = 90.0; scale = 45.0; } \
     else if (biome == W_forest || biome == W_birch_forest || biome == W_dark_forest) { base = 70.0; scale = 18.0; } \
-    else if (biome == W_taiga || biome == W_snowy_taiga) { base = 72.0; scale = 22.0; } \
-    else if (biome == W_jungle) { base = 75.0; scale = 20.0; } \
-    else if (biome == W_plains) { base = 68.0; scale = 10.0; }
+    else if (biome == W_flower_forest) { base = 75.0; scale = 25.0; } \
+    else if (biome == W_taiga || biome == W_snowy_taiga || biome == W_old_growth_pine_taiga) { base = 72.0; scale = 22.0; } \
+    else if (biome == W_jungle || biome == W_bamboo_jungle) { base = 75.0; scale = 20.0; } \
+    else if (biome == W_plains || biome == W_sunflower_plains) { base = 68.0; scale = 12.0; } \
+    else if (biome == W_badlands || biome == W_eroded_badlands) { base = 80.0; scale = 40.0; } \
+    else if (biome == W_ice_spikes) { base = 65.0; scale = 15.0; } \
+    else if (biome == W_mushroom_fields) { base = 65.0; scale = 10.0; }
 
   SET_BIOME_HEIGHT(b00, base00, scale00);
   SET_BIOME_HEIGHT(b10, base10, scale10);
@@ -187,31 +195,38 @@ static uint8_t getHeightAtRaw (int x, int z) {
   // Check if this is a mountain biome
   uint8_t is_mountain = (b00 == W_windswept_hills || b00 == W_jagged_peaks ||
                          b00 == W_frozen_peaks || b00 == W_stony_peaks ||
+                         b00 == W_snowy_slopes || b00 == W_grove ||
+                         b00 == W_windswept_forest || b00 == W_windswept_savanna ||
                          b10 == W_windswept_hills || b10 == W_jagged_peaks ||
                          b10 == W_frozen_peaks || b10 == W_stony_peaks ||
+                         b10 == W_snowy_slopes || b10 == W_grove ||
+                         b10 == W_windswept_forest || b10 == W_windswept_savanna ||
                          b01 == W_windswept_hills || b01 == W_jagged_peaks ||
                          b01 == W_frozen_peaks || b01 == W_stony_peaks ||
+                         b01 == W_snowy_slopes || b01 == W_grove ||
+                         b01 == W_windswept_forest || b01 == W_windswept_savanna ||
                          b11 == W_windswept_hills || b11 == W_jagged_peaks ||
-                         b11 == W_frozen_peaks || b11 == W_stony_peaks);
+                         b11 == W_frozen_peaks || b11 == W_stony_peaks ||
+                         b11 == W_snowy_slopes || b11 == W_grove ||
+                         b11 == W_windswept_forest || b11 == W_windswept_savanna);
 
   if (is_mountain) {
     // Sample mountain noise for large peak shapes (low frequency)
-    double mountain = octave_sample(&mountain_noise, x * 0.006, 0, z * 0.006);
+    double mountain = octave_sample(&mountain_noise, x * 0.005, 0, z * 0.005);
 
     // Normalize mountain noise to [0, 1]
     double mountain_factor = (mountain + 1.0) / 2.0;
 
-    // Mountain peaks: use mountain_factor to add dramatic height variation
-    // Peaks can reach 80+ blocks above base height for massive mountains
-    // Quadratic scaling creates rare but extremely tall peaks
-    double peak_bonus = mountain_factor * mountain_factor * mountain_factor * 120.0;
+    // Mountain peaks: reduced from 180 to 100 for less extreme terrain
+    // Quadratic scaling instead of cubic for smoother peaks
+    double peak_bonus = mountain_factor * mountain_factor * 100.0;
 
     // Add detail variation scaled by mountain factor
     base_height += peak_bonus;
-    scale += mountain_factor * 30.0;
+    scale += mountain_factor * 25.0;
 
-    // Extra detail for rugged mountain surfaces
-    base_height += detail * (8.0 + mountain_factor * 20.0);
+    // Extra detail for rugged mountain surfaces (reduced)
+    base_height += detail * (5.0 + mountain_factor * 10.0);
   }
 
   return (uint8_t)(base_height + noise * scale + detail * 2.0);
@@ -233,9 +248,20 @@ static void buildHeightCache (int cx, int cz) {
   int base_z = scz * 32;
 
   // Generate raw heights for 36x36 area (32x32 superchunk + 2 block border)
+  // Apply smoothing filter to reduce visible seams
   for (int dz = 0; dz < 36; dz++) {
     for (int dx = 0; dx < 36; dx++) {
-      height_cache[dx][dz] = getHeightAtRaw(base_x + dx - 2, base_z + dz - 2);
+      int raw_x = base_x + dx - 2;
+      int raw_z = base_z + dz - 2;
+      
+      // Sample multiple points and average for smoother terrain
+      uint8_t h0 = getHeightAtRaw(raw_x, raw_z);
+      uint8_t h1 = getHeightAtRaw(raw_x + 1, raw_z);
+      uint8_t h2 = getHeightAtRaw(raw_x, raw_z + 1);
+      uint8_t h3 = getHeightAtRaw(raw_x + 1, raw_z + 1);
+      
+      // Average the samples for smoother transitions
+      height_cache[dx][dz] = (h0 + h1 + h2 + h3) / 4;
     }
   }
 }
@@ -372,10 +398,10 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
 
   if (y >= 64 && y >= height && feature.y != 255) switch (anchor.biome) {
     case W_plains: { // Generate oak trees and grass in plains
-      
-      // Don't generate trees underwater
-      if (feature.y < 64) break;
-      
+
+      // Don't generate trees underwater or on mountains
+      if (feature.y < 64 || feature.y > 120) break;
+
       // Handle tree trunk and dirt
       if (x == feature.x && z == feature.z) {
         if (y == feature.y - 1) return B_dirt;
@@ -433,13 +459,13 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
     }
     
     case W_forest: { // Generate oak and birch trees in forests
-      
-      // Don't generate trees underwater
-      if (feature.y < 64) break;
-      
+
+      // Don't generate trees underwater or on mountains
+      if (feature.y < 64 || feature.y > 120) break;
+
       // Use hash to decide between oak and birch
       uint8_t is_birch = (anchor.hash >> 3) & 1;
-      
+
       if (x == feature.x && z == feature.z) {
         if (y == feature.y - 1) return B_dirt;
         // Birch trees are taller with distinctive white bark
@@ -528,10 +554,10 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
 
     case W_taiga: // Generate spruce trees in taiga
     case W_old_growth_pine_taiga: {
-      
-      // Don't generate trees underwater
-      if (feature.y < 64) break;
-      
+
+      // Don't generate trees underwater or on mountains
+      if (feature.y < 64 || feature.y > 120) break;
+
       // Spruce trees are tall and conical
       if (x == feature.x && z == feature.z) {
         if (y == feature.y - 1) return B_dirt;
@@ -578,10 +604,10 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
     }
 
     case W_snowy_taiga: { // Generate spruce trees with snow in cold taiga
-      
-      // Don't generate trees underwater
-      if (feature.y < 64) break;
-      
+
+      // Don't generate trees underwater or on mountains
+      if (feature.y < 64 || feature.y > 120) break;
+
       if (x == feature.x && z == feature.z) {
         if (y == feature.y - 1) return B_dirt;
         if (y >= feature.y && y < feature.y + 5 + feature.variant * 2) return B_spruce_log;
@@ -623,10 +649,10 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
 
     case W_jungle: // Generate jungle trees with vines
     case W_bamboo_jungle: {
-      
-      // Don't generate trees underwater
-      if (feature.y < 64) break;
-      
+
+      // Don't generate trees underwater or on mountains
+      if (feature.y < 64 || feature.y > 120) break;
+
       // Jungle trees are very tall with 2x2 trunks
       int base_x = feature.x & ~1;
       int base_z = feature.z & ~1;
@@ -680,10 +706,10 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
     }
 
     case W_savanna: { // Generate acacia trees in savanna
-      
-      // Don't generate trees underwater
-      if (feature.y < 64) break;
-      
+
+      // Don't generate trees underwater or on mountains
+      if (feature.y < 64 || feature.y > 120) break;
+
       // Acacia trees have a distinctive curved shape
       int trunk_height = 4 + feature.variant;
       
@@ -997,6 +1023,222 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       break;
     }
 
+    case W_windswept_forest: { // Generate spruce trees on windswept hills
+
+      if (feature.y < 64) break;
+
+      // Tall spruce trees adapted for windy conditions
+      if (x == feature.x && z == feature.z) {
+        if (y == feature.y - 1) return B_dirt;
+        if (y >= feature.y && y < feature.y + 7 + feature.variant) return B_spruce_log;
+      }
+
+      // Conical spruce leaves
+      uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
+      uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+      uint8_t dist = dx + dz;
+      uint8_t leaf_top = feature.y + 10 + feature.variant;
+
+      for (int ly = feature.y + 3; ly <= leaf_top; ly++) {
+        int dist_from_top = leaf_top - ly;
+        int max_radius = (dist_from_top / 2) + 1;
+        if (y == ly && dist <= max_radius && dist > 0) {
+          return B_spruce_leaves;
+        }
+      }
+
+      if (y == height) return B_grass_block;
+      break;
+    }
+
+    case W_windswept_savanna: { // Generate acacia trees in windswept savanna
+
+      if (feature.y < 64) break;
+
+      // Acacia trees with curved trunks
+      int trunk_height = 4 + feature.variant;
+
+      if (x == feature.x && z == feature.z) {
+        if (y == feature.y - 1) return B_dirt;
+        if (y >= feature.y && y < feature.y + trunk_height) return B_acacia_log;
+      }
+
+      // Curved trunk
+      for (int i = 1; i <= 3; i++) {
+        if (x == feature.x + i && z == feature.z) {
+          if (y >= feature.y + trunk_height && y < feature.y + trunk_height + 2) {
+            return B_acacia_log;
+          }
+        }
+      }
+
+      // Leaf canopy
+      uint8_t canopy_cx = feature.x + 2;
+      uint8_t dx = x > canopy_cx ? x - canopy_cx : canopy_cx - x;
+      uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+      uint8_t dist = dx + dz;
+      uint8_t canopy_y = feature.y + trunk_height + 2;
+
+      if (y >= canopy_y && y <= canopy_y + 1 && dist <= 3) {
+        if (y == canopy_y && dist == 3) break;
+        return B_acacia_leaves;
+      }
+      if (y == canopy_y + 2 && dist <= 2) return B_acacia_leaves;
+
+      if (y == height) return B_grass_block;
+      break;
+    }
+
+    case W_snowy_slopes: { // Generate sparse spruce trees on snowy slopes
+
+      if (feature.y < 64) break;
+
+      // Small spruce trees adapted for snow
+      if (x == feature.x && z == feature.z) {
+        if (y == feature.y - 1) return B_dirt;
+        if (y >= feature.y && y < feature.y + 4 + feature.variant) return B_spruce_log;
+      }
+
+      // Compact leaf clusters
+      uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
+      uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+      uint8_t dist = dx + dz;
+      uint8_t leaf_top = feature.y + 6 + feature.variant;
+
+      for (int ly = feature.y + 2; ly <= leaf_top; ly++) {
+        int dist_from_top = leaf_top - ly;
+        int max_radius = (dist_from_top / 2) + 1;
+        if (y == ly && dist <= max_radius && dist > 0) {
+          return B_spruce_leaves;
+        }
+      }
+
+      if (y == height) return B_snow_block;
+      break;
+    }
+
+    case W_grove: { // Generate dense spruce forest in groves
+
+      if (feature.y < 64) break;
+
+      // Tall spruce trees
+      if (x == feature.x && z == feature.z) {
+        if (y == feature.y - 1) return B_dirt;
+        if (y >= feature.y && y < feature.y + 8 + feature.variant * 2) return B_spruce_log;
+      }
+
+      // Full spruce canopy
+      uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
+      uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+      uint8_t dist = dx + dz;
+      uint8_t leaf_top = feature.y + 12 + feature.variant * 2;
+
+      for (int ly = feature.y + 4; ly <= leaf_top; ly++) {
+        int dist_from_top = leaf_top - ly;
+        int max_radius = (dist_from_top / 2) + 1;
+        if (y == ly && dist <= max_radius && dist > 0) {
+          return B_spruce_leaves;
+        }
+      }
+
+      if (y == height) return B_grass_block;
+      break;
+    }
+
+    case W_flower_forest: { // Generate oak trees with abundant flowers
+
+      if (feature.y < 64) break;
+
+      // Oak trees
+      if (x == feature.x && z == feature.z) {
+        if (y == feature.y - 1) return B_dirt;
+        if (y >= feature.y && y < feature.y + 5 + feature.variant) return B_oak_log;
+      }
+
+      // Oak canopy
+      uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
+      uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+      uint8_t dist = dx + dz;
+      uint8_t trunk_top = feature.y + 5 + feature.variant;
+
+      if (y == trunk_top - 1 && dist <= 2) {
+        if (dist == 2 && (dx == 2 || dz == 2)) break;
+        return B_oak_leaves;
+      }
+      if (y >= trunk_top && y <= trunk_top + 2 && dist <= 2) {
+        if (y == trunk_top + 2 && dist > 1) break;
+        return B_oak_leaves;
+      }
+
+      if (y == height) return B_grass_block;
+
+      // Dense flower coverage
+      if (y == height + 1) {
+        uint8_t decor_hash = (anchor.hash >> (x + z)) & 255;
+        if (decor_hash < 50) return B_short_grass;
+        if (decor_hash < 200) {
+          uint8_t flower = decor_hash % 12;
+          if (flower == 0) return B_dandelion;
+          if (flower == 1) return B_poppy;
+          if (flower == 2) return B_blue_orchid;
+          if (flower == 3) return B_allium;
+          if (flower == 4) return B_azure_bluet;
+          if (flower == 5) return B_red_tulip;
+          if (flower == 6) return B_orange_tulip;
+          if (flower == 7) return B_white_tulip;
+          if (flower == 8) return B_pink_tulip;
+          if (flower == 9) return B_oxeye_daisy;
+          if (flower == 10) return B_cornflower;
+          if (flower == 11) return B_lily_of_the_valley;
+        }
+      }
+      break;
+    }
+
+    case W_sunflower_plains: { // Generate sunflowers in plains
+
+      if (y == height) return B_grass_block;
+
+      if (y == height + 1) {
+        uint8_t decor_hash = (anchor.hash >> (x + z)) & 255;
+        if (decor_hash < 80) return B_short_grass;
+        // 8% chance for sunflower (using bush as placeholder)
+        if (decor_hash >= 100 && decor_hash < 120) return B_bush;
+      }
+      break;
+    }
+
+    case W_eroded_badlands: { // Generate cacti and dead bushes in eroded badlands
+
+      if (y == height) return B_terracotta;
+
+      if (y == height + 1) {
+        uint8_t decor_hash = (anchor.hash >> (x + z)) & 255;
+        if (decor_hash < 30) return B_cactus;
+        if (decor_hash < 50) return B_dead_bush;
+      }
+      break;
+    }
+
+    case W_ice_spikes: { // Generate ice spikes and packed ice
+
+      if (x == feature.x && z == feature.z && feature.y >= 64) {
+        // Ice spike
+        int spike_height = 10 + feature.variant * 5;
+        if (y >= height && y < height + spike_height) {
+          uint8_t spike_width = (spike_height - (y - height)) / 3;
+          uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
+          uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+          if (dx <= spike_width && dz <= spike_width) {
+            return (y - height) < spike_height / 2 ? B_packed_ice : B_ice;
+          }
+        }
+      }
+
+      if (y == height) return B_snow_block;
+      break;
+    }
+
     default: break;
   }
 
@@ -1027,25 +1269,8 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
     return B_sand;
   }
 
-  // Generate cliffs and overhangs in mountain biomes
-  if (anchor.biome == W_windswept_hills || anchor.biome == W_jagged_peaks ||
-      anchor.biome == W_frozen_peaks || anchor.biome == W_stony_peaks) {
-    
-    // Extended cliff range for big mountains (up to 15 blocks above terrain)
-    if (y > height && y <= height + 15) {
-      // Use mountain noise for natural cliff shapes
-      double cliff_noise = octave_sample(&mountain_noise, x * 0.015, y * 0.02, z * 0.015);
-      double cliff_factor = (cliff_noise + 1.0) / 2.0;
-      
-      // Higher terrain = more overhangs
-      uint8_t overhang_chance = 70 + (uint8_t)(cliff_factor * 100);
-      uint8_t cliff_hash = (anchor.hash >> ((x + y + z) & 7)) & 255;
-      
-      if (cliff_hash > (255 - overhang_chance)) {
-        return B_stone;
-      }
-    }
-  }
+  // Mountain terrain is generated through height map - no additional cliff structures needed
+  // The mountain noise already creates natural steep slopes and peaks
 
   // Starting at 4 blocks below terrain level, generate minerals and caves
   if (y <= height - 4) {
@@ -1127,7 +1352,7 @@ ChunkFeature getFeatureFromAnchor (ChunkAnchor anchor) {
 
 uint8_t getTerrainAt (int x, int y, int z, ChunkAnchor anchor) {
 
-  if (y > 150) return B_air;
+  if (y > 320) return B_air;
 
   int rx = x % CHUNK_SIZE;
   int rz = z % CHUNK_SIZE;

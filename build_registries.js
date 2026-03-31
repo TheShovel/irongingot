@@ -114,6 +114,15 @@ const biomes = [
   "cherry_grove",
   "old_growth_pine_taiga",
   "bamboo_jungle",
+  // Additional biomes
+  "windswept_forest",
+  "windswept_savanna",
+  "snowy_slopes",
+  "grove",
+  "sunflower_plains",
+  "flower_forest",
+  "ice_spikes",
+  "eroded_badlands",
 ];
 
 // Extract item and block data from registry dump
