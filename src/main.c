@@ -39,6 +39,7 @@
 #include "registries.h"
 #include "procedures.h"
 #include "serialize.h"
+#include <zlib.h>
 
 // Check if a chunk has been visited (sent to player)
 static int isChunkVisited(PlayerData *player, int x, int z) {
@@ -102,6 +103,7 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
           recv_count = 0;
           return;
         }
+        sc_setCompression(client_fd, 256);
         if (sc_loginSuccess(client_fd, uuid, name)) break;
       } else if (state == STATE_CONFIGURATION) {
         if (cs_clientInformation(client_fd)) break;
@@ -600,7 +602,9 @@ int main () {
   int clients[MAX_PLAYERS], client_index = 0;
   for (int i = 0; i < MAX_PLAYERS; i ++) {
     clients[i] = -1;
-    client_states[i * 2] = -1;
+    client_states[i].client_fd = -1;
+    client_states[i].state = STATE_NONE;
+    client_states[i].compression_threshold = 0;
     player_data[i].client_fd = -1;
   }
 
@@ -765,26 +769,72 @@ int main () {
     #endif
 
     // Read packet length
-    int length = readVarInt(client_fd);
-    if (length == VARNUM_ERROR) {
+    int packet_length = readVarInt(client_fd);
+    if (packet_length == VARNUM_ERROR) {
       disconnectClient(&clients[client_index], 2);
       continue;
     }
-    // Read packet ID
-    int packet_id = readVarInt(client_fd);
-    if (packet_id == VARNUM_ERROR) {
-      disconnectClient(&clients[client_index], 3);
-      continue;
+
+    int packet_id;
+    int data_length = 0;
+    int threshold = getCompressionThreshold(client_fd);
+
+    if (threshold > 0) {
+      data_length = readVarInt(client_fd);
+      if (data_length == 0) {
+        // Uncompressed
+        packet_id = readVarInt(client_fd);
+        int header_size = sizeVarInt(0) + sizeVarInt(packet_id);
+        handlePacket(client_fd, packet_length - header_size, packet_id, getClientState(client_fd));
+      } else {
+        // Compressed
+        int compressed_len = packet_length - sizeVarInt(data_length);
+        if (compressed_len > MAX_PACKET_LEN || data_length > MAX_PACKET_LEN) {
+          printf("ERROR: Compressed packet too large (%d or %d > %d)\n", compressed_len, data_length, MAX_PACKET_LEN);
+          disconnectClient(&clients[client_index], 8);
+          continue;
+        }
+
+        uint8_t *compressed_buf = malloc(compressed_len);
+        if (!compressed_buf) {
+          perror("Failed to allocate compressed buffer");
+          disconnectClient(&clients[client_index], 8);
+          continue;
+        }
+
+        recv_all(client_fd, compressed_buf, compressed_len, false);
+
+        z_stream strm;
+        strm.zalloc = Z_NULL;
+        strm.zfree = Z_NULL;
+        strm.opaque = Z_NULL;
+        strm.avail_in = compressed_len;
+        strm.next_in = compressed_buf;
+        strm.avail_out = MAX_PACKET_LEN;
+        strm.next_out = in_packet_buffer;
+
+        inflateInit(&strm);
+        inflate(&strm, Z_FINISH);
+        in_packet_buffer_len = strm.total_out;
+        inflateEnd(&strm);
+
+        free(compressed_buf);
+
+        in_packet_buffer_offset = 0;
+        packet_id = readVarInt(client_fd);
+        handlePacket(client_fd, in_packet_buffer_len - sizeVarInt(packet_id), packet_id, getClientState(client_fd));
+        
+        // Clear in_packet_buffer after use
+        in_packet_buffer_len = 0;
+      }
+    } else {
+      packet_id = readVarInt(client_fd);
+      if (packet_id == VARNUM_ERROR) {
+        disconnectClient(&clients[client_index], 3);
+        continue;
+      }
+      handlePacket(client_fd, packet_length - sizeVarInt(packet_id), packet_id, getClientState(client_fd));
     }
-    // Get client connection state
-    int state = getClientState(client_fd);
-    // Disconnect on legacy server list ping
-    if (state == STATE_NONE && length == 254 && packet_id == 122) {
-      disconnectClient(&clients[client_index], 5);
-      continue;
-    }
-    // Handle packet data
-    handlePacket(client_fd, length - sizeVarInt(packet_id), packet_id, state);
     if (recv_count == 0 || (recv_count == -1 && errno != EAGAIN && errno != EWOULDBLOCK)) {
       disconnectClient(&clients[client_index], 4);
       continue;

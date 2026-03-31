@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 #ifdef ESP_PLATFORM
   #include "lwip/sockets.h"
@@ -34,13 +35,14 @@ int sc_statusResponse (int client_fd) {
 
   uint16_t string_len = sizeof(header) + sizeof(footer) + motd_len - 2;
 
-  writeVarInt(client_fd, 1 + string_len + sizeVarInt(string_len));
-  writeByte(client_fd, 0x00);
+  startPacket(0x00);
 
   writeVarInt(client_fd, string_len);
   send_all(client_fd, header, sizeof(header) - 1);
   send_all(client_fd, motd, motd_len);
   send_all(client_fd, footer, sizeof(footer) - 1);
+
+  endPacket(client_fd);
 
   return 0;
 }
@@ -81,17 +83,31 @@ int cs_loginStart (int client_fd, uint8_t *uuid, char *name) {
   return 0;
 }
 
+// S->C Set Compression
+int sc_setCompression (int client_fd, int threshold) {
+  printf("Sending Set Compression (threshold: %d)...\n\n", threshold);
+
+  startPacket(0x03);
+  writeVarInt(-1, threshold);
+  endPacket(client_fd);
+
+  setCompressionThreshold(client_fd, threshold);
+
+  return 0;
+}
+
 // S->C Login Success
 int sc_loginSuccess (int client_fd, uint8_t *uuid, char *name) {
   printf("Sending Login Success...\n\n");
 
   uint8_t name_length = strlen(name);
-  writeVarInt(client_fd, 1 + 16 + sizeVarInt(name_length) + name_length + 1);
-  writeVarInt(client_fd, 0x02);
+  startPacket(0x02);
   send_all(client_fd, uuid, 16);
   writeVarInt(client_fd, name_length);
   send_all(client_fd, name, name_length);
   writeVarInt(client_fd, 0);
+
+  endPacket(client_fd);
 
   return 0;
 }
@@ -142,8 +158,9 @@ int sc_knownPacks (int client_fd) {
     0x6f, 0x72, 0x65, 0x06, 0x31, 0x2e, 0x32, 0x31,
     0x2e, 0x38
   };
-  writeVarInt(client_fd, 24);
-  send_all(client_fd, &known_packs, 24);
+  startPacket(0x0E);
+  send_all(client_fd, known_packs + 1, 23);
+  endPacket(client_fd);
   return 0;
 }
 
@@ -167,8 +184,7 @@ int sc_sendPluginMessage (int client_fd, const char *channel, const uint8_t *dat
   printf("Sending Plugin Message\n\n");
   int channel_len = (int)strlen(channel);
 
-  writeVarInt(client_fd, 1 + sizeVarInt(channel_len) + channel_len + sizeVarInt(data_len) + data_len);
-  writeByte(client_fd, 0x01);
+  startPacket(0x01);
 
   writeVarInt(client_fd, channel_len);
   send_all(client_fd, channel, channel_len);
@@ -176,21 +192,22 @@ int sc_sendPluginMessage (int client_fd, const char *channel, const uint8_t *dat
   writeVarInt(client_fd, data_len);
   send_all(client_fd, data, data_len);
 
+  endPacket(client_fd);
+
   return 0;
 }
 
 // S->C Finish Configuration
 int sc_finishConfiguration (int client_fd) {
-  writeVarInt(client_fd, 1);
-  writeVarInt(client_fd, 0x03);
+  startPacket(0x03);
+  endPacket(client_fd);
   return 0;
 }
 
 // S->C Login (play)
 int sc_loginPlay (int client_fd) {
 
-  writeVarInt(client_fd, 47 + sizeVarInt(MAX_PLAYERS) + sizeVarInt(VIEW_DISTANCE) * 2);
-  writeByte(client_fd, 0x2B);
+  startPacket(0x2B);
   // entity id
   writeUint32(client_fd, client_fd);
   // hardcore
@@ -237,6 +254,8 @@ int sc_loginPlay (int client_fd) {
   // secure chat
   writeByte(client_fd, 0);
 
+  endPacket(client_fd);
+
   return 0;
 
 }
@@ -244,8 +263,7 @@ int sc_loginPlay (int client_fd) {
 // S->C Synchronize Player Position
 int sc_synchronizePlayerPosition (int client_fd, double x, double y, double z, float yaw, float pitch) {
 
-  writeVarInt(client_fd, 61 + sizeVarInt(-1));
-  writeByte(client_fd, 0x41);
+  startPacket(0x41);
 
   // Teleport ID
   writeVarInt(client_fd, -1);
@@ -267,6 +285,8 @@ int sc_synchronizePlayerPosition (int client_fd, double x, double y, double z, f
   // Flags
   writeUint32(client_fd, 0);
 
+  endPacket(client_fd);
+
   return 0;
 
 }
@@ -274,11 +294,12 @@ int sc_synchronizePlayerPosition (int client_fd, double x, double y, double z, f
 // S->C Set Default Spawn Position
 int sc_setDefaultSpawnPosition (int client_fd, int64_t x, int64_t y, int64_t z) {
 
-  writeVarInt(client_fd, sizeVarInt(0x5A) + 12);
-  writeVarInt(client_fd, 0x5A);
+  startPacket(0x5A);
 
   writeUint64(client_fd, ((x & 0x3FFFFFF) << 38) | ((z & 0x3FFFFFF) << 12) | (y & 0xFFF));
   writeFloat(client_fd, 0);
+
+  endPacket(client_fd);
 
   return 0;
 }
@@ -286,12 +307,13 @@ int sc_setDefaultSpawnPosition (int client_fd, int64_t x, int64_t y, int64_t z) 
 // S->C Player Abilities (clientbound)
 int sc_playerAbilities (int client_fd, uint8_t flags) {
 
-  writeVarInt(client_fd, 10);
-  writeByte(client_fd, 0x39);
+  startPacket(0x39);
 
   writeByte(client_fd, flags);
   writeFloat(client_fd, 0.05f);
   writeFloat(client_fd, 0.1f);
+
+  endPacket(client_fd);
 
   return 0;
 }
@@ -299,43 +321,140 @@ int sc_playerAbilities (int client_fd, uint8_t flags) {
 // S->C Update Time
 int sc_updateTime (int client_fd, uint64_t ticks) {
 
-  writeVarInt(client_fd, 18);
-  writeVarInt(client_fd, 0x6A);
+  startPacket(0x6A);
 
   uint64_t world_age = get_program_time() / 50000;
   writeUint64(client_fd, world_age);
   writeUint64(client_fd, ticks);
   writeByte(client_fd, true);
 
+  endPacket(client_fd);
+
   return 0;
 }
 
 // S->C Game Event 13 (Start waiting for level chunks)
 int sc_startWaitingForChunks (int client_fd) {
-  writeVarInt(client_fd, 6);
-  writeByte(client_fd, 0x22);
+  startPacket(0x22);
   writeByte(client_fd, 13);
   writeUint32(client_fd, 0);
+  endPacket(client_fd);
   return 0;
 }
 
 // S->C Set Center Chunk
 int sc_setCenterChunk (int client_fd, int x, int y) {
-  writeVarInt(client_fd, 1 + sizeVarInt(x) + sizeVarInt(y));
-  writeByte(client_fd, 0x57);
+  startPacket(0x57);
   writeVarInt(client_fd, x);
   writeVarInt(client_fd, y);
+  endPacket(client_fd);
   return 0;
 }
 
 // S->C Chunk Data and Update Light
 int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
 
-  const int chunk_data_size = (4101 + sizeVarInt(256) + sizeof(network_block_palette)) * 20 + 6 * 12;
-  const int light_data_size = 14 + (sizeVarInt(2048) + 2048) * 26;
+  // Use a local buffer to build the chunk data part
+  // This is necessary to calculate the actual chunk_data_size
+  uint8_t *data_buf = malloc(MAX_PACKET_LEN);
+  if (!data_buf) return 1;
+  int data_offset = 0;
 
-  writeVarInt(client_fd, 11 + sizeVarInt(chunk_data_size) + chunk_data_size + light_data_size);
-  writeByte(client_fd, 0x27);
+  int x = _x * 16, z = _z * 16, y;
+
+  // 1. Send chunk sections
+  // send 4 chunk sections (up to Y=0) with no blocks (bedrock)
+  for (int i = 0; i < 4; i ++) {
+    // block count
+    data_buf[data_offset++] = 4096 >> 8;
+    data_buf[data_offset++] = 4096 & 0xFF;
+    // block bits
+    data_buf[data_offset++] = 0;
+    // block palette (bedrock = 85)
+    uint32_t val = 85;
+    while (true) {
+      if ((val & ~SEGMENT_BITS) == 0) { data_buf[data_offset++] = val; break; }
+      data_buf[data_offset++] = (val & SEGMENT_BITS) | CONTINUE_BIT;
+      val >>= 7;
+    }
+    // biome bits
+    data_buf[data_offset++] = 0;
+    // biome palette (0)
+    data_buf[data_offset++] = 0;
+  }
+
+  // send middle chunk sections
+  for (int i = 0; i < 20; i ++) {
+    y = i * 16;
+    uint8_t biome = buildChunkSection(x, y, z);
+
+    // Check if section is uniform
+    uint8_t first_block = chunk_section[0];
+    uint8_t uniform = true;
+    for (int j = 1; j < 4096; j ++) {
+      if (chunk_section[j] != first_block) {
+        uniform = false;
+        break;
+      }
+    }
+
+    if (uniform) {
+      // block count (0 if air, 4096 otherwise? Actually Minecraft protocol uses non-zero for block count)
+      uint16_t block_count = (first_block == 0) ? 0 : 4096;
+      data_buf[data_offset++] = block_count >> 8;
+      data_buf[data_offset++] = block_count & 0xFF;
+      // block bits
+      data_buf[data_offset++] = 0;
+      // block palette
+      uint32_t val = block_palette[first_block];
+      while (true) {
+        if ((val & ~SEGMENT_BITS) == 0) { data_buf[data_offset++] = val; break; }
+        data_buf[data_offset++] = (val & SEGMENT_BITS) | CONTINUE_BIT;
+        val >>= 7;
+      }
+    } else {
+      // block count (approximate or calculate)
+      uint16_t block_count = 0;
+      for (int j = 0; j < 4096; j ++) if (chunk_section[j] != 0) block_count ++;
+      data_buf[data_offset++] = block_count >> 8;
+      data_buf[data_offset++] = block_count & 0xFF;
+      // block bits
+      data_buf[data_offset++] = 8;
+      // block palette length
+      uint32_t val = 256;
+      while (true) {
+        if ((val & ~SEGMENT_BITS) == 0) { data_buf[data_offset++] = val; break; }
+        data_buf[data_offset++] = (val & SEGMENT_BITS) | CONTINUE_BIT;
+        val >>= 7;
+      }
+      // block palette
+      memcpy(data_buf + data_offset, network_block_palette, sizeof(network_block_palette));
+      data_offset += sizeof(network_block_palette);
+      // data
+      memcpy(data_buf + data_offset, chunk_section, 4096);
+      data_offset += 4096;
+    }
+
+    // biome data
+    data_buf[data_offset++] = 0; // bits per entry
+    data_buf[data_offset++] = biome; // biome palette
+    task_yield();
+  }
+
+  // send 8 chunk sections (up to Y=192) with no blocks (air)
+  for (int i = 0; i < 8; i ++) {
+    data_buf[data_offset++] = 0; // block count
+    data_buf[data_offset++] = 0;
+    data_buf[data_offset++] = 0; // bits
+    data_buf[data_offset++] = 0; // palette (air)
+    data_buf[data_offset++] = 0; // biome bits
+    data_buf[data_offset++] = 0; // biome palette
+  }
+
+  int chunk_data_size = data_offset;
+
+  // 2. Build the full packet
+  startPacket(0x27);
 
   writeUint32(client_fd, _x);
   writeUint32(client_fd, _z);
@@ -343,48 +462,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
   writeVarInt(client_fd, 0); // omit heightmaps
 
   writeVarInt(client_fd, chunk_data_size);
-
-  int x = _x * 16, z = _z * 16, y;
-
-  // send 4 chunk sections (up to Y=0) with no blocks
-  for (int i = 0; i < 4; i ++) {
-    writeUint16(client_fd, 4096); // block count
-    writeByte(client_fd, 0); // block bits
-    writeVarInt(client_fd, 85); // block palette (bedrock)
-    writeByte(client_fd, 0); // biome bits
-    writeByte(client_fd, 0); // biome palette
-  }
-  // yield to idle task
-  task_yield();
-
-  // send chunk sections
-  for (int i = 0; i < 20; i ++) {
-    y = i * 16;
-    writeUint16(client_fd, 4096); // block count
-    writeByte(client_fd, 8); // bits per entry
-    writeVarInt(client_fd, 256); // block palette length
-    // block palette as varint buffer
-    send_all(client_fd, network_block_palette, sizeof(network_block_palette));
-    // chunk section buffer
-    uint8_t biome = buildChunkSection(x, y, z);
-    send_all(client_fd, chunk_section, 4096);
-    // biome data
-    writeByte(client_fd, 0); // bits per entry
-    writeByte(client_fd, biome); // biome palette
-    // yield to idle task
-    task_yield();
-  }
-
-  // send 8 chunk sections (up to Y=192) with no blocks
-  for (int i = 0; i < 8; i ++) {
-    writeUint16(client_fd, 4096); // block count
-    writeByte(client_fd, 0); // block bits
-    writeVarInt(client_fd, 0); // block palette (air)
-    writeByte(client_fd, 0); // biome bits
-    writeByte(client_fd, 0); // biome palette
-  }
-  // yield to idle task
-  task_yield();
+  send_all(client_fd, data_buf, chunk_data_size);
 
   writeVarInt(client_fd, 0); // omit block entities
 
@@ -397,6 +475,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
 
   // sky light array
   writeVarInt(client_fd, 26);
+  // Reuse chunk_section as temporary buffer for light data
   for (int i = 0; i < 2048; i ++) chunk_section[i] = 0xFF;
   for (int i = 2048; i < 4096; i ++) chunk_section[i] = 0;
   for (int i = 0; i < 8; i ++) {
@@ -410,10 +489,11 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
   // don't send block light
   writeVarInt(client_fd, 0);
 
-  // Sending block updates changes light prediciton on the client.
-  // Light-emitting blocks are omitted from chunk data so that they can
-  // be overlayed here. This seems to be cheaper than sending actual
-  // block light data.
+  endPacket(client_fd);
+
+  free(data_buf);
+
+  // Sending block updates
   for (int i = 0; i < block_changes_count; i ++) {
     #ifdef ALLOW_CHESTS
       if (block_changes[i].block != B_torch && block_changes[i].block != B_chest) continue;
@@ -432,10 +512,9 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
 // S->C Clientbound Keep Alive (play)
 int sc_keepAlive (int client_fd) {
 
-  writeVarInt(client_fd, 9);
-  writeByte(client_fd, 0x26);
-
+  startPacket(0x26);
   writeUint64(client_fd, 0);
+  endPacket(client_fd);
 
   return 0;
 }
@@ -443,14 +522,7 @@ int sc_keepAlive (int client_fd) {
 // S->C Set Container Slot
 int sc_setContainerSlot (int client_fd, int window_id, uint16_t slot, uint8_t count, uint16_t item) {
 
-  writeVarInt(client_fd,
-    1 +
-    sizeVarInt(window_id) +
-    1 + 2 +
-    sizeVarInt(count) +
-    (count > 0 ? sizeVarInt(item) + 2 : 0)
-  );
-  writeByte(client_fd, 0x14);
+  startPacket(0x14);
 
   writeVarInt(client_fd, window_id);
   writeVarInt(client_fd, 0);
@@ -463,24 +535,26 @@ int sc_setContainerSlot (int client_fd, int window_id, uint16_t slot, uint8_t co
     writeVarInt(client_fd, 0);
   }
 
+  endPacket(client_fd);
+
   return 0;
 
 }
 
 // S->C Block Update
 int sc_blockUpdate (int client_fd, int64_t x, int64_t y, int64_t z, uint8_t block) {
-  writeVarInt(client_fd, 9 + sizeVarInt(block_palette[block]));
-  writeByte(client_fd, 0x08);
+  startPacket(0x08);
   writeUint64(client_fd, ((x & 0x3FFFFFF) << 38) | ((z & 0x3FFFFFF) << 12) | (y & 0xFFF));
   writeVarInt(client_fd, block_palette[block]);
+  endPacket(client_fd);
   return 0;
 }
 
 // S->C Acknowledge Block Change
 int sc_acknowledgeBlockChange (int client_fd, int sequence) {
-  writeVarInt(client_fd, 1 + sizeVarInt(sequence));
-  writeByte(client_fd, 0x04);
+  startPacket(0x04);
   writeVarInt(client_fd, sequence);
+  endPacket(client_fd);
   return 0;
 }
 
@@ -511,8 +585,7 @@ int cs_playerAction (int client_fd) {
 // S->C Open Screen
 int sc_openScreen (int client_fd, uint8_t window, const char *title, uint16_t length) {
 
-  writeVarInt(client_fd, 1 + 2 * sizeVarInt(window) + 1 + 2 + length);
-  writeByte(client_fd, 0x34);
+  startPacket(0x34);
 
   writeVarInt(client_fd, window);
   writeVarInt(client_fd, window);
@@ -520,6 +593,8 @@ int sc_openScreen (int client_fd, uint8_t window, const char *title, uint16_t le
   writeByte(client_fd, 8); // string nbt tag
   writeUint16(client_fd, length); // string length
   send_all(client_fd, title, length);
+
+  endPacket(client_fd);
 
   return 0;
 }
@@ -706,17 +781,21 @@ int cs_clickContainer (int client_fd) {
 // S->C Set Cursor Item
 int sc_setCursorItem (int client_fd, uint16_t item, uint8_t count) {
 
-  writeVarInt(client_fd, 1 + sizeVarInt(count) + (count != 0 ? sizeVarInt(item) + 2 : 0));
-  writeByte(client_fd, 0x59);
+  startPacket(0x59);
 
   writeVarInt(client_fd, count);
-  if (count == 0) return 0;
+  if (count == 0) {
+    endPacket(client_fd);
+    return 0;
+  }
 
   writeVarInt(client_fd, item);
 
   // Skip components
   writeByte(client_fd, 0);
   writeByte(client_fd, 0);
+
+  endPacket(client_fd);
 
   return 0;
 }
@@ -824,10 +903,11 @@ int cs_setHeldItem (int client_fd) {
 // S->C Set Held Item (clientbound)
 int sc_setHeldItem (int client_fd, uint8_t slot) {
 
-  writeVarInt(client_fd, sizeVarInt(0x62) + 1);
-  writeVarInt(client_fd, 0x62);
+  startPacket(0x62);
 
   writeByte(client_fd, slot);
+
+  endPacket(client_fd);
 
   return 0;
 }
@@ -865,8 +945,7 @@ int cs_closeContainer (int client_fd) {
 // S->C Player Info Update, "Add Player" action
 int sc_playerInfoUpdateAddPlayer (int client_fd, PlayerData player) {
 
-  writeVarInt(client_fd, 21 + strlen(player.name)); // Packet length
-  writeByte(client_fd, 0x3F); // Packet ID
+  startPacket(0x3F); // Packet ID
 
   writeByte(client_fd, 0x01); // EnumSet: Add Player
   writeByte(client_fd, 1); // Player count (1 per packet)
@@ -879,6 +958,8 @@ int sc_playerInfoUpdateAddPlayer (int client_fd, PlayerData player) {
   // Properties (don't send any)
   writeByte(client_fd, 0);
 
+  endPacket(client_fd);
+
   return 0;
 }
 
@@ -890,8 +971,7 @@ int sc_spawnEntity (
   uint8_t yaw, uint8_t pitch
 ) {
 
-  writeVarInt(client_fd, 51 + sizeVarInt(id) + sizeVarInt(type));
-  writeByte(client_fd, 0x01);
+  startPacket(0x01);
 
   writeVarInt(client_fd, id); // Entity ID
   send_all(client_fd, uuid, 16); // Entity UUID
@@ -915,16 +995,14 @@ int sc_spawnEntity (
   writeUint16(client_fd, 0);
   writeUint16(client_fd, 0);
 
+  endPacket(client_fd);
+
   return 0;
 }
 
 // S->C Set Entity Metadata
 int sc_setEntityMetadata (int client_fd, int id, EntityData *metadata, size_t length) {
-  int entity_metadata_size = sizeEntityMetadata(metadata, length);
-  if (entity_metadata_size == -1) return 1;
-
-  writeVarInt(client_fd, 2 + sizeVarInt(id) + entity_metadata_size);
-  writeByte(client_fd, 0x5C);
+  startPacket(0x5C);
 
   writeVarInt(client_fd, id); // Entity ID
 
@@ -934,6 +1012,8 @@ int sc_setEntityMetadata (int client_fd, int id, EntityData *metadata, size_t le
   }
 
   writeByte(client_fd, 0xFF); // End
+
+  endPacket(client_fd);
 
   return 0;
 }
@@ -952,11 +1032,12 @@ int sc_spawnEntityPlayer (int client_fd, PlayerData player) {
 
 // S->C Entity Animation
 int sc_entityAnimation (int client_fd, int id, uint8_t animation) {
-  writeVarInt(client_fd, 2 + sizeVarInt(id));
-  writeByte(client_fd, 0x02);
+  startPacket(0x02);
 
   writeVarInt(client_fd, id); // Entity ID
   writeByte(client_fd, animation); // Animation
+
+  endPacket(client_fd);
 
   return 0;
 }
@@ -968,9 +1049,7 @@ int sc_teleportEntity (
   float yaw, float pitch
 ) {
 
-  // Packet length and ID
-  writeVarInt(client_fd, 58 + sizeVarInt(id));
-  writeByte(client_fd, 0x1F);
+  startPacket(0x1F);
 
   // Entity ID
   writeVarInt(client_fd, id);
@@ -988,19 +1067,21 @@ int sc_teleportEntity (
   // On ground flag
   writeByte(client_fd, 1);
 
+  endPacket(client_fd);
+
   return 0;
 }
 
 // S->C Set Head Rotation
 int sc_setHeadRotation (int client_fd, int id, uint8_t yaw) {
 
-  // Packet length and ID
-  writeByte(client_fd, 2 + sizeVarInt(id));
-  writeByte(client_fd, 0x4C);
+  startPacket(0x4C);
   // Entity ID
   writeVarInt(client_fd, id);
   // Head yaw
   writeByte(client_fd, yaw);
+
+  endPacket(client_fd);
 
   return 0;
 }
@@ -1008,9 +1089,7 @@ int sc_setHeadRotation (int client_fd, int id, uint8_t yaw) {
 // S->C Set Head Rotation
 int sc_updateEntityRotation (int client_fd, int id, uint8_t yaw, uint8_t pitch) {
 
-  // Packet length and ID
-  writeByte(client_fd, 4 + sizeVarInt(id));
-  writeByte(client_fd, 0x31);
+  startPacket(0x31);
   // Entity ID
   writeVarInt(client_fd, id);
   // Angles
@@ -1019,14 +1098,15 @@ int sc_updateEntityRotation (int client_fd, int id, uint8_t yaw, uint8_t pitch) 
   // "On ground" flag
   writeByte(client_fd, 1);
 
+  endPacket(client_fd);
+
   return 0;
 }
 
 // S->C Damage Event
 int sc_damageEvent (int client_fd, int entity_id, int type) {
 
-  writeVarInt(client_fd, 4 + sizeVarInt(entity_id) + sizeVarInt(type));
-  writeByte(client_fd, 0x19);
+  startPacket(0x19);
 
   writeVarInt(client_fd, entity_id);
   writeVarInt(client_fd, type);
@@ -1034,18 +1114,21 @@ int sc_damageEvent (int client_fd, int entity_id, int type) {
   writeByte(client_fd, 0);
   writeByte(client_fd, false);
 
+  endPacket(client_fd);
+
   return 0;
 }
 
 // S->C Set Health
 int sc_setHealth (int client_fd, uint8_t health, uint8_t food, uint16_t saturation) {
 
-  writeVarInt(client_fd, 9 + sizeVarInt(food));
-  writeByte(client_fd, 0x61);
+  startPacket(0x61);
 
   writeFloat(client_fd, (float)health);
   writeVarInt(client_fd, food);
   writeFloat(client_fd, (float)(saturation - 200) / 500.0f);
+
+  endPacket(client_fd);
 
   return 0;
 }
@@ -1053,8 +1136,7 @@ int sc_setHealth (int client_fd, uint8_t health, uint8_t food, uint16_t saturati
 // S->C Respawn
 int sc_respawn (int client_fd) {
 
-  writeVarInt(client_fd, 28);
-  writeByte(client_fd, 0x4B);
+  startPacket(0x4B);
 
   // dimension id (from server-sent registries)
   writeVarInt(client_fd, 0);
@@ -1081,6 +1163,8 @@ int sc_respawn (int client_fd) {
   // data kept
   writeByte(client_fd, 0);
 
+  endPacket(client_fd);
+
   return 0;
 }
 
@@ -1104,8 +1188,7 @@ int cs_clientStatus (int client_fd) {
 // S->C System Chat
 int sc_systemChat (int client_fd, char* message, uint16_t len) {
 
-  writeVarInt(client_fd, 5 + len);
-  writeByte(client_fd, 0x72);
+  startPacket(0x72);
 
   // String NBT tag
   writeByte(client_fd, 8);
@@ -1114,6 +1197,8 @@ int sc_systemChat (int client_fd, char* message, uint16_t len) {
 
   // Is action bar message?
   writeByte(client_fd, false);
+
+  endPacket(client_fd);
 
   return 0;
 }
@@ -1256,11 +1341,12 @@ int cs_interact (int client_fd) {
 // S->C Entity Event
 int sc_entityEvent (int client_fd, int entity_id, uint8_t status) {
 
-  writeVarInt(client_fd, 6);
-  writeByte(client_fd, 0x1E);
+  startPacket(0x1E);
 
   writeUint32(client_fd, entity_id);
   writeByte(client_fd, status);
+
+  endPacket(client_fd);
 
   return 0;
 }
@@ -1268,11 +1354,12 @@ int sc_entityEvent (int client_fd, int entity_id, uint8_t status) {
 // S->C Remove Entities, but for only one entity per packet
 int sc_removeEntity (int client_fd, int entity_id) {
 
-  writeVarInt(client_fd, 2 + sizeVarInt(entity_id));
-  writeByte(client_fd, 0x46);
+  startPacket(0x46);
 
   writeByte(client_fd, 1);
   writeVarInt(client_fd, entity_id);
+
+  endPacket(client_fd);
 
   return 0;
 }
@@ -1316,12 +1403,13 @@ int cs_playerCommand (int client_fd) {
 // S->C Pickup Item (take_item_entity)
 int sc_pickupItem (int client_fd, int collected, int collector, uint8_t count) {
 
-  writeVarInt(client_fd, 1 + sizeVarInt(collected) + sizeVarInt(collector) + sizeVarInt(count));
-  writeByte(client_fd, 0x75);
+  startPacket(0x75);
 
   writeVarInt(client_fd, collected);
   writeVarInt(client_fd, collector);
   writeVarInt(client_fd, count);
+
+  endPacket(client_fd);
 
   return 0;
 }
@@ -1342,10 +1430,10 @@ int cs_playerLoaded (int client_fd) {
 int sc_registries (int client_fd) {
 
   printf("Sending Registries\n\n");
-  send_all(client_fd, registries_bin, sizeof(registries_bin));
+  sendPreformattedPackets(client_fd, registries_bin, sizeof(registries_bin));
 
   printf("Sending Tags\n\n");
-  send_all(client_fd, tags_bin, sizeof(tags_bin));
+  sendPreformattedPackets(client_fd, tags_bin, sizeof(tags_bin));
 
   return 0;
 

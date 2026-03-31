@@ -5,11 +5,13 @@
 
 #include "globals.h"
 
-extern int client_states[MAX_PLAYERS * 2];
+extern ClientState client_states[MAX_PLAYERS];
 
 void setClientState (int client_fd, int new_state);
 int getClientState (int client_fd);
 int getClientIndex (int client_fd);
+void setCompressionThreshold (int client_fd, int threshold);
+int getCompressionThreshold (int client_fd);
 
 void resetPlayerData (PlayerData *player);
 int reservePlayerData (int client_fd, uint8_t *uuid, char* name);
@@ -51,8 +53,6 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
 void handleServerTick (int64_t time_since_last_tick);
 
 void broadcastChestUpdate (int origin_fd, uint8_t *storage_ptr, uint16_t item, uint8_t count, uint8_t slot);
-
-void refreshChunksAroundPlayer (PlayerData *player);
 
 ssize_t writeEntityData (int client_fd, EntityData *data);
 

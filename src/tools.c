@@ -25,6 +25,8 @@
 #include "varnum.h"
 #include "procedures.h"
 #include "tools.h"
+#include <zlib.h>
+#include <stdlib.h>
 
 #ifndef htonll
   static uint64_t htonll (uint64_t value) {
@@ -42,6 +44,21 @@
 uint64_t total_bytes_received = 0;
 
 ssize_t recv_all (int client_fd, void *buf, size_t n, uint8_t require_first) {
+  // If we have data in the input buffer, read from it first
+  if (in_packet_buffer_len > 0) {
+    size_t to_read = n;
+    if (to_read > (size_t)(in_packet_buffer_len - in_packet_buffer_offset)) {
+      to_read = in_packet_buffer_len - in_packet_buffer_offset;
+    }
+    memcpy(buf, in_packet_buffer + in_packet_buffer_offset, to_read);
+    in_packet_buffer_offset += to_read;
+    if (in_packet_buffer_offset >= in_packet_buffer_len) {
+      in_packet_buffer_len = 0;
+      in_packet_buffer_offset = 0;
+    }
+    return to_read;
+  }
+
   char *p = buf;
   size_t total = 0;
 
@@ -90,6 +107,17 @@ ssize_t recv_all (int client_fd, void *buf, size_t n, uint8_t require_first) {
 }
 
 ssize_t send_all (int client_fd, const void *buf, ssize_t len) {
+  // If we are in packet mode, buffer the data instead of sending it
+  if (packet_mode) {
+    if (packet_buffer_offset + len > MAX_PACKET_LEN) {
+      printf("ERROR: Packet buffer overflow (%d + %zd > %d)\n", packet_buffer_offset, (size_t)len, MAX_PACKET_LEN);
+      return -1;
+    }
+    memcpy(packet_buffer + packet_buffer_offset, buf, len);
+    packet_buffer_offset += len;
+    return len;
+  }
+
   // Treat any input buffer as *uint8_t for simplicity
   const uint8_t *p = (const uint8_t *)buf;
   ssize_t sent = 0;
@@ -133,6 +161,101 @@ ssize_t send_all (int client_fd, const void *buf, ssize_t len) {
   }
 
   return sent;
+}
+
+void startPacket (int packet_id) {
+  packet_buffer_offset = 0;
+  packet_mode = true;
+  writeVarInt(-1, packet_id);
+}
+
+void endPacket (int client_fd) {
+  packet_mode = false;
+  int threshold = getCompressionThreshold(client_fd);
+  int uncompressed_len = packet_buffer_offset;
+
+  if (threshold > 0 && uncompressed_len >= threshold) {
+    // Compressed format: [Packet Length] [Data Length] [Compressed(Packet ID + Data)]
+    
+    // 1. Compress the data
+    uint8_t *compressed_buf = malloc(uncompressed_len + 128); // Zlib needs some extra space
+    if (!compressed_buf) {
+      perror("Failed to allocate compression buffer");
+      return;
+    }
+
+    z_stream strm;
+    strm.zalloc = Z_NULL;
+    strm.zfree = Z_NULL;
+    strm.opaque = Z_NULL;
+    strm.avail_in = uncompressed_len;
+    strm.next_in = packet_buffer;
+    strm.avail_out = uncompressed_len + 128;
+    strm.next_out = compressed_buf;
+
+    deflateInit(&strm, Z_DEFAULT_COMPRESSION);
+    deflate(&strm, Z_FINISH);
+    int compressed_len = strm.total_out;
+    deflateEnd(&strm);
+
+    // 2. Send the packet
+    int data_length_size = sizeVarInt(uncompressed_len);
+    int packet_length = data_length_size + compressed_len;
+
+    writeVarInt(client_fd, packet_length);
+    writeVarInt(client_fd, uncompressed_len);
+    send_all(client_fd, compressed_buf, compressed_len);
+
+    free(compressed_buf);
+  } else if (threshold > 0) {
+    // Compressed format (but not compressed): [Packet Length] [0] [Packet ID + Data]
+    int data_length_size = sizeVarInt(0);
+    int packet_length = data_length_size + uncompressed_len;
+
+    writeVarInt(client_fd, packet_length);
+    writeVarInt(client_fd, 0);
+    send_all(client_fd, packet_buffer, uncompressed_len);
+  } else {
+    // Uncompressed format: [Packet Length] [Packet ID + Data]
+    writeVarInt(client_fd, uncompressed_len);
+    send_all(client_fd, packet_buffer, uncompressed_len);
+  }
+
+  packet_buffer_offset = 0;
+}
+
+void sendPreformattedPackets (int client_fd, uint8_t *data, size_t len) {
+  size_t offset = 0;
+  while (offset < len) {
+    // 1. Read packet length (VarInt)
+    uint32_t packet_len = 0;
+    int shift = 0;
+    while (true) {
+      uint8_t byte = data[offset++];
+      packet_len |= (byte & SEGMENT_BITS) << shift;
+      if (!(byte & CONTINUE_BIT)) break;
+      shift += 7;
+    }
+
+    // 2. Extract packet ID (VarInt)
+    uint32_t packet_id = 0;
+    shift = 0;
+    int id_start_offset = offset;
+    while (true) {
+      uint8_t byte = data[offset++];
+      packet_id |= (byte & SEGMENT_BITS) << shift;
+      if (!(byte & CONTINUE_BIT)) break;
+      shift += 7;
+    }
+    int id_size = offset - id_start_offset;
+
+    // 3. Send as a new packet
+    startPacket(packet_id);
+    send_all(client_fd, data + offset, packet_len - id_size);
+    endPacket(client_fd);
+
+    offset += (packet_len - id_size);
+  }
 }
 
 void discard_all (int client_fd, size_t remaining, uint8_t require_first) {

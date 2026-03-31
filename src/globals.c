@@ -28,6 +28,16 @@
   }
 #endif
 
+ClientState client_states[MAX_PLAYERS];
+
+uint8_t packet_buffer[MAX_PACKET_LEN];
+int packet_buffer_offset = 0;
+int packet_mode = false;
+
+uint8_t in_packet_buffer[MAX_PACKET_LEN];
+int in_packet_buffer_offset = 0;
+int in_packet_buffer_len = 0;
+
 ssize_t recv_count;
 uint8_t recv_buffer[MAX_RECV_BUF_LEN] = {0};
 

@@ -171,6 +171,24 @@
 #define STATE_CONFIGURATION 4
 #define STATE_PLAY 5
 
+typedef struct {
+  int client_fd;
+  int state;
+  int compression_threshold;
+} ClientState;
+
+extern ClientState client_states[MAX_PLAYERS];
+
+// Maximum length of a single packet (including chunk data)
+#define MAX_PACKET_LEN 1048576
+extern uint8_t packet_buffer[MAX_PACKET_LEN];
+extern int packet_buffer_offset;
+extern int packet_mode;
+
+extern uint8_t in_packet_buffer[MAX_PACKET_LEN];
+extern int in_packet_buffer_offset;
+extern int in_packet_buffer_len;
+
 extern ssize_t recv_count;
 extern uint8_t recv_buffer[MAX_RECV_BUF_LEN];
 
@@ -209,7 +227,6 @@ typedef struct {
   short visited_x[VISITED_HISTORY];
   short visited_z[VISITED_HISTORY];
   uint16_t visited_next;  // Next slot to write in circular buffer
-  uint8_t chunk_refresh_ring;  // Current ring being refreshed (0-4)
   #ifdef SCALE_MOVEMENT_UPDATES_TO_PLAYER_COUNT
     uint16_t packets_since_update;
   #endif

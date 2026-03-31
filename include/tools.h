@@ -15,7 +15,13 @@ static inline int div_floor (int a, int b) {
 extern uint64_t total_bytes_received;
 ssize_t recv_all (int client_fd, void *buf, size_t n, uint8_t require_first);
 ssize_t send_all (int client_fd, const void *buf, ssize_t len);
+
+void startPacket (int packet_id);
+void endPacket (int client_fd);
+void sendPreformattedPackets (int client_fd, uint8_t *data, size_t len);
+
 void discard_all (int client_fd, size_t remaining, uint8_t require_first);
+
 
 ssize_t writeByte (int client_fd, uint8_t byte);
 ssize_t writeUint16 (int client_fd, uint16_t num);

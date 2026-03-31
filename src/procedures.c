@@ -16,38 +16,53 @@
 #include "serialize.h"
 #include "procedures.h"
 
-int client_states[MAX_PLAYERS * 2];
-
 void setClientState (int client_fd, int new_state) {
   // Look for a client state with a matching file descriptor
-  for (int i = 0; i < MAX_PLAYERS * 2; i += 2) {
-    if (client_states[i] != client_fd) continue;
-    client_states[i + 1] = new_state;
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (client_states[i].client_fd != client_fd) continue;
+    client_states[i].state = new_state;
     return;
   }
   // If the above failed, look for an unused client state slot
-  for (int i = 0; i < MAX_PLAYERS * 2; i += 2) {
-    if (client_states[i] != -1) continue;
-    client_states[i] = client_fd;
-    client_states[i + 1] = new_state;
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (client_states[i].client_fd != -1) continue;
+    client_states[i].client_fd = client_fd;
+    client_states[i].state = new_state;
+    client_states[i].compression_threshold = 0; // Disabled by default
     return;
   }
 }
 
 int getClientState (int client_fd) {
-  for (int i = 0; i < MAX_PLAYERS * 2; i += 2) {
-    if (client_states[i] != client_fd) continue;
-    return client_states[i + 1];
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (client_states[i].client_fd != client_fd) continue;
+    return client_states[i].state;
   }
   return STATE_NONE;
 }
 
 int getClientIndex (int client_fd) {
-  for (int i = 0; i < MAX_PLAYERS * 2; i += 2) {
-    if (client_states[i] != client_fd) continue;
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (client_states[i].client_fd != client_fd) continue;
     return i;
   }
   return -1;
+}
+
+void setCompressionThreshold (int client_fd, int threshold) {
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (client_states[i].client_fd != client_fd) continue;
+    client_states[i].compression_threshold = threshold;
+    return;
+  }
+}
+
+int getCompressionThreshold (int client_fd) {
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (client_states[i].client_fd != client_fd) continue;
+    return client_states[i].compression_threshold;
+  }
+  return 0;
 }
 
 // Restores player data to initial state (fresh spawn)
@@ -165,9 +180,11 @@ void handlePlayerDisconnect (int client_fd) {
     break;
   }
   // Find the client state entry and reset it
-  for (int i = 0; i < MAX_PLAYERS * 2; i += 2) {
-    if (client_states[i] == client_fd) {
-      client_states[i] = -1;
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (client_states[i].client_fd == client_fd) {
+      client_states[i].client_fd = -1;
+      client_states[i].state = STATE_NONE;
+      client_states[i].compression_threshold = 0;
       return;
     }
   }
@@ -379,11 +396,10 @@ void spawnPlayer (PlayerData *player) {
 
   // Send spawn chunk
   sc_chunkDataAndUpdateLight(player->client_fd, _x, _z);
-  
+
   // Send surrounding chunks to prevent falling through world borders
   // Send in a 5x5 area (chunks at distance 0-2 from center)
   player->visited_next = 0;
-  player->chunk_refresh_ring = 0;  // Initialize chunk refresh state
   // Initialize all slots as invalid
   for (int i = 0; i < VISITED_HISTORY; i++) {
     player->visited_x[i] = 32767;
@@ -1685,10 +1701,7 @@ void handleServerTick (int64_t time_since_last_tick) {
     // Send Keep Alive and Update Time packets
     sc_keepAlive(player->client_fd);
     sc_updateTime(player->client_fd, world_time);
-    
-    // Refresh chunks around player gradually (one ring per second)
-    refreshChunksAroundPlayer(player);
-    
+
     // Tick damage from lava
     uint8_t block = getBlockAt(player->x, player->y, player->z);
     if (block >= B_lava && block < B_lava + 4) {
@@ -2014,103 +2027,4 @@ int sizeEntityMetadata (EntityData *metadata, size_t length) {
     total_size += size;
   }
   return total_size;
-}
-
-// Forcefully refresh chunks around a player gradually over multiple ticks
-// Called every second, sends one ring of chunks per call
-// Full refresh completes over 4 seconds (one ring per second)
-// Chunks are sent in order based on player's look direction
-void refreshChunksAroundPlayer (PlayerData *player) {
-  if (player->client_fd == -1) return;
-
-  short cx = div_floor(player->x, 16);
-  short cz = div_floor(player->z, 16);
-  int refresh_radius = 4;  // 4 rings = completes in 4 seconds
-
-  // Send center chunk first (only on first ring)
-  if (player->chunk_refresh_ring == 0) {
-    sc_setCenterChunk(player->client_fd, cx, cz);
-  }
-
-  // Send one ring per tick
-  int ring = player->chunk_refresh_ring;
-  if (ring <= refresh_radius) {
-    // Calculate the primary direction based on player's yaw
-    // Yaw is 0-255: 0=South(-Z), 64=West(-X), 128=North(+Z), 192=East(+X)
-    int8_t look_dir = player->yaw;
-    // Determine primary axis: 0 = Z axis (N/S), 1 = X axis (E/W)
-    int primary_axis = ((look_dir + 32) % 128) < 64 ? 1 : 0;
-    // Determine direction sign on each axis
-    int look_dx = 0, look_dz = 0;
-    if (primary_axis == 1) {
-      look_dx = (look_dir < 128) ? -1 : 1;
-    } else {
-      look_dz = (look_dir < 64 || look_dir > 192) ? -1 : 1;
-    }
-
-    // Define side order based on look direction
-    int side_order[4];
-    int side_count = 0;
-
-    if (primary_axis == 0) {
-      // Looking North or South - prioritize Z-axis sides
-      if (look_dz < 0) {
-        side_order[side_count++] = 0; // -Z first (looking North)
-        side_order[side_count++] = 1; // +Z second
-      } else {
-        side_order[side_count++] = 1; // +Z first (looking South)
-        side_order[side_count++] = 0; // -Z second
-      }
-      side_order[side_count++] = 2; // -X
-      side_order[side_count++] = 3; // +X
-    } else {
-      // Looking East or West - prioritize X-axis sides
-      if (look_dx < 0) {
-        side_order[side_count++] = 2; // -X first (looking West)
-        side_order[side_count++] = 3; // +X second
-      } else {
-        side_order[side_count++] = 3; // +X first (looking East)
-        side_order[side_count++] = 2; // -X second
-      }
-      side_order[side_count++] = 0; // -Z
-      side_order[side_count++] = 1; // +Z
-    }
-
-    // Process each side in priority order
-    for (int s = 0; s < 4; s++) {
-      int side = side_order[s];
-
-      if (side == 0) {
-        // Top row (-Z)
-        for (int dx = -ring; dx <= ring; dx++) {
-          sc_chunkDataAndUpdateLight(player->client_fd, cx + dx, cz - ring);
-          task_yield();
-        }
-      } else if (side == 1) {
-        // Bottom row (+Z)
-        for (int dx = -ring; dx <= ring; dx++) {
-          sc_chunkDataAndUpdateLight(player->client_fd, cx + dx, cz + ring);
-          task_yield();
-        }
-      } else if (side == 2) {
-        // Left column (-X), excluding corners
-        for (int dz = -ring + 1; dz < ring; dz++) {
-          sc_chunkDataAndUpdateLight(player->client_fd, cx - ring, cz + dz);
-          task_yield();
-        }
-      } else if (side == 3) {
-        // Right column (+X), excluding corners
-        for (int dz = -ring + 1; dz < ring; dz++) {
-          sc_chunkDataAndUpdateLight(player->client_fd, cx + ring, cz + dz);
-          task_yield();
-        }
-      }
-    }
-  }
-
-  // Move to next ring, wrap around after completing all rings
-  player->chunk_refresh_ring++;
-  if (player->chunk_refresh_ring > refresh_radius) {
-    player->chunk_refresh_ring = 0;
-  }
 }
