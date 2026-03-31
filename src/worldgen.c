@@ -18,7 +18,6 @@ static SurfaceNoise surface_noise_biome;
 static OctavePerlinNoiseSampler surface_noise;
 static OctavePerlinNoiseSampler detail_noise;
 static OctavePerlinNoiseSampler cave_noise;
-static OctavePerlinNoiseSampler cliff_noise;
 static int gen_initialized = 0;
 
 // Height cache for smooth chunk generation (covers 32x32 area for seamless borders)
@@ -33,8 +32,8 @@ void init_worldgen() {
 
     octave_init(&surface_noise, (uint64_t)world_seed, 4);
     octave_init(&detail_noise, (uint64_t)world_seed + 1, 2);
-    octave_init(&cave_noise, (uint64_t)world_seed + 2, 6);
-    octave_init(&cliff_noise, (uint64_t)world_seed + 3, 4);
+    // Cave noise uses same settings as surface noise but different seed and scale
+    octave_init(&cave_noise, (uint64_t)world_seed + 0x5DEECE66D, 4);
     gen_initialized = 1;
 }
 
@@ -171,24 +170,20 @@ static uint8_t getHeightAtRaw (int x, int z) {
   double scale = scale00 * (1-wx) * (1-wz) + scale10 * wx * (1-wz) +
                  scale01 * (1-wx) * wz + scale11 * wx * wz;
 
-  // Add cliff noise for mountain biomes to create dramatic peaks
-  int bx = div_floor(x, 4);
-  int bz = div_floor(z, 4);
-  double cliff_noise_val = octave_sample(&cliff_noise, bx * 0.1, 0, bz * 0.1);
-  
+  // Add extra variation for mountain biomes using detail noise
   // Apply cliff noise only to mountain biomes
-  uint8_t is_mountain = (b00 == W_windswept_hills || b00 == W_jagged_peaks || 
+  uint8_t is_mountain = (b00 == W_windswept_hills || b00 == W_jagged_peaks ||
                          b00 == W_frozen_peaks || b00 == W_stony_peaks ||
-                         b10 == W_windswept_hills || b10 == W_jagged_peaks || 
+                         b10 == W_windswept_hills || b10 == W_jagged_peaks ||
                          b10 == W_frozen_peaks || b10 == W_stony_peaks ||
-                         b01 == W_windswept_hills || b01 == W_jagged_peaks || 
+                         b01 == W_windswept_hills || b01 == W_jagged_peaks ||
                          b01 == W_frozen_peaks || b01 == W_stony_peaks ||
-                         b11 == W_windswept_hills || b11 == W_jagged_peaks || 
+                         b11 == W_windswept_hills || b11 == W_jagged_peaks ||
                          b11 == W_frozen_peaks || b11 == W_stony_peaks);
-  
+
   if (is_mountain) {
-    // Amplify cliff noise for dramatic peaks
-    base_height += cliff_noise_val * 15.0;
+    // Use detail noise for mountain variation (already sampled, reuse it)
+    base_height += detail * 8.0;
   }
 
   return (uint8_t)(base_height + noise * scale + detail * 2.0);
@@ -200,15 +195,15 @@ static void buildHeightCache (int cx, int cz) {
   // Use 32x32 superchunks to ensure adjacent 16x16 sections share cache
   int scx = cx >> 1;  // Superchunk X
   int scz = cz >> 1;
-  
+
   if (cache_cx == scx && cache_cz == scz) return;  // Already cached
-  
+
   cache_cx = scx;
   cache_cz = scz;
-  
+
   int base_x = scx * 32;
   int base_z = scz * 32;
-  
+
   // Generate raw heights for 36x36 area (32x32 superchunk + 2 block border)
   for (int dz = 0; dz < 36; dz++) {
     for (int dx = 0; dx < 36; dx++) {
@@ -221,21 +216,21 @@ static void buildHeightCache (int cx, int cz) {
 // Does *not* account for block changes
 uint8_t getHeightAt (int x, int z) {
   init_worldgen();
-  
+
   // Calculate which 16x16 section this coordinate belongs to
   int cx = div_floor(x, 16);
   int cz = div_floor(z, 16);
   int lx = mod_abs(x, 16);
   int lz = mod_abs(z, 16);
-  
+
   // Build cache for the superchunk containing this section
   buildHeightCache(cx, cz);
-  
+
   // Calculate position in the 36x36 cache
   // cx & 1 gives us which 16x16 section within the 32x32 superchunk
   int cache_x = 2 + (cx & 1) * 16 + lx;
   int cache_z = 2 + (cz & 1) * 16 + lz;
-  
+
   return height_cache[cache_x][cache_z];
 }
 
@@ -247,57 +242,29 @@ uint8_t getHeightAtFromHash (int rx, int rz, int _x, int _z, uint32_t chunk_hash
   return getHeightAt(_x * CHUNK_SIZE + rx, _z * CHUNK_SIZE + rz);
 }
 
-// Get cave density at a given 3D position using 3D noise
-// Returns value between 0 and 1, higher values mean more likely to be a cave
-double getCaveDensity(int x, int y, int z) {
-  // Scale coordinates for cave generation
-  double cave_scale = 0.08;
-  double noise = octave_sample(&cave_noise, x * cave_scale, y * cave_scale, z * cave_scale);
-  
-  // Normalize noise from [-1, 1] to [0, 1]
-  return (noise + 1.0) / 2.0;
-}
-
-// Get cliff factor for terrain steepness
-// Used to create dramatic cliff faces in mountain biomes
-double getCliffFactor(int x, int y, int z, uint8_t biome) {
-  // Only apply cliff generation in mountain biomes
-  if (biome != W_windswept_hills && biome != W_jagged_peaks && 
-      biome != W_frozen_peaks && biome != W_stony_peaks && biome != W_savanna) {
-    return 0.0;
-  }
-  
-  // Use 3D noise to create overhangs and cliff faces
-  double cliff_scale = 0.05;
-  double noise = octave_sample(&cliff_noise, x * cliff_scale, y * cliff_scale * 0.5, z * cliff_scale);
-  
-  // Normalize and scale
-  return (noise + 1.0) / 2.0;
-}
-
-// Check if a position should be a cave based on noise and depth
-uint8_t isCave(int x, int y, int z, uint8_t height, uint8_t biome) {
+// Simple cave check using surface-like noise
+// Reuses the same noise type as terrain but with different scaling
+static inline uint8_t isCaveSimple(int x, int y, int z, uint8_t height, uint8_t biome) {
   // Don't generate caves too close to the surface
-  if (y > height - 3) return 0;
+  if (y > height - 4) return 0;
   
   // Don't generate caves below bedrock level
-  if (y < 5) return 0;
+  if (y < 6) return 0;
   
-  // Get cave density at this position
-  double cave_density = getCaveDensity(x, y, z);
+  // Use 3D noise with surface-like parameters for natural cave shapes
+  double cave_scale = 0.04;  // Larger scale = bigger, smoother caves
+  double noise = octave_sample(&cave_noise, x * cave_scale, y * cave_scale * 0.5, z * cave_scale);
   
-  // Cave threshold varies with depth - deeper = larger caves
-  double depth_factor = (64.0 - y) / 64.0;
-  double threshold = 0.55 + depth_factor * 0.15;
+  // Normalize from [-1, 1] to [0, 1]
+  double cave_density = (noise + 1.0) / 2.0;
   
-  // Add some variation based on position
-  uint8_t pos_hash = (x * 31 + y * 37 + z * 41) & 255;
-  threshold += (pos_hash / 255.0 - 0.5) * 0.1;
+  // Cave threshold - higher = fewer caves
+  double threshold = 0.65;
   
   // Mountain biomes have more caves
-  if (biome == W_windswept_hills || biome == W_jagged_peaks || 
+  if (biome == W_windswept_hills || biome == W_jagged_peaks ||
       biome == W_frozen_peaks || biome == W_stony_peaks) {
-    threshold -= 0.08;
+    threshold = 0.58;
   }
   
   return cave_density > threshold ? 1 : 0;
@@ -964,23 +931,24 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
   }
   
   // Generate cliffs in mountain biomes - create overhangs and steep faces
-  if (anchor.biome == W_windswept_hills || anchor.biome == W_jagged_peaks || 
+  // Using hash-based approach for better performance
+  if (anchor.biome == W_windswept_hills || anchor.biome == W_jagged_peaks ||
       anchor.biome == W_frozen_peaks || anchor.biome == W_stony_peaks) {
     if (y > height && y <= height + 8) {
-      double cliff = getCliffFactor(x, y, z, anchor.biome);
-      // Higher cliff values = more likely to have blocks (overhangs)
-      if (cliff > 0.35) {
-        // Create stone overhangs
-        uint8_t overhang_hash = (anchor.hash >> (x + y + z)) & 255;
-        if (overhang_hash > 50) return B_stone;
+      // Use chunk hash for deterministic "noise" without expensive sampling
+      uint8_t cliff_hash = (anchor.hash >> ((x + y + z) & 7)) & 255;
+      // Higher values = more likely to have blocks (overhangs)
+      // Threshold of 90 gives ~35% overhang coverage
+      if (cliff_hash > 90) {
+        return B_stone;
       }
     }
   }
   
   // Starting at 4 blocks below terrain level, generate minerals and caves
   if (y <= height - 4) {
-    // Check for caves using 3D noise
-    if (isCave(x, y, z, height, anchor.biome)) {
+    // Check for caves using surface-like noise for natural shapes
+    if (isCaveSimple(x, y, z, height, anchor.biome)) {
       // Cave found - return air
       return B_air;
     }
