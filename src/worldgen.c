@@ -19,6 +19,8 @@ static OctavePerlinNoiseSampler surface_noise;
 static OctavePerlinNoiseSampler detail_noise;
 static OctavePerlinNoiseSampler cave_noise;
 static OctavePerlinNoiseSampler mountain_noise;
+// Ore clump noise for clustered ore generation
+static OctavePerlinNoiseSampler ore_clump_noise;
 static int gen_initialized = 0;
 
 // Height cache for smooth chunk generation (covers 32x32 area for seamless borders)
@@ -31,12 +33,17 @@ void init_worldgen() {
     applySeed(&g, DIM_OVERWORLD, (uint64_t)world_seed);
     initSurfaceNoise(&surface_noise_biome, DIM_OVERWORLD, (uint64_t)world_seed);
 
-    octave_init(&surface_noise, (uint64_t)world_seed, 4);
-    octave_init(&detail_noise, (uint64_t)world_seed + 1, 2);
+    // Surface noise: increased octaves for more dramatic terrain
+    octave_init(&surface_noise, (uint64_t)world_seed, 6);
+    // Detail noise: more octaves for rugged surface detail
+    octave_init(&detail_noise, (uint64_t)world_seed + 1, 4);
     // Cave noise uses same settings as surface noise but different seed and scale
     octave_init(&cave_noise, (uint64_t)world_seed + 0x5DEECE66D, 4);
-    // Mountain noise for large mountain peaks (low frequency, high amplitude)
-    octave_init(&mountain_noise, (uint64_t)world_seed + 0x12345678, 3);
+    // Mountain noise for large mountain peaks (low frequency, very high amplitude)
+    // Lower frequency (larger features) and more octaves for dramatic peaks
+    octave_init(&mountain_noise, (uint64_t)world_seed + 0x12345678, 5);
+    // Ore clump noise for small scattered ore veins (2 octaves for localized blobs)
+    octave_init(&ore_clump_noise, (uint64_t)world_seed + 0xABCDEF12, 2);
     gen_initialized = 1;
 }
 
@@ -147,18 +154,22 @@ static uint8_t getHeightAtRaw (int x, int z) {
 
   #define SET_BIOME_HEIGHT(biome, base, scale) \
     if (biome == W_desert) { base = 66.0; scale = 8.0; } \
-    else if (biome == W_snowy_plains || biome == W_snowy_taiga) { base = 68.0; scale = 15.0; } \
-    else if (biome == W_savanna || biome == W_badlands) { base = 75.0; scale = 25.0; } \
-    else if (biome == W_windswept_hills) { base = 80.0; scale = 35.0; } \
-    else if (biome == W_jagged_peaks) { base = 90.0; scale = 50.0; } \
-    else if (biome == W_frozen_peaks) { base = 85.0; scale = 45.0; } \
-    else if (biome == W_stony_peaks) { base = 95.0; scale = 48.0; } \
-    else if (biome == W_cherry_grove) { base = 80.0; scale = 15.0; } \
-    else if (biome == W_ocean || biome == W_deep_ocean || biome == W_frozen_ocean) { base = 50.0; scale = 10.0; } \
-    else if (biome == W_river || biome == W_frozen_river) { base = 60.0; scale = 2.0; } \
-    else if (biome == W_beach) { base = 62.0; scale = 2.0; } \
-    else if (biome == W_mangrove_swamp || biome == W_swamp) { base = 62.0; scale = 3.0; } \
-    else if (biome == W_meadow) { base = 75.0; scale = 20.0; }
+    else if (biome == W_snowy_plains || biome == W_snowy_taiga) { base = 70.0; scale = 20.0; } \
+    else if (biome == W_savanna || biome == W_badlands) { base = 80.0; scale = 35.0; } \
+    else if (biome == W_windswept_hills) { base = 90.0; scale = 55.0; } \
+    else if (biome == W_jagged_peaks) { base = 100.0; scale = 80.0; } \
+    else if (biome == W_frozen_peaks) { base = 95.0; scale = 70.0; } \
+    else if (biome == W_stony_peaks) { base = 105.0; scale = 75.0; } \
+    else if (biome == W_cherry_grove) { base = 85.0; scale = 25.0; } \
+    else if (biome == W_ocean || biome == W_deep_ocean || biome == W_frozen_ocean) { base = 45.0; scale = 12.0; } \
+    else if (biome == W_river || biome == W_frozen_river) { base = 58.0; scale = 3.0; } \
+    else if (biome == W_beach) { base = 60.0; scale = 3.0; } \
+    else if (biome == W_mangrove_swamp || biome == W_swamp) { base = 61.0; scale = 4.0; } \
+    else if (biome == W_meadow) { base = 85.0; scale = 30.0; } \
+    else if (biome == W_forest || biome == W_birch_forest || biome == W_dark_forest) { base = 70.0; scale = 18.0; } \
+    else if (biome == W_taiga || biome == W_snowy_taiga) { base = 72.0; scale = 22.0; } \
+    else if (biome == W_jungle) { base = 75.0; scale = 20.0; } \
+    else if (biome == W_plains) { base = 68.0; scale = 10.0; }
 
   SET_BIOME_HEIGHT(b00, base00, scale00);
   SET_BIOME_HEIGHT(b10, base10, scale10);
@@ -185,21 +196,22 @@ static uint8_t getHeightAtRaw (int x, int z) {
 
   if (is_mountain) {
     // Sample mountain noise for large peak shapes (low frequency)
-    double mountain = octave_sample(&mountain_noise, x * 0.008, 0, z * 0.008);
-    
+    double mountain = octave_sample(&mountain_noise, x * 0.006, 0, z * 0.006);
+
     // Normalize mountain noise to [0, 1]
     double mountain_factor = (mountain + 1.0) / 2.0;
-    
+
     // Mountain peaks: use mountain_factor to add dramatic height variation
-    // Peaks can reach 50+ blocks above base height for massive mountains
-    double peak_bonus = mountain_factor * mountain_factor * 85.0;
-    
+    // Peaks can reach 80+ blocks above base height for massive mountains
+    // Quadratic scaling creates rare but extremely tall peaks
+    double peak_bonus = mountain_factor * mountain_factor * mountain_factor * 120.0;
+
     // Add detail variation scaled by mountain factor
     base_height += peak_bonus;
-    scale += mountain_factor * 20.0;
-    
+    scale += mountain_factor * 30.0;
+
     // Extra detail for rugged mountain surfaces
-    base_height += detail * (5.0 + mountain_factor * 15.0);
+    base_height += detail * (8.0 + mountain_factor * 20.0);
   }
 
   return (uint8_t)(base_height + noise * scale + detail * 2.0);
@@ -258,31 +270,100 @@ uint8_t getHeightAtFromHash (int rx, int rz, int _x, int _z, uint32_t chunk_hash
   return getHeightAt(_x * CHUNK_SIZE + rx, _z * CHUNK_SIZE + rz);
 }
 
+// Check if this position is an ore "seed" (starting point of a vein)
+// Returns the ore type or 0 if not a seed
+static uint8_t getOreSeedAt(int x, int y, int z, uint8_t biome) {
+  // Sample ore clump noise to find vein centers
+  double ore_noise = octave_sample(&ore_clump_noise, x * 0.12, y * 0.12, z * 0.12);
+  double ore_density = (ore_noise + 1.0) / 2.0;
+  
+  // Use position-based hash for additional randomness
+  uint8_t ore_hash = (uint8_t)(x * 31 + y * 37 + z * 41);
+  
+  // Diamond: deep underground (Y < 16), rare
+  if (y < 16) {
+    if (ore_density > 0.75 && (ore_hash & 0x1F) == 0) return B_diamond_ore;
+    if (ore_density > 0.70 && (ore_hash & 0x3F) == 0) return B_gold_ore;
+    if (ore_density > 0.68 && (ore_hash & 0x1F) == 0) return B_redstone_ore;
+  }
+  
+  // Iron: mid-level (Y 16-48), very common
+  if (y >= 16 && y < 48) {
+    if (ore_density > 0.55 && (ore_hash & 0x07) == 0) return B_iron_ore;
+    if (ore_density > 0.50 && (ore_hash & 0x0F) == 0) return B_copper_ore;
+  }
+  
+  // Coal: widespread (Y < 64), very common
+  if (y < 64) {
+    if (ore_density > 0.55 && (ore_hash & 0x07) == 0) return B_coal_ore;
+  }
+  
+  return 0;
+}
+
+// Generate ore at position, including spreading from nearby seeds
+// Returns the ore block type or 0 if no ore
+static uint8_t getOreClumpAt(int x, int y, int z, uint8_t biome) {
+  // First, check if this block is an ore seed
+  uint8_t seed_ore = getOreSeedAt(x, y, z, biome);
+  if (seed_ore != 0) return seed_ore;
+  
+  // Not a seed - check if adjacent to a seed and spread with 1/4 chance
+  // Each direction has its own hash for independent spread chance
+  uint8_t adjacent_ore = 0;
+  
+  // Check +X neighbor (25% chance to spread)
+  adjacent_ore = getOreSeedAt(x + 1, y, z, biome);
+  if (adjacent_ore != 0 && ((x * 13 + y * 37 + z * 53) & 0x03) == 0) return adjacent_ore;
+  
+  // Check -X neighbor
+  adjacent_ore = getOreSeedAt(x - 1, y, z, biome);
+  if (adjacent_ore != 0 && ((x * 17 + y * 41 + z * 59) & 0x03) == 0) return adjacent_ore;
+  
+  // Check +Y neighbor
+  adjacent_ore = getOreSeedAt(x, y + 1, z, biome);
+  if (adjacent_ore != 0 && ((x * 19 + y * 43 + z * 61) & 0x03) == 0) return adjacent_ore;
+  
+  // Check -Y neighbor
+  adjacent_ore = getOreSeedAt(x, y - 1, z, biome);
+  if (adjacent_ore != 0 && ((x * 23 + y * 47 + z * 67) & 0x03) == 0) return adjacent_ore;
+  
+  // Check +Z neighbor
+  adjacent_ore = getOreSeedAt(x, y, z + 1, biome);
+  if (adjacent_ore != 0 && ((x * 29 + y * 51 + z * 71) & 0x03) == 0) return adjacent_ore;
+  
+  // Check -Z neighbor
+  adjacent_ore = getOreSeedAt(x, y, z - 1, biome);
+  if (adjacent_ore != 0 && ((x * 31 + y * 53 + z * 73) & 0x03) == 0) return adjacent_ore;
+  
+  return 0;
+}
+
 // Simple cave check using surface-like noise
 // Reuses the same noise type as terrain but with different scaling
 static inline uint8_t isCaveSimple(int x, int y, int z, uint8_t height, uint8_t biome) {
   // Don't generate caves too close to the surface
   if (y > height - 4) return 0;
-  
+
   // Don't generate caves below bedrock level
   if (y < 6) return 0;
-  
+
   // Use 3D noise with surface-like parameters for natural cave shapes
   double cave_scale = 0.04;  // Larger scale = bigger, smoother caves
   double noise = octave_sample(&cave_noise, x * cave_scale, y * cave_scale * 0.5, z * cave_scale);
-  
+
   // Normalize from [-1, 1] to [0, 1]
   double cave_density = (noise + 1.0) / 2.0;
-  
+
   // Cave threshold - higher = fewer caves
   double threshold = 0.65;
-  
+
   // Mountain biomes have more caves
   if (biome == W_windswept_hills || biome == W_jagged_peaks ||
       biome == W_frozen_peaks || biome == W_stony_peaks) {
     threshold = 0.58;
   }
-  
+
   return cave_density > threshold ? 1 : 0;
 }
 
@@ -974,39 +1055,12 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       return B_air;
     }
 
-    // The chunk-relative X and Z coordinates are used as the seed for an
-    // xorshift RNG/hash function to generate the Y coordinate of the ore
-    // in this column. This way, each column is guaranteed to have exactly
-    // one ore candidate, as there will always be a Y value to reference.
-    uint8_t ore_y = ((rx & 15) << 4) + (rz & 15);
-    ore_y ^= ore_y << 4;
-    ore_y ^= ore_y >> 5;
-    ore_y ^= ore_y << 1;
-    ore_y &= 63;
-
-    if (y == ore_y) {
-      // Since the ore Y coordinate is effectely a random number in range [0;64),
-      // we use it in a bit shift with the chunk's anchor hash to get another
-      // pseudo-random number for the ore's rarity.
-      uint8_t ore_probability = (anchor.hash >> (ore_y % 24)) & 255;
-      // Ore placement is determined by Y level and "probability"
-      if (y < 15) {
-        if (ore_probability < 10) return B_diamond_ore;
-        if (ore_probability < 12) return B_gold_ore;
-        if (ore_probability < 15) return B_redstone_ore;
-      }
-      if (y < 30) {
-        if (ore_probability < 3) return B_gold_ore;
-        if (ore_probability < 8) return B_redstone_ore;
-      }
-      if (y < 54) {
-        if (ore_probability < 30) return B_iron_ore;
-        if (ore_probability < 40) return B_copper_ore;
-      }
-      if (ore_probability < 60) return B_coal_ore;
-      if (y < 5) return B_lava;
-      return B_cobblestone;
-    }
+    // Generate ore clumps using 3D noise for clustered veins
+    uint8_t ore = getOreClumpAt(x, y, z, anchor.biome);
+    if (ore != 0) return ore;
+    
+    // Deep bedrock layer
+    if (y < 5) return B_bedrock;
 
     // For everything else, fall back to stone
     return B_stone;

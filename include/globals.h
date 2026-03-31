@@ -53,10 +53,10 @@
 #define CHUNK_SIZE 8
 
 // Terrain low point - should start a bit below sea level for rivers/lakes
-#define TERRAIN_BASE_HEIGHT 60
+#define TERRAIN_BASE_HEIGHT 55
 
-// Cave generation Y level
-#define CAVE_BASE_DEPTH 24
+// Cave generation Y level (deeper for better mountain caves)
+#define CAVE_BASE_DEPTH 20
 
 // Size of every major biome in multiples of CHUNK_SIZE
 // For best performance, should also be a power of 2
