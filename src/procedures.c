@@ -2019,41 +2019,95 @@ int sizeEntityMetadata (EntityData *metadata, size_t length) {
 // Forcefully refresh chunks around a player gradually over multiple ticks
 // Called every second, sends one ring of chunks per call
 // Full refresh completes over 4 seconds (one ring per second)
+// Chunks are sent in order based on player's look direction
 void refreshChunksAroundPlayer (PlayerData *player) {
   if (player->client_fd == -1) return;
-  
+
   short cx = div_floor(player->x, 16);
   short cz = div_floor(player->z, 16);
   int refresh_radius = 4;  // 4 rings = completes in 4 seconds
-  
+
   // Send center chunk first (only on first ring)
   if (player->chunk_refresh_ring == 0) {
     sc_setCenterChunk(player->client_fd, cx, cz);
   }
-  
+
   // Send one ring per tick
   int ring = player->chunk_refresh_ring;
   if (ring <= refresh_radius) {
-    // Top and bottom rows
-    for (int dx = -ring; dx <= ring; dx++) {
-      sc_chunkDataAndUpdateLight(player->client_fd, cx + dx, cz - ring);
-      task_yield();
+    // Calculate the primary direction based on player's yaw
+    // Yaw is 0-255: 0=South(-Z), 64=West(-X), 128=North(+Z), 192=East(+X)
+    int8_t look_dir = player->yaw;
+    // Determine primary axis: 0 = Z axis (N/S), 1 = X axis (E/W)
+    int primary_axis = ((look_dir + 32) % 128) < 64 ? 1 : 0;
+    // Determine direction sign on each axis
+    int look_dx = 0, look_dz = 0;
+    if (primary_axis == 1) {
+      look_dx = (look_dir < 128) ? -1 : 1;
+    } else {
+      look_dz = (look_dir < 64 || look_dir > 192) ? -1 : 1;
     }
-    for (int dx = -ring; dx <= ring; dx++) {
-      sc_chunkDataAndUpdateLight(player->client_fd, cx + dx, cz + ring);
-      task_yield();
+
+    // Define side order based on look direction
+    int side_order[4];
+    int side_count = 0;
+
+    if (primary_axis == 0) {
+      // Looking North or South - prioritize Z-axis sides
+      if (look_dz < 0) {
+        side_order[side_count++] = 0; // -Z first (looking North)
+        side_order[side_count++] = 1; // +Z second
+      } else {
+        side_order[side_count++] = 1; // +Z first (looking South)
+        side_order[side_count++] = 0; // -Z second
+      }
+      side_order[side_count++] = 2; // -X
+      side_order[side_count++] = 3; // +X
+    } else {
+      // Looking East or West - prioritize X-axis sides
+      if (look_dx < 0) {
+        side_order[side_count++] = 2; // -X first (looking West)
+        side_order[side_count++] = 3; // +X second
+      } else {
+        side_order[side_count++] = 3; // +X first (looking East)
+        side_order[side_count++] = 2; // -X second
+      }
+      side_order[side_count++] = 0; // -Z
+      side_order[side_count++] = 1; // +Z
     }
-    // Left and right columns (excluding corners)
-    for (int dz = -ring + 1; dz < ring; dz++) {
-      sc_chunkDataAndUpdateLight(player->client_fd, cx - ring, cz + dz);
-      task_yield();
-    }
-    for (int dz = -ring + 1; dz < ring; dz++) {
-      sc_chunkDataAndUpdateLight(player->client_fd, cx + ring, cz + dz);
-      task_yield();
+
+    // Process each side in priority order
+    for (int s = 0; s < 4; s++) {
+      int side = side_order[s];
+
+      if (side == 0) {
+        // Top row (-Z)
+        for (int dx = -ring; dx <= ring; dx++) {
+          sc_chunkDataAndUpdateLight(player->client_fd, cx + dx, cz - ring);
+          task_yield();
+        }
+      } else if (side == 1) {
+        // Bottom row (+Z)
+        for (int dx = -ring; dx <= ring; dx++) {
+          sc_chunkDataAndUpdateLight(player->client_fd, cx + dx, cz + ring);
+          task_yield();
+        }
+      } else if (side == 2) {
+        // Left column (-X), excluding corners
+        for (int dz = -ring + 1; dz < ring; dz++) {
+          sc_chunkDataAndUpdateLight(player->client_fd, cx - ring, cz + dz);
+          task_yield();
+        }
+      } else if (side == 3) {
+        // Right column (+X), excluding corners
+        for (int dz = -ring + 1; dz < ring; dz++) {
+          sc_chunkDataAndUpdateLight(player->client_fd, cx + ring, cz + dz);
+          task_yield();
+        }
+      }
     }
   }
-  
+
   // Move to next ring, wrap around after completing all rings
   player->chunk_refresh_ring++;
   if (player->chunk_refresh_ring > refresh_radius) {

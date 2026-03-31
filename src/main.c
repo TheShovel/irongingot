@@ -359,59 +359,123 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
         #endif
 
         sc_setCenterChunk(client_fd, _x, _z);
-        
+
+        // Calculate the primary direction based on player's yaw
+        // Yaw is 0-255: 0=South(-Z), 64=West(-X), 128=North(+Z), 192=East(+X)
+        // We use this to prioritize sending chunks in the direction the player is looking
+        int8_t look_dir = player->yaw;
+        // Determine primary axis: 0 = Z axis (N/S), 1 = X axis (E/W)
+        int primary_axis = ((look_dir + 32) % 128) < 64 ? 1 : 0;
+        // Determine direction sign on each axis
+        int look_dx = 0, look_dz = 0;
+        if (primary_axis == 1) {
+          // Looking East or West
+          look_dx = (look_dir < 128) ? -1 : 1;
+        } else {
+          // Looking North or South
+          look_dz = (look_dir < 64 || look_dir > 192) ? -1 : 1;
+        }
+
         // Search for unvisited chunks in a spiral pattern from player position
+        // Order sides based on player's look direction for prioritized loading
         for (int ring = 1; ring <= VIEW_DISTANCE && sent_this_tick < chunks_per_tick; ring++) {
-          // Top row
-          for (int dx_ring = -ring; dx_ring <= ring && sent_this_tick < chunks_per_tick; dx_ring++) {
-            int check_x = _x + dx_ring;
-            int check_z = _z - ring;
-            if (!isChunkVisited(player, check_x, check_z)) {
-              sc_chunkDataAndUpdateLight(client_fd, check_x, check_z);
-              markChunkVisited(player, check_x, check_z);
-              #ifdef DEV_LOG_CHUNK_GENERATION
-                count++;
-              #endif
-              sent_this_tick++;
-              task_yield();
+          // Define the four sides of the current ring
+          // Side 0: -Z (North side, top row)
+          // Side 1: +Z (South side, bottom row)
+          // Side 2: -X (West side, left column)
+          // Side 3: +X (East side, right column)
+          int side_order[4];
+          int side_count = 0;
+
+          // Add sides in order of priority based on look direction
+          if (primary_axis == 0) {
+            // Looking North or South - prioritize Z-axis sides
+            if (look_dz < 0) {
+              side_order[side_count++] = 0; // -Z first (looking North)
+              side_order[side_count++] = 1; // +Z second
+            } else {
+              side_order[side_count++] = 1; // +Z first (looking South)
+              side_order[side_count++] = 0; // -Z second
             }
+            side_order[side_count++] = 2; // -X
+            side_order[side_count++] = 3; // +X
+          } else {
+            // Looking East or West - prioritize X-axis sides
+            if (look_dx < 0) {
+              side_order[side_count++] = 2; // -X first (looking West)
+              side_order[side_count++] = 3; // +X second
+            } else {
+              side_order[side_count++] = 3; // +X first (looking East)
+              side_order[side_count++] = 2; // -X second
+            }
+            side_order[side_count++] = 0; // -Z
+            side_order[side_count++] = 1; // +Z
           }
-          // Bottom row
-          for (int dx_ring = -ring; dx_ring <= ring && sent_this_tick < chunks_per_tick; dx_ring++) {
-            int check_x = _x + dx_ring;
-            int check_z = _z + ring;
-            if (!isChunkVisited(player, check_x, check_z)) {
-              sc_chunkDataAndUpdateLight(client_fd, check_x, check_z);
-              markChunkVisited(player, check_x, check_z);
-              #ifdef DEV_LOG_CHUNK_GENERATION
-                count++;
-              #endif
-              sent_this_tick++;
-              task_yield();
-            }
-          }
-          // Left and right columns (excluding corners)
-          for (int dz_ring = -ring + 1; dz_ring < ring && sent_this_tick < chunks_per_tick; dz_ring++) {
-            int check_x = _x - ring;
-            int check_z = _z + dz_ring;
-            if (!isChunkVisited(player, check_x, check_z)) {
-              sc_chunkDataAndUpdateLight(client_fd, check_x, check_z);
-              markChunkVisited(player, check_x, check_z);
-              #ifdef DEV_LOG_CHUNK_GENERATION
-                count++;
-              #endif
-              sent_this_tick++;
-              task_yield();
-            }
-            check_x = _x + ring;
-            if (!isChunkVisited(player, check_x, check_z)) {
-              sc_chunkDataAndUpdateLight(client_fd, check_x, check_z);
-              markChunkVisited(player, check_x, check_z);
-              #ifdef DEV_LOG_CHUNK_GENERATION
-                count++;
-              #endif
-              sent_this_tick++;
-              task_yield();
+
+          // Process each side in priority order
+          for (int s = 0; s < 4 && sent_this_tick < chunks_per_tick; s++) {
+            int side = side_order[s];
+
+            if (side == 0) {
+              // Top row (-Z)
+              for (int dx_ring = -ring; dx_ring <= ring && sent_this_tick < chunks_per_tick; dx_ring++) {
+                int check_x = _x + dx_ring;
+                int check_z = _z - ring;
+                if (!isChunkVisited(player, check_x, check_z)) {
+                  sc_chunkDataAndUpdateLight(client_fd, check_x, check_z);
+                  markChunkVisited(player, check_x, check_z);
+                  #ifdef DEV_LOG_CHUNK_GENERATION
+                    count++;
+                  #endif
+                  sent_this_tick++;
+                  task_yield();
+                }
+              }
+            } else if (side == 1) {
+              // Bottom row (+Z)
+              for (int dx_ring = -ring; dx_ring <= ring && sent_this_tick < chunks_per_tick; dx_ring++) {
+                int check_x = _x + dx_ring;
+                int check_z = _z + ring;
+                if (!isChunkVisited(player, check_x, check_z)) {
+                  sc_chunkDataAndUpdateLight(client_fd, check_x, check_z);
+                  markChunkVisited(player, check_x, check_z);
+                  #ifdef DEV_LOG_CHUNK_GENERATION
+                    count++;
+                  #endif
+                  sent_this_tick++;
+                  task_yield();
+                }
+              }
+            } else if (side == 2) {
+              // Left column (-X), excluding corners
+              for (int dz_ring = -ring + 1; dz_ring < ring && sent_this_tick < chunks_per_tick; dz_ring++) {
+                int check_x = _x - ring;
+                int check_z = _z + dz_ring;
+                if (!isChunkVisited(player, check_x, check_z)) {
+                  sc_chunkDataAndUpdateLight(client_fd, check_x, check_z);
+                  markChunkVisited(player, check_x, check_z);
+                  #ifdef DEV_LOG_CHUNK_GENERATION
+                    count++;
+                  #endif
+                  sent_this_tick++;
+                  task_yield();
+                }
+              }
+            } else if (side == 3) {
+              // Right column (+X), excluding corners
+              for (int dz_ring = -ring + 1; dz_ring < ring && sent_this_tick < chunks_per_tick; dz_ring++) {
+                int check_x = _x + ring;
+                int check_z = _z + dz_ring;
+                if (!isChunkVisited(player, check_x, check_z)) {
+                  sc_chunkDataAndUpdateLight(client_fd, check_x, check_z);
+                  markChunkVisited(player, check_x, check_z);
+                  #ifdef DEV_LOG_CHUNK_GENERATION
+                    count++;
+                  #endif
+                  sent_this_tick++;
+                  task_yield();
+                }
+              }
             }
           }
         }
