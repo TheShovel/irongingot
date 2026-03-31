@@ -359,9 +359,10 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
   // This avoids the overhead of allocating 1MB on every chunk send
   static uint8_t data_buf[MAX_PACKET_LEN];
   int data_offset = 0;
+  const int MAX_DATA_OFFSET = MAX_PACKET_LEN - 1024;  // Safety margin
 
-  int x = _x * 16, z = _z * 16, y;
-  
+  int x = _x * 16, z = _z * 16;
+
   // Try to get cached chunk data
   CachedChunkData* cached = get_cached_chunk(_x, _z);
   if (!cached) {
@@ -370,9 +371,19 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
     cached = get_cached_chunk(_x, _z);
   }
 
+  // Validate cached data is complete and consistent
+  if (!cached || !cached->valid) {
+    fprintf(stderr, "ERROR: Failed to get valid chunk data for (%d, %d)\n", _x, _z);
+    return 1;
+  }
+
   // 1. Send chunk sections
   // send 4 chunk sections (up to Y=0) with no blocks (bedrock)
   for (int i = 0; i < 4; i ++) {
+    if (data_offset >= MAX_DATA_OFFSET) {
+      fprintf(stderr, "ERROR: Chunk data buffer overflow at bedrock sections\n");
+      return 1;
+    }
     // block count
     data_buf[data_offset++] = 4096 >> 8;
     data_buf[data_offset++] = 4096 & 0xFF;
@@ -381,6 +392,10 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
     // block palette (bedrock = 85)
     uint32_t val = 85;
     while (true) {
+      if (data_offset >= MAX_DATA_OFFSET) {
+        fprintf(stderr, "ERROR: Chunk data buffer overflow at bedrock palette\n");
+        return 1;
+      }
       if ((val & ~SEGMENT_BITS) == 0) { data_buf[data_offset++] = val; break; }
       data_buf[data_offset++] = (val & SEGMENT_BITS) | CONTINUE_BIT;
       val >>= 7;
@@ -392,63 +407,77 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
   }
 
   // send middle chunk sections using cached data
-  if (cached) {
-    for (int i = 0; i < 20; i ++) {
-      uint8_t* section_data = cached->sections[i];
-      uint8_t biome = cached->biomes[i];
-      
-      // Check if section is uniform
-      uint8_t first_block = section_data[0];
-      uint8_t uniform = true;
-      for (int j = 1; j < 4096; j ++) {
-        if (section_data[j] != first_block) {
-          uniform = false;
-          break;
-        }
-      }
+  for (int i = 0; i < 20; i ++) {
+    if (data_offset >= MAX_DATA_OFFSET) {
+      fprintf(stderr, "ERROR: Chunk data buffer overflow at middle sections\n");
+      return 1;
+    }
+    
+    uint8_t* section_data = cached->sections[i];
+    uint8_t biome = cached->biomes[i];
 
-      if (uniform) {
-        uint16_t block_count = (first_block == 0) ? 0 : 4096;
-        data_buf[data_offset++] = block_count >> 8;
-        data_buf[data_offset++] = block_count & 0xFF;
-        data_buf[data_offset++] = 0;
-        uint32_t val = block_palette[first_block];
-        while (true) {
-          if ((val & ~SEGMENT_BITS) == 0) { data_buf[data_offset++] = val; break; }
-          data_buf[data_offset++] = (val & SEGMENT_BITS) | CONTINUE_BIT;
-          val >>= 7;
-        }
-      } else {
-        uint16_t block_count = 0;
-        for (int j = 0; j < 4096; j ++) if (section_data[j] != 0) block_count ++;
-        data_buf[data_offset++] = block_count >> 8;
-        data_buf[data_offset++] = block_count & 0xFF;
-        data_buf[data_offset++] = 8;
-        uint32_t val = 256;
-        while (true) {
-          if ((val & ~SEGMENT_BITS) == 0) { data_buf[data_offset++] = val; break; }
-          data_buf[data_offset++] = (val & SEGMENT_BITS) | CONTINUE_BIT;
-          val >>= 7;
-        }
-        memcpy(data_buf + data_offset, network_block_palette, sizeof(network_block_palette));
-        data_offset += sizeof(network_block_palette);
-        memcpy(data_buf + data_offset, section_data, 4096);
-        data_offset += 4096;
+    // Check if section is uniform
+    uint8_t first_block = section_data[0];
+    uint8_t uniform = true;
+    for (int j = 1; j < 4096; j ++) {
+      if (section_data[j] != first_block) {
+        uniform = false;
+        break;
       }
-      
-      data_buf[data_offset++] = 0;
-      data_buf[data_offset++] = biome;
     }
-  } else {
-    // Fallback if cache failed (shouldn't happen)
-    for (int i = 0; i < 20; i ++) {
+
+    if (uniform) {
+      uint16_t block_count = (first_block == 0) ? 0 : 4096;
+      data_buf[data_offset++] = block_count >> 8;
+      data_buf[data_offset++] = block_count & 0xFF;
       data_buf[data_offset++] = 0;
-      data_buf[data_offset++] = 0;
+      uint32_t val = block_palette[first_block];
+      while (true) {
+        if (data_offset >= MAX_DATA_OFFSET) {
+          fprintf(stderr, "ERROR: Chunk data buffer overflow at uniform palette\n");
+          return 1;
+        }
+        if ((val & ~SEGMENT_BITS) == 0) { data_buf[data_offset++] = val; break; }
+        data_buf[data_offset++] = (val & SEGMENT_BITS) | CONTINUE_BIT;
+        val >>= 7;
+      }
+    } else {
+      uint16_t block_count = 0;
+      for (int j = 0; j < 4096; j ++) if (section_data[j] != 0) block_count ++;
+      data_buf[data_offset++] = block_count >> 8;
+      data_buf[data_offset++] = block_count & 0xFF;
+      data_buf[data_offset++] = 8;
+      uint32_t val = 256;
+      while (true) {
+        if (data_offset >= MAX_DATA_OFFSET) {
+          fprintf(stderr, "ERROR: Chunk data buffer overflow at non-uniform header\n");
+          return 1;
+        }
+        if ((val & ~SEGMENT_BITS) == 0) { data_buf[data_offset++] = val; break; }
+        data_buf[data_offset++] = (val & SEGMENT_BITS) | CONTINUE_BIT;
+        val >>= 7;
+      }
+      // Check space for palette and section data
+      if (data_offset + sizeof(network_block_palette) + 4096 >= MAX_DATA_OFFSET) {
+        fprintf(stderr, "ERROR: Chunk data buffer overflow at section copy\n");
+        return 1;
+      }
+      memcpy(data_buf + data_offset, network_block_palette, sizeof(network_block_palette));
+      data_offset += sizeof(network_block_palette);
+      memcpy(data_buf + data_offset, section_data, 4096);
+      data_offset += 4096;
     }
+
+    data_buf[data_offset++] = 0;
+    data_buf[data_offset++] = biome;
   }
 
   // send 8 chunk sections (up to Y=192) with no blocks (air)
   for (int i = 0; i < 8; i ++) {
+    if (data_offset >= MAX_DATA_OFFSET) {
+      fprintf(stderr, "ERROR: Chunk data buffer overflow at air sections\n");
+      return 1;
+    }
     data_buf[data_offset++] = 0; // block count
     data_buf[data_offset++] = 0;
     data_buf[data_offset++] = 0; // bits
@@ -484,7 +513,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
   // Reuse chunk_section as temporary buffer for light data
   memset(chunk_section, 0xFF, 2048);
   memset(chunk_section + 2048, 0, 2048);
-  
+
   // Cache VarInt for 2048
   for (int i = 0; i < 8; i ++) {
     writeVarInt(client_fd, 2048);

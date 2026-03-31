@@ -9,6 +9,8 @@ typedef struct {
   uint8_t sections[20][4096];  // Block data for 20 middle sections
   uint8_t biomes[20];  // Biome for each section
   uint8_t valid;
+  uint8_t generating;  // Lock-free generation flag
+  uint32_t access_count;  // For LRU eviction
 } CachedChunkData;
 
 void init_chunk_generator();
