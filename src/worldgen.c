@@ -17,6 +17,8 @@ static Generator g;
 static SurfaceNoise surface_noise_biome;
 static OctavePerlinNoiseSampler surface_noise;
 static OctavePerlinNoiseSampler detail_noise;
+static OctavePerlinNoiseSampler cave_noise;
+static OctavePerlinNoiseSampler cliff_noise;
 static int gen_initialized = 0;
 
 // Height cache for smooth chunk generation (covers 32x32 area for seamless borders)
@@ -31,6 +33,8 @@ void init_worldgen() {
 
     octave_init(&surface_noise, (uint64_t)world_seed, 4);
     octave_init(&detail_noise, (uint64_t)world_seed + 1, 2);
+    octave_init(&cave_noise, (uint64_t)world_seed + 2, 6);
+    octave_init(&cliff_noise, (uint64_t)world_seed + 3, 4);
     gen_initialized = 1;
 }
 
@@ -138,30 +142,54 @@ static uint8_t getHeightAtRaw (int x, int z) {
   double base10 = 64.0, scale10 = 12.0;
   double base01 = 64.0, scale01 = 12.0;
   double base11 = 64.0, scale11 = 12.0;
-  
+
   #define SET_BIOME_HEIGHT(biome, base, scale) \
     if (biome == W_desert) { base = 66.0; scale = 8.0; } \
     else if (biome == W_snowy_plains || biome == W_snowy_taiga) { base = 68.0; scale = 15.0; } \
-    else if (biome == W_savanna || biome == W_badlands || biome == W_windswept_hills) { base = 75.0; scale = 25.0; } \
-    else if (biome == W_stony_peaks || biome == W_jagged_peaks || biome == W_frozen_peaks) { base = 100.0; scale = 40.0; } \
+    else if (biome == W_savanna || biome == W_badlands) { base = 75.0; scale = 25.0; } \
+    else if (biome == W_windswept_hills) { base = 80.0; scale = 35.0; } \
+    else if (biome == W_jagged_peaks) { base = 90.0; scale = 50.0; } \
+    else if (biome == W_frozen_peaks) { base = 85.0; scale = 45.0; } \
+    else if (biome == W_stony_peaks) { base = 95.0; scale = 48.0; } \
     else if (biome == W_cherry_grove) { base = 80.0; scale = 15.0; } \
     else if (biome == W_ocean || biome == W_deep_ocean || biome == W_frozen_ocean) { base = 50.0; scale = 10.0; } \
     else if (biome == W_river || biome == W_frozen_river) { base = 60.0; scale = 2.0; } \
     else if (biome == W_beach) { base = 62.0; scale = 2.0; } \
-    else if (biome == W_mangrove_swamp || biome == W_swamp) { base = 62.0; scale = 3.0; }
-  
+    else if (biome == W_mangrove_swamp || biome == W_swamp) { base = 62.0; scale = 3.0; } \
+    else if (biome == W_meadow) { base = 75.0; scale = 20.0; }
+
   SET_BIOME_HEIGHT(b00, base00, scale00);
   SET_BIOME_HEIGHT(b10, base10, scale10);
   SET_BIOME_HEIGHT(b01, base01, scale01);
   SET_BIOME_HEIGHT(b11, base11, scale11);
-  
+
   #undef SET_BIOME_HEIGHT
-  
+
   // Bilinear interpolation of base height and scale
-  double base_height = base00 * (1-wx) * (1-wz) + base10 * wx * (1-wz) + 
+  double base_height = base00 * (1-wx) * (1-wz) + base10 * wx * (1-wz) +
                        base01 * (1-wx) * wz + base11 * wx * wz;
-  double scale = scale00 * (1-wx) * (1-wz) + scale10 * wx * (1-wz) + 
+  double scale = scale00 * (1-wx) * (1-wz) + scale10 * wx * (1-wz) +
                  scale01 * (1-wx) * wz + scale11 * wx * wz;
+
+  // Add cliff noise for mountain biomes to create dramatic peaks
+  int bx = div_floor(x, 4);
+  int bz = div_floor(z, 4);
+  double cliff_noise_val = octave_sample(&cliff_noise, bx * 0.1, 0, bz * 0.1);
+  
+  // Apply cliff noise only to mountain biomes
+  uint8_t is_mountain = (b00 == W_windswept_hills || b00 == W_jagged_peaks || 
+                         b00 == W_frozen_peaks || b00 == W_stony_peaks ||
+                         b10 == W_windswept_hills || b10 == W_jagged_peaks || 
+                         b10 == W_frozen_peaks || b10 == W_stony_peaks ||
+                         b01 == W_windswept_hills || b01 == W_jagged_peaks || 
+                         b01 == W_frozen_peaks || b01 == W_stony_peaks ||
+                         b11 == W_windswept_hills || b11 == W_jagged_peaks || 
+                         b11 == W_frozen_peaks || b11 == W_stony_peaks);
+  
+  if (is_mountain) {
+    // Amplify cliff noise for dramatic peaks
+    base_height += cliff_noise_val * 15.0;
+  }
 
   return (uint8_t)(base_height + noise * scale + detail * 2.0);
 }
@@ -217,6 +245,62 @@ uint8_t getHeightAtFromAnchors (int rx, int rz, ChunkAnchor *anchor_ptr) {
 
 uint8_t getHeightAtFromHash (int rx, int rz, int _x, int _z, uint32_t chunk_hash, uint8_t biome) {
   return getHeightAt(_x * CHUNK_SIZE + rx, _z * CHUNK_SIZE + rz);
+}
+
+// Get cave density at a given 3D position using 3D noise
+// Returns value between 0 and 1, higher values mean more likely to be a cave
+double getCaveDensity(int x, int y, int z) {
+  // Scale coordinates for cave generation
+  double cave_scale = 0.08;
+  double noise = octave_sample(&cave_noise, x * cave_scale, y * cave_scale, z * cave_scale);
+  
+  // Normalize noise from [-1, 1] to [0, 1]
+  return (noise + 1.0) / 2.0;
+}
+
+// Get cliff factor for terrain steepness
+// Used to create dramatic cliff faces in mountain biomes
+double getCliffFactor(int x, int y, int z, uint8_t biome) {
+  // Only apply cliff generation in mountain biomes
+  if (biome != W_windswept_hills && biome != W_jagged_peaks && 
+      biome != W_frozen_peaks && biome != W_stony_peaks && biome != W_savanna) {
+    return 0.0;
+  }
+  
+  // Use 3D noise to create overhangs and cliff faces
+  double cliff_scale = 0.05;
+  double noise = octave_sample(&cliff_noise, x * cliff_scale, y * cliff_scale * 0.5, z * cliff_scale);
+  
+  // Normalize and scale
+  return (noise + 1.0) / 2.0;
+}
+
+// Check if a position should be a cave based on noise and depth
+uint8_t isCave(int x, int y, int z, uint8_t height, uint8_t biome) {
+  // Don't generate caves too close to the surface
+  if (y > height - 3) return 0;
+  
+  // Don't generate caves below bedrock level
+  if (y < 5) return 0;
+  
+  // Get cave density at this position
+  double cave_density = getCaveDensity(x, y, z);
+  
+  // Cave threshold varies with depth - deeper = larger caves
+  double depth_factor = (64.0 - y) / 64.0;
+  double threshold = 0.55 + depth_factor * 0.15;
+  
+  // Add some variation based on position
+  uint8_t pos_hash = (x * 31 + y * 37 + z * 41) & 255;
+  threshold += (pos_hash / 255.0 - 0.5) * 0.1;
+  
+  // Mountain biomes have more caves
+  if (biome == W_windswept_hills || biome == W_jagged_peaks || 
+      biome == W_frozen_peaks || biome == W_stony_peaks) {
+    threshold -= 0.08;
+  }
+  
+  return cave_density > threshold ? 1 : 0;
 }
 
 
@@ -858,6 +942,8 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       if (anchor.biome == W_mangrove_swamp) return B_mud;
       if (anchor.biome == W_desert) return B_sand;
       if (anchor.biome == W_beach) return B_sand;
+      if (anchor.biome == W_ocean || anchor.biome == W_deep_ocean || 
+          anchor.biome == W_frozen_ocean) return B_gravel;
       return B_grass_block;
     }
     // Snow layer on top of grass in snowy biomes
@@ -865,11 +951,39 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       if (y == height + 1) return B_snow;
     }
   }
+  
+  // Handle ocean floor (below sea level)
+  if (height < 63 && y == height && 
+      (anchor.biome == W_ocean || anchor.biome == W_deep_ocean || 
+       anchor.biome == W_frozen_ocean || anchor.biome == W_river || 
+       anchor.biome == W_frozen_river)) {
+    // Ocean floors use gravel and sand mix
+    uint8_t floor_hash = (anchor.hash >> (x + z)) & 255;
+    if (floor_hash < 100) return B_gravel;
+    return B_sand;
+  }
+  
+  // Generate cliffs in mountain biomes - create overhangs and steep faces
+  if (anchor.biome == W_windswept_hills || anchor.biome == W_jagged_peaks || 
+      anchor.biome == W_frozen_peaks || anchor.biome == W_stony_peaks) {
+    if (y > height && y <= height + 8) {
+      double cliff = getCliffFactor(x, y, z, anchor.biome);
+      // Higher cliff values = more likely to have blocks (overhangs)
+      if (cliff > 0.35) {
+        // Create stone overhangs
+        uint8_t overhang_hash = (anchor.hash >> (x + y + z)) & 255;
+        if (overhang_hash > 50) return B_stone;
+      }
+    }
+  }
+  
   // Starting at 4 blocks below terrain level, generate minerals and caves
   if (y <= height - 4) {
-    // Caves use the same shape as surface terrain, just mirrored
-    int8_t gap = height - TERRAIN_BASE_HEIGHT;
-    if (y < CAVE_BASE_DEPTH + gap && y > CAVE_BASE_DEPTH - gap) return B_air;
+    // Check for caves using 3D noise
+    if (isCave(x, y, z, height, anchor.biome)) {
+      // Cave found - return air
+      return B_air;
+    }
 
     // The chunk-relative X and Z coordinates are used as the seed for an
     // xorshift RNG/hash function to generate the Y coordinate of the ore
@@ -908,11 +1022,20 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
     // For everything else, fall back to stone
     return B_stone;
   }
-  // Handle the space between stone and grass
+  // Handle the space between stone and surface
   if (y <= height) {
     if (anchor.biome == W_desert) return B_sandstone;
     if (anchor.biome == W_mangrove_swamp) return B_mud;
     if (anchor.biome == W_beach && height > 64) return B_sandstone;
+    // Ocean and river biomes have sand/gravel below the floor
+    if (anchor.biome == W_ocean || anchor.biome == W_deep_ocean || 
+        anchor.biome == W_frozen_ocean || anchor.biome == W_river || 
+        anchor.biome == W_frozen_river) {
+      uint8_t sub_hash = (anchor.hash >> (x + y + z)) & 255;
+      if (sub_hash < 80) return B_dirt;
+      if (sub_hash < 160) return B_gravel;
+      return B_sand;
+    }
     return B_dirt;
   }
   // If all else failed, but we're below sea level, generate water (or ice)
