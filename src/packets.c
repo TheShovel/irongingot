@@ -24,6 +24,7 @@
 #include "crafting.h"
 #include "procedures.h"
 #include "packets.h"
+#include "chunk_generator.h"
 
 // S->C Status Response (server list ping)
 int sc_statusResponse (int client_fd) {
@@ -360,6 +361,14 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
   int data_offset = 0;
 
   int x = _x * 16, z = _z * 16, y;
+  
+  // Try to get cached chunk data
+  CachedChunkData* cached = get_cached_chunk(_x, _z);
+  if (!cached) {
+    // Not cached - generate synchronously
+    generate_chunk_data(_x, _z);
+    cached = get_cached_chunk(_x, _z);
+  }
 
   // 1. Send chunk sections
   // send 4 chunk sections (up to Y=0) with no blocks (bedrock)
@@ -382,61 +391,60 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
     data_buf[data_offset++] = 0;
   }
 
-  // send middle chunk sections
-  for (int i = 0; i < 20; i ++) {
-    y = i * 16;
-    uint8_t biome = buildChunkSection(x, y, z);
-
-    // Check if section is uniform
-    uint8_t first_block = chunk_section[0];
-    uint8_t uniform = true;
-    for (int j = 1; j < 4096; j ++) {
-      if (chunk_section[j] != first_block) {
-        uniform = false;
-        break;
+  // send middle chunk sections using cached data
+  if (cached) {
+    for (int i = 0; i < 20; i ++) {
+      uint8_t* section_data = cached->sections[i];
+      uint8_t biome = cached->biomes[i];
+      
+      // Check if section is uniform
+      uint8_t first_block = section_data[0];
+      uint8_t uniform = true;
+      for (int j = 1; j < 4096; j ++) {
+        if (section_data[j] != first_block) {
+          uniform = false;
+          break;
+        }
       }
-    }
 
-    if (uniform) {
-      // block count (0 if air, 4096 otherwise? Actually Minecraft protocol uses non-zero for block count)
-      uint16_t block_count = (first_block == 0) ? 0 : 4096;
-      data_buf[data_offset++] = block_count >> 8;
-      data_buf[data_offset++] = block_count & 0xFF;
-      // block bits
+      if (uniform) {
+        uint16_t block_count = (first_block == 0) ? 0 : 4096;
+        data_buf[data_offset++] = block_count >> 8;
+        data_buf[data_offset++] = block_count & 0xFF;
+        data_buf[data_offset++] = 0;
+        uint32_t val = block_palette[first_block];
+        while (true) {
+          if ((val & ~SEGMENT_BITS) == 0) { data_buf[data_offset++] = val; break; }
+          data_buf[data_offset++] = (val & SEGMENT_BITS) | CONTINUE_BIT;
+          val >>= 7;
+        }
+      } else {
+        uint16_t block_count = 0;
+        for (int j = 0; j < 4096; j ++) if (section_data[j] != 0) block_count ++;
+        data_buf[data_offset++] = block_count >> 8;
+        data_buf[data_offset++] = block_count & 0xFF;
+        data_buf[data_offset++] = 8;
+        uint32_t val = 256;
+        while (true) {
+          if ((val & ~SEGMENT_BITS) == 0) { data_buf[data_offset++] = val; break; }
+          data_buf[data_offset++] = (val & SEGMENT_BITS) | CONTINUE_BIT;
+          val >>= 7;
+        }
+        memcpy(data_buf + data_offset, network_block_palette, sizeof(network_block_palette));
+        data_offset += sizeof(network_block_palette);
+        memcpy(data_buf + data_offset, section_data, 4096);
+        data_offset += 4096;
+      }
+      
       data_buf[data_offset++] = 0;
-      // block palette
-      uint32_t val = block_palette[first_block];
-      while (true) {
-        if ((val & ~SEGMENT_BITS) == 0) { data_buf[data_offset++] = val; break; }
-        data_buf[data_offset++] = (val & SEGMENT_BITS) | CONTINUE_BIT;
-        val >>= 7;
-      }
-    } else {
-      // block count (approximate or calculate)
-      uint16_t block_count = 0;
-      for (int j = 0; j < 4096; j ++) if (chunk_section[j] != 0) block_count ++;
-      data_buf[data_offset++] = block_count >> 8;
-      data_buf[data_offset++] = block_count & 0xFF;
-      // block bits
-      data_buf[data_offset++] = 8;
-      // block palette length
-      uint32_t val = 256;
-      while (true) {
-        if ((val & ~SEGMENT_BITS) == 0) { data_buf[data_offset++] = val; break; }
-        data_buf[data_offset++] = (val & SEGMENT_BITS) | CONTINUE_BIT;
-        val >>= 7;
-      }
-      // block palette
-      memcpy(data_buf + data_offset, network_block_palette, sizeof(network_block_palette));
-      data_offset += sizeof(network_block_palette);
-      // data
-      memcpy(data_buf + data_offset, chunk_section, 4096);
-      data_offset += 4096;
+      data_buf[data_offset++] = biome;
     }
-
-    // biome data
-    data_buf[data_offset++] = 0; // bits per entry
-    data_buf[data_offset++] = biome; // biome palette
+  } else {
+    // Fallback if cache failed (shouldn't happen)
+    for (int i = 0; i < 20; i ++) {
+      data_buf[data_offset++] = 0;
+      data_buf[data_offset++] = 0;
+    }
   }
 
   // send 8 chunk sections (up to Y=192) with no blocks (air)

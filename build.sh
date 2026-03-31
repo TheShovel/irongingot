@@ -41,5 +41,5 @@ for arg in "$@"; do
 done
 
 rm -f "bareiron$exe"
-$compiler src/*.c src/noise/*.c src/cubiomes/biomenoise.c src/cubiomes/biomes.c src/cubiomes/finders.c src/cubiomes/generator.c src/cubiomes/layers.c src/cubiomes/noise.c src/cubiomes/quadbase.c src/cubiomes/util.c -O3 -ffast-math -Iinclude -Isrc/cubiomes -o "bareiron$exe" $windows_linker -lm -lz
+$compiler src/*.c src/noise/*.c src/cubiomes/biomenoise.c src/cubiomes/biomes.c src/cubiomes/finders.c src/cubiomes/generator.c src/cubiomes/layers.c src/cubiomes/noise.c src/cubiomes/quadbase.c src/cubiomes/util.c -O3 -ffast-math -Iinclude -Isrc/cubiomes -o "bareiron$exe" $windows_linker -lm -lz -pthread
 "./bareiron$exe"

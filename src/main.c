@@ -40,6 +40,7 @@
 #include "registries.h"
 #include "procedures.h"
 #include "serialize.h"
+#include "chunk_generator.h"
 #include <zlib.h>
 
 // Check if a chunk has been visited (sent to player)
@@ -544,6 +545,9 @@ int main () {
   }
   printf("Server listening on port %d...\n", PORT);
 
+  // Start chunk generator thread
+  init_chunk_generator();
+
   // Make the socket non-blocking
   // This is necessary to not starve the idle task during slow connections
   #ifdef _WIN32
@@ -753,6 +757,9 @@ int main () {
     }
 
   }
+
+  // Shutdown chunk generator thread
+  shutdown_chunk_generator();
 
   close(server_fd);
  
