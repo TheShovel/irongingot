@@ -59,45 +59,6 @@ static void markChunkVisited(PlayerData *player, int x, int z) {
   player->visited_next = (player->visited_next + 1) % VISITED_HISTORY;
 }
 
-// Check if a chunk at (x, z) is within the player's view cone
-// Player yaw is 0-255: 0=South(-Z), 64=West(-X), 128=North(+Z), 192=East(+X)
-static int isChunkInCone(PlayerData *player, int x, int z) {
-  int dx = x - (player->x / CHUNK_SIZE);
-  int dz = z - (player->z / CHUNK_SIZE);
-  
-  // If chunk is at player position, always include it
-  if (dx == 0 && dz == 0) return 1;
-  
-  // Convert player yaw to radians
-  // Yaw 0 = South (-Z), increasing clockwise
-  float yaw_rad = player->yaw * 2.0f * 3.14159265359f / 256.0f;
-  
-  // Calculate direction vector from player yaw
-  // sin(0) = 0 (no X component when facing South)
-  // cos(0) = 1 (positive Z when facing South, but we need -Z)
-  float dir_x = -sinf(yaw_rad);  // Negative because yaw 0 should point -Z
-  float dir_z = -cosf(yaw_rad);  // Negative because yaw 0 should point -Z
-  
-  // Calculate vector to chunk
-  float dist_sq = dx * dx + dz * dz;
-  float dist = sqrtf(dist_sq);
-  
-  if (dist == 0) return 1;
-  
-  float chunk_x = dx / dist;
-  float chunk_z = dz / dist;
-  
-  // Calculate dot product to get cosine of angle between vectors
-  float cos_angle = dir_x * chunk_x + dir_z * chunk_z;
-  
-  // Convert cone half-angle to radians and calculate threshold
-  float cone_rad = VIEW_CONE_HALF_ANGLE * 3.14159265359f / 180.0f;
-  float cos_threshold = cosf(cone_rad);
-  
-  // Chunk is in cone if the angle is within the cone
-  return cos_angle >= cos_threshold;
-}
-
 /**
  * Routes an incoming packet to its packet handler or procedure.
  *
@@ -402,12 +363,12 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
 
         sc_setCenterChunk(client_fd, _x, _z);
 
-        // Load chunks in a radius around the player, filtered by view cone
+        // Load chunks in a radius around the player
         for (int dz = -VIEW_DISTANCE; dz <= VIEW_DISTANCE && sent_this_tick < chunks_per_tick; dz++) {
           for (int dx = -VIEW_DISTANCE; dx <= VIEW_DISTANCE && sent_this_tick < chunks_per_tick; dx++) {
             int check_x = _x + dx;
             int check_z = _z + dz;
-            if (!isChunkVisited(player, check_x, check_z) && isChunkInCone(player, check_x, check_z)) {
+            if (!isChunkVisited(player, check_x, check_z)) {
               sc_chunkDataAndUpdateLight(client_fd, check_x, check_z);
               markChunkVisited(player, check_x, check_z);
               #ifdef DEV_LOG_CHUNK_GENERATION
