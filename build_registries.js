@@ -82,6 +82,18 @@ const blockWhitelist = [
   "ice",
   "short_grass",
   "sugar_cane",
+  // Doors
+  "oak_door",
+  "spruce_door",
+  "birch_door",
+  "jungle_door",
+  "acacia_door",
+  "cherry_door",
+  "dark_oak_door",
+  "pale_oak_door",
+  "mangrove_door",
+  "bamboo_door",
+  "iron_door",
 ];
 
 // Supported biomes

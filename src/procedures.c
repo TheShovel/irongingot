@@ -508,8 +508,14 @@ uint8_t getBlockChange (short x, uint8_t y, short z) {
       if (block_changes[i].block == B_chest) i += 14;
     #endif
     #ifdef ALLOW_DOORS
-      // Skip door state data
-      if (isDoorBlock(block_changes[i].block)) i += 2;
+      // Skip door upper half and state data
+      if (isDoorBlock(block_changes[i].block)) {
+        // Check if upper half matches before skipping
+        if (block_changes[i + 1].x == x && block_changes[i + 1].y == y && block_changes[i + 1].z == z) {
+          return block_changes[i + 1].block;
+        }
+        i += 2;
+      }
     #endif
   }
   return 0xFF;
@@ -1533,9 +1539,44 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
   bumpToolDurability(player);
 
   #ifdef ALLOW_DOORS
-  // If mining a door, also break the upper half
+  // If mining a door, also break the other half and clear state data
   if (isDoorBlock(block)) {
-    makeBlockChange(x, y + 1, z, 0);
+    // Check if this is the upper half of a door
+    uint8_t is_upper_half = 0;
+    short door_x = x;
+    uint8_t door_y = y;
+    short door_z = z;
+    
+    // Search for a door lower half at y-1
+    for (int i = 0; i < block_changes_count; i ++) {
+      if (!isDoorBlock(block_changes[i].block)) continue;
+      if (block_changes[i].x == x && block_changes[i].y == y - 1 && block_changes[i].z == z) {
+        // This is the upper half, use lower half's y
+        is_upper_half = 1;
+        door_y = y - 1;
+        break;
+      }
+    }
+    
+    // Break the other half
+    if (is_upper_half) {
+      makeBlockChange(x, y - 1, z, 0);  // Break lower half
+    } else {
+      makeBlockChange(x, y + 1, z, 0);  // Break upper half
+    }
+    
+    // Find and clear the door state entry
+    for (int i = 0; i < block_changes_count; i ++) {
+      if (!isDoorBlock(block_changes[i].block)) continue;
+      if (block_changes[i].x == door_x && block_changes[i].y == door_y && block_changes[i].z == door_z) {
+        // Clear the state entry (i + 2)
+        block_changes[i + 2].block = 0xFF;
+        #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
+        writeBlockChangesToDisk(i + 2, i + 2);
+        #endif
+        break;
+      }
+    }
     // Give door item (only once for the whole door)
     if (item) {
       #ifdef ENABLE_PICKUP_ANIMATION
@@ -1768,13 +1809,29 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       }
     }
 
-    // Calculate door direction based on player facing
-    // Player yaw: -128 to 127, where 0 is South, -64 is East, 64 is West, 128/-128 is North
+    // Calculate door direction based on placement context
+    // Direction: 0=north, 1=east, 2=south, 3=west
+    // This represents which way the door "faces" (the side the hinge is NOT on)
     uint8_t direction;
-    if (player->yaw >= -64 && player->yaw < 0) direction = 0;      // North
-    else if (player->yaw >= 0 && player->yaw < 64) direction = 1;  // East
-    else if (player->yaw >= 64 || player->yaw < -96) direction = 2; // South
-    else direction = 3;                                             // West
+    
+    if (face == 0 || face == 1) {
+      // Clicked on bottom or top face - use player facing
+      // Player yaw: -128 to 127, where 0 is South, -64 is East, 64 is West, 128/-128 is North
+      if (player->yaw >= -64 && player->yaw < 0) direction = 0;      // Facing North
+      else if (player->yaw >= 0 && player->yaw < 64) direction = 1;  // Facing East
+      else if (player->yaw >= 64 || player->yaw < -96) direction = 2; // Facing South
+      else direction = 3;                                             // Facing West
+    } else {
+      // Clicked on side face - door faces perpendicular to the face
+      // Face: 2=north(-z), 3=south(+z), 4=west(-x), 5=east(+x)
+      switch (face) {
+        case 2: direction = 2; break;  // Clicked north face, door faces south
+        case 3: direction = 0; break;  // Clicked south face, door faces north
+        case 4: direction = 1; break;  // Clicked west face, door faces east
+        case 5: direction = 3; break;  // Clicked east face, door faces west
+        default: direction = 0; break;
+      }
+    }
 
     // Check if the block's placement conditions are met
     if (
@@ -1800,7 +1857,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
         #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
         writeBlockChangesToDisk(i + 2, i + 2);
         #endif
-        
+
         // Send door updates with proper state to all players
         for (int j = 0; j < MAX_PLAYERS; j ++) {
           if (player_data[j].client_fd == -1) continue;

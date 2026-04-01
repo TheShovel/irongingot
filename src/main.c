@@ -756,6 +756,9 @@ int main () {
       ); i ++) {
         if (block_changes[i].block == 0xFF) continue;
         if (block_changes[i].block == B_chest) i += 14;
+        #ifdef ALLOW_DOORS
+        if (isDoorBlock(block_changes[i].block)) i += 2;
+        #endif
         if (i >= block_changes_count) block_changes_count = i + 1;
       }
       // Update data on disk
