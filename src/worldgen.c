@@ -75,10 +75,11 @@ uint8_t getChunkBiome (short x, short z) {
   }
   
   // Map cubiomes IDs to our registry IDs (W_ constants generated from build_registries.js)
+  // Ocean biomes are remapped to land biomes for a fully terrestrial world
   switch (biomeID) {
-    case ocean: return W_ocean;
+    case ocean: return W_plains;  // Ocean → Plains
     case plains: return W_plains;
-    case sunflower_plains: return W_plains;
+    case sunflower_plains: return W_sunflower_plains;
     case desert: return W_desert;
     case desert_lakes: return W_desert;
     case windswept_hills: return W_windswept_hills;
@@ -88,18 +89,18 @@ uint8_t getChunkBiome (short x, short z) {
     case taiga_mountains: return W_windswept_hills;
     case swamp: return W_swamp;
     case swamp_hills: return W_swamp;
-    case river: return W_river;
-    case frozen_ocean: return W_frozen_ocean;
-    case frozen_river: return W_frozen_river;
+    case river: return W_plains;  // River → Plains
+    case frozen_ocean: return W_snowy_plains;  // Frozen Ocean → Snowy Plains
+    case frozen_river: return W_snowy_plains;  // Frozen River → Snowy Plains
     case ice_spikes: return W_snowy_plains;
-    case beach: return W_beach;
+    case beach: return W_plains;  // Beach → Plains
     case desertHills: return W_desert;
     case forestHills: return W_forest;
     case taigaHills: return W_taiga;
     case jungle: return W_jungle;
 
     case modified_jungle: return W_jungle;
-    case deep_ocean: return W_deep_ocean;
+    case deep_ocean: return W_plains;  // Deep Ocean → Plains
     case birch_forest: return W_birch_forest;
     case tall_birch_forest: return W_birch_forest;
     case dark_forest: return W_dark_forest;
@@ -108,14 +109,14 @@ uint8_t getChunkBiome (short x, short z) {
     case shattered_savanna: return W_savanna;
     case badlands: return W_badlands;
     case eroded_badlands: return W_eroded_badlands;
-    case mangrove_swamp: return W_mangrove_swamp;
+    case mangrove_swamp: return W_swamp;  // Mangrove Swamp → Swamp
     case meadow: return W_meadow;
 
     default:
         // Use isSnowy helper from cubiomes
         if (isSnowy(biomeID)) return W_snowy_plains;
-        if (isDeepOcean(biomeID)) return W_deep_ocean;
-        if (isOceanic(biomeID)) return W_ocean;
+        if (isDeepOcean(biomeID)) return W_plains;  // Deep Ocean → Plains
+        if (isOceanic(biomeID)) return W_plains;  // Ocean → Plains
         if (isMesa(biomeID)) return W_badlands;
         return W_plains;
   }
@@ -165,11 +166,7 @@ static uint8_t getHeightAtRaw (int x, int z) {
     else if (biome == W_snowy_slopes) { base = 105.0; scale = 90.0; } \
     else if (biome == W_grove) { base = 90.0; scale = 60.0; } \
     else if (biome == W_cherry_grove) { base = 85.0; scale = 35.0; } \
-    else if (biome == W_ocean || biome == W_frozen_ocean) { base = 38.0; scale = 15.0; } \
-    else if (biome == W_deep_ocean) { base = 30.0; scale = 18.0; } \
-    else if (biome == W_river || biome == W_frozen_river) { base = 58.0; scale = 3.0; } \
-    else if (biome == W_beach) { base = 60.0; scale = 3.0; } \
-    else if (biome == W_mangrove_swamp || biome == W_swamp) { base = 61.0; scale = 4.0; } \
+    else if (biome == W_swamp) { base = 61.0; scale = 4.0; } \
     else if (biome == W_meadow) { base = 90.0; scale = 45.0; } \
     else if (biome == W_forest || biome == W_birch_forest || biome == W_dark_forest) { base = 70.0; scale = 25.0; } \
     else if (biome == W_flower_forest) { base = 75.0; scale = 30.0; } \
@@ -211,12 +208,6 @@ static uint8_t getHeightAtRaw (int x, int z) {
                          b11 == W_snowy_slopes || b11 == W_grove ||
                          b11 == W_windswept_forest || b11 == W_windswept_savanna);
 
-  // Check if this is an ocean biome
-  uint8_t is_ocean = (b00 == W_ocean || b00 == W_deep_ocean || b00 == W_frozen_ocean ||
-                      b10 == W_ocean || b10 == W_deep_ocean || b10 == W_frozen_ocean ||
-                      b01 == W_ocean || b01 == W_deep_ocean || b01 == W_frozen_ocean ||
-                      b11 == W_ocean || b11 == W_deep_ocean || b11 == W_frozen_ocean);
-
   // Check if this is a forest biome (for forest mountains)
   uint8_t is_forest = (b00 == W_forest || b00 == W_birch_forest || b00 == W_dark_forest || b00 == W_flower_forest ||
                        b10 == W_forest || b10 == W_birch_forest || b10 == W_dark_forest || b10 == W_flower_forest ||
@@ -240,30 +231,6 @@ static uint8_t getHeightAtRaw (int x, int z) {
 
     // Extra detail for rugged mountain surfaces (reduced)
     base_height += detail * (5.0 + mountain_factor * 10.0);
-  }
-
-  // Ocean biomes: generate hills that rise above water level
-  if (is_ocean && !is_mountain) {
-    // Sample ocean hill noise (low frequency for large underwater ridges)
-    double ocean_hill = octave_sample(&mountain_noise, x * 0.008, 0, z * 0.008);
-
-    // Normalize to [0, 1]
-    double ocean_hill_factor = (ocean_hill + 1.0) / 2.0;
-
-    // Ocean hills: some hills should rise above sea level (63)
-    // Deep ocean has taller hills to reach above water
-    double ocean_hill_height = (b00 == W_deep_ocean) ? 35.0 : 28.0;
-
-    // Only the highest hills (top 30%) break the surface
-    if (ocean_hill_factor > 0.7) {
-      // Scale the hill to potentially reach above sea level
-      double hill_bonus = (ocean_hill_factor - 0.7) * ocean_hill_height * 3.33;
-      base_height += hill_bonus;
-      scale += 5.0;
-    }
-
-    // Add extra detail for underwater terrain variation
-    base_height += detail * 3.0;
   }
 
   // Forest biomes: add mountains and hills for more dramatic terrain
@@ -1432,28 +1399,14 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
   // Handle surface-level terrain (the very topmost blocks)
   if (height >= 63) {
     if (y == height) {
-      if (anchor.biome == W_mangrove_swamp) return B_mud;
+      if (anchor.biome == W_swamp) return B_mud;
       if (anchor.biome == W_desert) return B_sand;
-      if (anchor.biome == W_beach) return B_sand;
-      if (anchor.biome == W_ocean || anchor.biome == W_deep_ocean || 
-          anchor.biome == W_frozen_ocean) return B_gravel;
       return B_grass_block;
     }
     // Snow layer on top of grass in snowy biomes
     if (anchor.biome == W_snowy_plains || anchor.biome == W_snowy_taiga) {
       if (y == height + 1) return B_snow;
     }
-  }
-  
-  // Handle ocean floor (below sea level)
-  if (height < 63 && y == height && 
-      (anchor.biome == W_ocean || anchor.biome == W_deep_ocean || 
-       anchor.biome == W_frozen_ocean || anchor.biome == W_river || 
-       anchor.biome == W_frozen_river)) {
-    // Ocean floors use gravel and sand mix
-    uint8_t floor_hash = (anchor.hash >> (x + z)) & 255;
-    if (floor_hash < 100) return B_gravel;
-    return B_sand;
   }
 
   // Mountain terrain is generated through height map - no additional cliff structures needed
@@ -1480,26 +1433,40 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
   // Handle the space between stone and surface
   if (y <= height) {
     if (anchor.biome == W_desert) return B_sandstone;
-    if (anchor.biome == W_mangrove_swamp) return B_mud;
-    if (anchor.biome == W_beach && height > 64) return B_sandstone;
-    // Ocean and river biomes have sand/gravel below the floor
-    if (anchor.biome == W_ocean || anchor.biome == W_deep_ocean || 
-        anchor.biome == W_frozen_ocean || anchor.biome == W_river || 
-        anchor.biome == W_frozen_river) {
-      uint8_t sub_hash = (anchor.hash >> (x + y + z)) & 255;
-      if (sub_hash < 80) return B_dirt;
-      if (sub_hash < 160) return B_gravel;
-      return B_sand;
-    }
+    if (anchor.biome == W_swamp) return B_mud;
     return B_dirt;
   }
-  // If all else failed, but we're below sea level, generate water (or ice)
-  if (y == 63 && anchor.biome == W_snowy_plains) return B_ice;
-  if (y < 64) return B_water;
+  // Below sea level - generate water with sand/gravel floor
+  if (y < 64) {
+    // Ice on top in snowy biomes
+    if (y == 63 && anchor.biome == W_snowy_plains) return B_ice;
+    
+    // Sand/gravel floor at the bottom (1-3 blocks thick)
+    if (y <= height + 2) {
+      uint8_t floor_hash = (anchor.hash >> (x + y + z)) & 255;
+      if (y == height + 1) {
+        // Top floor layer - mostly sand
+        if (floor_hash < 200) return B_sand;
+        return B_gravel;
+      } else if (y == height + 2) {
+        // Middle floor layer - mix
+        if (floor_hash < 100) return B_sand;
+        if (floor_hash < 180) return B_gravel;
+        return B_dirt;
+      } else {
+        // Bottom floor layer - mostly gravel/dirt
+        if (floor_hash < 50) return B_sand;
+        if (floor_hash < 150) return B_gravel;
+        return B_dirt;
+      }
+    }
+    
+    // Water above the floor
+    return B_water;
+  }
 
   // For everything else, fall back to air
   return B_air;
-
 }
 
 ChunkFeature getFeatureFromAnchor (ChunkAnchor anchor) {
@@ -1515,7 +1482,7 @@ ChunkFeature getFeatureFromAnchor (ChunkAnchor anchor) {
   //  firstly, it ensures that trees don't cross chunk boundaries;
   //  secondly, it reduces overall feature count. This is favorable
   //  everywhere except for swamps, which are otherwise very boring.
-  if (anchor.biome != W_mangrove_swamp) {
+  if (anchor.biome != W_swamp) {
     if (feature.x < 3 || feature.x > CHUNK_SIZE - 3) skip_feature = true;
     else if (feature.z < 3 || feature.z > CHUNK_SIZE - 3) skip_feature = true;
   }
