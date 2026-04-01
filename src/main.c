@@ -61,6 +61,29 @@ static void markChunkVisited(PlayerData *player, int x, int z) {
   player->visited_next = (player->visited_next + 1) % VISITED_HISTORY;
 }
 
+// Check if chunk is within player's view distance from a reference position
+static int isChunkInViewDistance(int chunk_x, int chunk_z, int player_chunk_x, int player_chunk_z, int view_distance) {
+  int dx = chunk_x - player_chunk_x;
+  int dz = chunk_z - player_chunk_z;
+  return (dx >= -view_distance && dx <= view_distance && dz >= -view_distance && dz <= view_distance);
+}
+
+// Clear visited chunks that are now outside view distance
+// This allows re-sending chunks when player returns to an area
+static void clearDistantVisitedChunks(PlayerData *player, int center_x, int center_z, int view_distance) {
+  for (int i = 0; i < VISITED_HISTORY; i++) {
+    int vx = player->visited_x[i];
+    int vz = player->visited_z[i];
+    // Skip invalid entries
+    if (vx == 32767 && vz == 32767) continue;
+    // Clear if outside view distance
+    if (!isChunkInViewDistance(vx, vz, center_x, center_z, view_distance)) {
+      player->visited_x[i] = 32767;
+      player->visited_z[i] = 32767;
+    }
+  }
+}
+
 /**
  * Routes an incoming packet to its packet handler or procedure.
  *
@@ -364,6 +387,11 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
         #endif
 
         sc_setCenterChunk(client_fd, _x, _z);
+
+        // Clear visited chunks that are now outside view distance
+        // This allows re-sending chunks when player returns to an area
+        // Minecraft clients unload chunks outside view distance, so we need to re-send them
+        clearDistantVisitedChunks(player, _x, _z, VIEW_DISTANCE);
 
         // Load chunks in a radius around the player
         for (int dz = -VIEW_DISTANCE; dz <= VIEW_DISTANCE && sent_this_tick < chunks_per_tick; dz++) {
