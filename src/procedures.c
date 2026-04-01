@@ -842,10 +842,25 @@ uint8_t isInstantlyMined (PlayerData *player, uint8_t block) {
 
   return (
     block == B_dead_bush ||
+    block == B_fern ||
     block == B_short_grass ||
     block == B_torch ||
     block == B_lily_pad ||
-    block == B_oak_sapling
+    block == B_oak_sapling ||
+    block == B_dandelion ||
+    block == B_torchflower ||
+    block == B_poppy ||
+    block == B_blue_orchid ||
+    block == B_allium ||
+    block == B_azure_bluet ||
+    block == B_red_tulip ||
+    block == B_orange_tulip ||
+    block == B_white_tulip ||
+    block == B_pink_tulip ||
+    block == B_oxeye_daisy ||
+    block == B_cornflower ||
+    block == B_wither_rose ||
+    block == B_lily_of_the_valley
   );
 
 }
@@ -857,10 +872,25 @@ uint8_t isColumnBlock (uint8_t block) {
     block == B_moss_carpet ||
     block == B_cactus ||
     block == B_short_grass ||
+    block == B_fern ||
     block == B_dead_bush ||
     block == B_sand ||
     block == B_torch ||
-    block == B_oak_sapling
+    block == B_oak_sapling ||
+    block == B_dandelion ||
+    block == B_torchflower ||
+    block == B_poppy ||
+    block == B_blue_orchid ||
+    block == B_allium ||
+    block == B_azure_bluet ||
+    block == B_red_tulip ||
+    block == B_orange_tulip ||
+    block == B_white_tulip ||
+    block == B_pink_tulip ||
+    block == B_oxeye_daisy ||
+    block == B_cornflower ||
+    block == B_wither_rose ||
+    block == B_lily_of_the_valley
   );
 }
 
@@ -873,8 +903,23 @@ uint8_t isPassableBlock (uint8_t block) {
     block == B_snow ||
     block == B_moss_carpet ||
     block == B_short_grass ||
+    block == B_fern ||
     block == B_dead_bush ||
-    block == B_torch
+    block == B_torch ||
+    block == B_dandelion ||
+    block == B_torchflower ||
+    block == B_poppy ||
+    block == B_blue_orchid ||
+    block == B_allium ||
+    block == B_azure_bluet ||
+    block == B_red_tulip ||
+    block == B_orange_tulip ||
+    block == B_white_tulip ||
+    block == B_pink_tulip ||
+    block == B_oxeye_daisy ||
+    block == B_cornflower ||
+    block == B_wither_rose ||
+    block == B_lily_of_the_valley
   );
 }
 // Checks whether the given block is non-solid and spawnable
