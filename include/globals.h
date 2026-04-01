@@ -145,6 +145,11 @@
 // could cause bad performance or even crashes during gameplay.
 #define ALLOW_CHESTS
 
+// If defined, allows players to craft and use doors.
+// Doors take up 3 block change slots each (lower half + upper half + state),
+// and require additional checks for placement and interaction.
+#define ALLOW_DOORS
+
 // If defined, enables flight for all players. As a side-effect, allows
 // players to sprint when starving.
 // #define ENABLE_PLAYER_FLIGHT
@@ -281,6 +286,18 @@ typedef struct {
   // Upper 2 bits: panic timer
   uint8_t data;
 } MobData;
+
+#ifdef ALLOW_DOORS
+typedef struct {
+  // Door state flags:
+  // Bit 0: open (0 = closed, 1 = open)
+  // Bit 1: hinge (0 = left, 1 = right)
+  // Bit 2-3: powered state (for redstone)
+  // Bits 4-5: direction (0-3: North, East, South, West)
+  // Bit 6: upper half flag (0 = lower, 1 = upper)
+  uint8_t flags;
+} DoorData;
+#endif
 
 #pragma pack(pop)
 

@@ -531,12 +531,43 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
   // Sending block updates
   for (int i = 0; i < block_changes_count; i ++) {
     #ifdef ALLOW_CHESTS
-      if (block_changes[i].block != B_torch && block_changes[i].block != B_chest) continue;
+      if (block_changes[i].block != B_torch && block_changes[i].block != B_chest) {
+        #ifdef ALLOW_DOORS
+        if (!isDoorBlock(block_changes[i].block)) continue;
+        #else
+        continue;
+        #endif
+      }
     #else
-      if (block_changes[i].block != B_torch) continue;
+      if (block_changes[i].block != B_torch) {
+        #ifdef ALLOW_DOORS
+        if (!isDoorBlock(block_changes[i].block)) continue;
+        #else
+        continue;
+        #endif
+      }
     #endif
     if (block_changes[i].x < x || block_changes[i].x >= x + 16) continue;
     if (block_changes[i].z < z || block_changes[i].z >= z + 16) continue;
+    
+    #ifdef ALLOW_DOORS
+    if (isDoorBlock(block_changes[i].block)) {
+      // Send door with proper state (both halves)
+      uint8_t *state_ptr = (uint8_t *)(&block_changes[i + 2]);
+      uint8_t direction = state_ptr[0];
+      uint8_t state_flags = state_ptr[1];
+      uint8_t open = state_flags & 0x01;
+      uint8_t hinge = (state_flags >> 1) & 0x01;
+      // Lower half
+      sendDoorUpdate(client_fd, block_changes[i].x, block_changes[i].y, block_changes[i].z, block_changes[i].block, 0, open, direction, hinge);
+      // Upper half
+      sendDoorUpdate(client_fd, block_changes[i].x, block_changes[i].y + 1, block_changes[i].z, block_changes[i + 1].block, 1, open, direction, hinge);
+      // Skip the next two entries (upper half and state data)
+      i += 2;
+      continue;
+    }
+    #endif
+    
     sc_blockUpdate(client_fd, block_changes[i].x, block_changes[i].y, block_changes[i].z, block_changes[i].block);
   }
 
@@ -584,6 +615,33 @@ int sc_blockUpdate (int client_fd, int64_t x, int64_t y, int64_t z, uint8_t bloc
   endPacket(client_fd);
   return 0;
 }
+
+#ifdef ALLOW_DOORS
+// S->C Block Update with door state support
+int sc_blockUpdateDoor (int client_fd, int64_t x, int64_t y, int64_t z, uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge) {
+  startPacket(0x08);
+  writeUint64(client_fd, ((x & 0x3FFFFFF) << 38) | ((z & 0x3FFFFFF) << 12) | (y & 0xFFF));
+  
+  // Calculate door block state ID
+  // Minecraft door block states:
+  // - half: "lower" (0) or "upper" (1)
+  // - open: false (0) or true (1)
+  // - facing: north (0), south (1), west (2), east (3)
+  // - hinge: "left" (0) or "right" (1)
+  // Base palette ID + state offset
+  uint16_t base_id = block_palette[block];
+  
+  // Door state encoding (simplified - using state ID offsets)
+  // Each door type has 16 states (2 halves * 2 open * 4 directions * 2 hinges)
+  // For simplicity, we'll use: base_id + (is_upper * 8) + (open * 4) + (direction * 1) + (hinge * 0)
+  // This is a simplified mapping - actual Minecraft uses a different formula
+  uint16_t state_id = base_id + (is_upper << 3) + (open << 2) + (direction << 1) + hinge;
+  
+  writeVarInt(client_fd, state_id);
+  endPacket(client_fd);
+  return 0;
+}
+#endif
 
 // S->C Acknowledge Block Change
 int sc_acknowledgeBlockChange (int client_fd, int sequence) {

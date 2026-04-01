@@ -29,7 +29,8 @@
       "Bash(sed *)",
       "Bash(lsof *)",
       "Bash(python3 *)",
-      "Bash(node *)"
+      "Bash(node *)",
+      "Bash(find *)"
     ]
   },
   "$version": 3

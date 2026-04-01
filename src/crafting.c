@@ -270,6 +270,125 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
       }
       break;
 
+    case 6:
+      // Door recipes (2x3 pattern of planks)
+      switch (first_item) {
+        case I_oak_planks:
+          if (
+            first_col == 0 && first_row == 0 &&
+            player->craft_items[1] == I_oak_planks &&
+            player->craft_items[3] == I_oak_planks &&
+            player->craft_items[4] == I_oak_planks &&
+            player->craft_items[6] == I_oak_planks &&
+            player->craft_items[7] == I_oak_planks
+          ) {
+            *item = I_oak_door;
+            *count = 3;
+            return;
+          }
+          break;
+        case I_spruce_planks:
+          if (
+            first_col == 0 && first_row == 0 &&
+            player->craft_items[1] == I_spruce_planks &&
+            player->craft_items[3] == I_spruce_planks &&
+            player->craft_items[4] == I_spruce_planks &&
+            player->craft_items[6] == I_spruce_planks &&
+            player->craft_items[7] == I_spruce_planks
+          ) {
+            *item = I_spruce_door;
+            *count = 3;
+            return;
+          }
+          break;
+        case I_birch_planks:
+          if (
+            first_col == 0 && first_row == 0 &&
+            player->craft_items[1] == I_birch_planks &&
+            player->craft_items[3] == I_birch_planks &&
+            player->craft_items[4] == I_birch_planks &&
+            player->craft_items[6] == I_birch_planks &&
+            player->craft_items[7] == I_birch_planks
+          ) {
+            *item = I_birch_door;
+            *count = 3;
+            return;
+          }
+          break;
+        case I_jungle_planks:
+          if (
+            first_col == 0 && first_row == 0 &&
+            player->craft_items[1] == I_jungle_planks &&
+            player->craft_items[3] == I_jungle_planks &&
+            player->craft_items[4] == I_jungle_planks &&
+            player->craft_items[6] == I_jungle_planks &&
+            player->craft_items[7] == I_jungle_planks
+          ) {
+            *item = I_jungle_door;
+            *count = 3;
+            return;
+          }
+          break;
+        case I_acacia_planks:
+          if (
+            first_col == 0 && first_row == 0 &&
+            player->craft_items[1] == I_acacia_planks &&
+            player->craft_items[3] == I_acacia_planks &&
+            player->craft_items[4] == I_acacia_planks &&
+            player->craft_items[6] == I_acacia_planks &&
+            player->craft_items[7] == I_acacia_planks
+          ) {
+            *item = I_acacia_door;
+            *count = 3;
+            return;
+          }
+          break;
+        case I_cherry_planks:
+          if (
+            first_col == 0 && first_row == 0 &&
+            player->craft_items[1] == I_cherry_planks &&
+            player->craft_items[3] == I_cherry_planks &&
+            player->craft_items[4] == I_cherry_planks &&
+            player->craft_items[6] == I_cherry_planks &&
+            player->craft_items[7] == I_cherry_planks
+          ) {
+            *item = I_cherry_door;
+            *count = 3;
+            return;
+          }
+          break;
+        case I_dark_oak_planks:
+          if (
+            first_col == 0 && first_row == 0 &&
+            player->craft_items[1] == I_dark_oak_planks &&
+            player->craft_items[3] == I_dark_oak_planks &&
+            player->craft_items[4] == I_dark_oak_planks &&
+            player->craft_items[6] == I_dark_oak_planks &&
+            player->craft_items[7] == I_dark_oak_planks
+          ) {
+            *item = I_dark_oak_door;
+            *count = 3;
+            return;
+          }
+          break;
+        case I_bamboo_planks:
+          if (
+            first_col == 0 && first_row == 0 &&
+            player->craft_items[1] == I_bamboo_planks &&
+            player->craft_items[3] == I_bamboo_planks &&
+            player->craft_items[4] == I_bamboo_planks &&
+            player->craft_items[6] == I_bamboo_planks &&
+            player->craft_items[7] == I_bamboo_planks
+          ) {
+            *item = I_bamboo_door;
+            *count = 3;
+            return;
+          }
+          break;
+        default: break;
+      }
+      break;
+
     case 7:
       // Legging recipes
       if (identical && player->craft_items[4] == 0 && player->craft_items[7] == 0) {

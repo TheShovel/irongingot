@@ -507,6 +507,10 @@ uint8_t getBlockChange (short x, uint8_t y, short z) {
       // Skip chest contents
       if (block_changes[i].block == B_chest) i += 14;
     #endif
+    #ifdef ALLOW_DOORS
+      // Skip door state data
+      if (isDoorBlock(block_changes[i].block)) i += 2;
+    #endif
   }
   return 0xFF;
 }
@@ -575,12 +579,31 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
         for (int j = 1; j < 15; j ++) block_changes[i + j].block = 0xFF;
       }
       #endif
+      #ifdef ALLOW_DOORS
+      // When replacing doors, clear following 2 entries too (upper half + state)
+      if (isDoorBlock(block_changes[i].block)) {
+        block_changes[i + 1].block = 0xFF;
+        block_changes[i + 2].block = 0xFF;
+      }
+      #endif
       if (is_base_block) block_changes[i].block = 0xFF;
       else {
         #ifdef ALLOW_CHESTS
         // When placing chests, just unallocate the target block and fall
         // through to the chest-specific routine below.
         if (block == B_chest) {
+          block_changes[i].block = 0xFF;
+          if (first_gap > i) first_gap = i;
+          #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
+          writeBlockChangesToDisk(i, i);
+          #endif
+          break;
+        }
+        #endif
+        #ifdef ALLOW_DOORS
+        // When placing doors, just unallocate the target block and fall
+        // through to the door-specific routine below.
+        if (isDoorBlock(block)) {
           block_changes[i].block = 0xFF;
           if (first_gap > i) first_gap = i;
           #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
@@ -668,6 +691,78 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
       if (x < 0 && x % 16 != 0) chunk_x_chest--;
       if (z < 0 && z % 16 != 0) chunk_z_chest--;
       invalidate_cached_chunk(chunk_x_chest, chunk_z_chest);
+      return 0;
+    }
+    // If we're here, no changes were made
+    failBlockChange(x, y, z, block);
+    return 1;
+  }
+  #endif
+
+  #ifdef ALLOW_DOORS
+  if (isDoorBlock(block)) {
+    // Doors require 3 entries total: lower half, upper half, and state data
+    // We need to find a continuous gap that's at least 3 slots wide
+    int last_real_entry = first_gap - 1;
+    for (int i = first_gap; i <= block_changes_count + 3; i ++) {
+      #ifdef INFINITE_BLOCK_CHANGES
+      // Grow array if we're running out of space
+      if (i >= block_changes_capacity - 3) {
+        int new_capacity = block_changes_capacity * 2;
+        BlockChange *new_block_changes = (BlockChange *)realloc(block_changes, new_capacity * sizeof(BlockChange));
+        if (!new_block_changes) {
+          failBlockChange(x, y, z, block);
+          return 1;
+        }
+        block_changes = new_block_changes;
+        // Initialize new entries as unallocated
+        for (int j = block_changes_capacity; j < new_capacity; j ++) {
+          block_changes[j].block = 0xFF;
+        }
+        printf("Block changes expanded: %d -> %d\n", block_changes_capacity, new_capacity);
+        fflush(stdout);
+        block_changes_capacity = new_capacity;
+      }
+      #else
+      if (i >= MAX_BLOCK_CHANGES) break; // No more space, trigger failBlockChange
+      #endif
+
+      if (block_changes[i].block != 0xFF) {
+        last_real_entry = i;
+        continue;
+      }
+      if (i - last_real_entry != 3) continue;
+      // A wide enough gap has been found, assign the door
+      // Slot 1: Lower half
+      block_changes[last_real_entry + 1].x = x;
+      block_changes[last_real_entry + 1].y = y;
+      block_changes[last_real_entry + 1].z = z;
+      block_changes[last_real_entry + 1].block = block;
+      // Slot 2: Upper half (y + 1)
+      block_changes[last_real_entry + 2].x = x;
+      block_changes[last_real_entry + 2].y = y + 1;
+      block_changes[last_real_entry + 2].z = z;
+      block_changes[last_real_entry + 2].block = block;
+      // Slot 3: Door state data (direction, open/closed, hinge)
+      // Store direction in x, state in z
+      block_changes[last_real_entry + 3].x = 0;  // Direction (0-3)
+      block_changes[last_real_entry + 3].y = 0;  // State flags
+      block_changes[last_real_entry + 3].z = z;  // Reference to original z
+      block_changes[last_real_entry + 3].block = 0;  // Marker for door state
+      // Extend future search range if necessary
+      if (i >= block_changes_count) {
+        block_changes_count = i + 1;
+      }
+      // Write changes to disk (if applicable)
+      #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
+      writeBlockChangesToDisk(last_real_entry + 1, last_real_entry + 3);
+      #endif
+      // Invalidate cached chunk so it regenerates with the new block change
+      int chunk_x_door = x / 16;
+      int chunk_z_door = z / 16;
+      if (x < 0 && x % 16 != 0) chunk_x_door--;
+      if (z < 0 && z % 16 != 0) chunk_z_door--;
+      invalidate_cached_chunk(chunk_x_door, chunk_z_door);
       return 0;
     }
     // If we're here, no changes were made
@@ -895,6 +990,8 @@ uint8_t isColumnBlock (uint8_t block) {
 }
 
 // Checks whether the given block is non-solid
+// Note: This function doesn't take coordinates, so for doors we check the block type only
+// For coordinate-aware passability, use isDoorOpen() separately
 uint8_t isPassableBlock (uint8_t block) {
   return (
     block == B_air ||
@@ -1027,6 +1124,122 @@ uint8_t getItemStackSize (uint16_t item) {
 
   return 64;
 }
+
+#ifdef ALLOW_DOORS
+// Checks whether the given block is a door block
+uint8_t isDoorBlock (uint8_t block) {
+  return (
+    block == B_oak_door ||
+    block == B_spruce_door ||
+    block == B_birch_door ||
+    block == B_jungle_door ||
+    block == B_acacia_door ||
+    block == B_cherry_door ||
+    block == B_dark_oak_door ||
+    block == B_pale_oak_door ||
+    block == B_mangrove_door ||
+    block == B_bamboo_door
+  );
+}
+
+// Checks whether the given item is a door item
+uint8_t isDoorItem (uint16_t item) {
+  return (
+    item == I_oak_door ||
+    item == I_spruce_door ||
+    item == I_birch_door ||
+    item == I_jungle_door ||
+    item == I_acacia_door ||
+    item == I_cherry_door ||
+    item == I_dark_oak_door ||
+    item == I_pale_oak_door ||
+    item == I_mangrove_door ||
+    item == I_bamboo_door
+  );
+}
+
+// Returns the door item corresponding to the given door block
+uint16_t getDoorItemFromBlock (uint8_t block) {
+  switch (block) {
+    case B_oak_door: return I_oak_door;
+    case B_spruce_door: return I_spruce_door;
+    case B_birch_door: return I_birch_door;
+    case B_jungle_door: return I_jungle_door;
+    case B_acacia_door: return I_acacia_door;
+    case B_cherry_door: return I_cherry_door;
+    case B_dark_oak_door: return I_dark_oak_door;
+    case B_pale_oak_door: return I_pale_oak_door;
+    case B_mangrove_door: return I_mangrove_door;
+    case B_bamboo_door: return I_bamboo_door;
+    default: return 0;
+  }
+}
+
+// Returns the door block corresponding to the given door item
+uint8_t getDoorBlockFromItem (uint16_t item) {
+  switch (item) {
+    case I_oak_door: return B_oak_door;
+    case I_spruce_door: return B_spruce_door;
+    case I_birch_door: return B_birch_door;
+    case I_jungle_door: return B_jungle_door;
+    case I_acacia_door: return B_acacia_door;
+    case I_cherry_door: return B_cherry_door;
+    case I_dark_oak_door: return B_dark_oak_door;
+    case I_pale_oak_door: return B_pale_oak_door;
+    case I_mangrove_door: return B_mangrove_door;
+    case I_bamboo_door: return B_bamboo_door;
+    default: return 0;
+  }
+}
+
+// Checks if a door at the given coordinates is open
+// Returns 1 if open, 0 if closed or not a door
+uint8_t isDoorOpen (short x, uint8_t y, short z) {
+  for (int i = 0; i < block_changes_count; i ++) {
+    if (!isDoorBlock(block_changes[i].block)) continue;
+    // Check if this matches the door position (lower or upper half)
+    if (block_changes[i].x == x && block_changes[i].z == z) {
+      if (block_changes[i].y == y || block_changes[i].y == y - 1) {
+        // Found the door, check state
+        uint8_t *state_ptr = (uint8_t *)(&block_changes[i + 2]);
+        return state_ptr[1] & 0x01;  // Return bit 0 (open/closed)
+      }
+    }
+  }
+  return 0;  // Door not found or closed
+}
+
+// Get door state ID for network packet
+// Returns the Minecraft block state ID for the given door configuration
+uint16_t getDoorStateId (uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge) {
+  // Get base palette ID for this door type (lower, closed, north, left, unpowered)
+  uint16_t base_id = block_palette[block];
+  
+  // Minecraft door state offset formula (derived from actual registry):
+  // facing: north=0, south=16, west=32, east=48
+  // hinge: left=0, right=4
+  // open: closed=0, open=-2
+  // half: lower=0, upper=-8
+  // Note: powered is always false (0 offset) for player-placed doors
+  
+  // Direction mapping (player yaw: 0=north, 1=east, 2=south, 3=west)
+  uint16_t facing_offset[4] = {0, 48, 16, 32};  // north, east, south, west
+  int16_t offset = facing_offset[direction];
+  if (hinge) offset += 4;      // right hinge
+  if (open) offset -= 2;       // open
+  if (is_upper) offset -= 8;   // upper half
+  
+  return base_id + offset;
+}
+
+// Send door block update with proper state
+void sendDoorUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge) {
+  startPacket(0x08);
+  writeUint64(client_fd, (((int64_t)x & 0x3FFFFFF) << 38) | (((int64_t)z & 0x3FFFFFF) << 12) | (y & 0xFFF));
+  writeVarInt(client_fd, getDoorStateId(block, is_upper, open, direction, hinge));
+  endPacket(client_fd);
+}
+#endif
 
 // Returns defense points for the given piece of armor
 // If the input item is not armor, returns 0
@@ -1319,6 +1532,21 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
   uint16_t item = getMiningResult(held_item, block);
   bumpToolDurability(player);
 
+  #ifdef ALLOW_DOORS
+  // If mining a door, also break the upper half
+  if (isDoorBlock(block)) {
+    makeBlockChange(x, y + 1, z, 0);
+    // Give door item (only once for the whole door)
+    if (item) {
+      #ifdef ENABLE_PICKUP_ANIMATION
+      playPickupAnimation(player, item, x, y, z);
+      #endif
+      givePlayerItem(player, item, 1);
+    }
+    return;
+  }
+  #endif
+
   if (item) {
     #ifdef ENABLE_PICKUP_ANIMATION
     playPickupAnimation(player, item, x, y, z);
@@ -1417,6 +1645,61 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       return;
     }
     #endif
+    #ifdef ALLOW_DOORS
+    else if (isDoorBlock(target)) {
+      // Find the door in block_changes and toggle its state
+      for (int i = 0; i < block_changes_count; i ++) {
+        if (!isDoorBlock(block_changes[i].block)) continue;
+        // Check if this is the lower half of the door
+        short door_x = block_changes[i].x;
+        uint8_t door_y = block_changes[i].y;
+        short door_z = block_changes[i].z;
+        if (door_x != x || door_z != z) continue;
+
+        // Check if clicking on lower or upper half
+        if (door_y == y) {
+          // Clicked on lower half - proceed
+        } else if (door_y + 1 == y) {
+          // Clicked on upper half - use lower half's y
+        } else {
+          continue;
+        }
+
+        // Find the door state data (3rd slot after door blocks)
+        // State is stored at i + 2
+        uint8_t *state_ptr = (uint8_t *)(&block_changes[i + 2]);
+        uint8_t direction = state_ptr[0];
+        uint8_t state_flags = state_ptr[1];
+
+        // Toggle open/closed state (bit 0)
+        state_flags ^= 0x01;
+        uint8_t open = state_flags & 0x01;
+        uint8_t hinge = (state_flags >> 1) & 0x01;
+
+        // Update state in block_changes
+        state_ptr[0] = direction;
+        state_ptr[1] = state_flags;
+
+        #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
+        writeBlockChangesToDisk(i + 2, i + 2);
+        #endif
+
+        // Broadcast door update to all players with proper state
+        for (int j = 0; j < MAX_PLAYERS; j ++) {
+          if (player_data[j].client_fd == -1) continue;
+          if (player_data[j].flags & 0x20) continue;
+          // Update lower half with new state
+          sendDoorUpdate(player_data[j].client_fd, door_x, door_y, door_z, block_changes[i].block, 0, open, direction, hinge);
+          // Update upper half with new state
+          sendDoorUpdate(player_data[j].client_fd, door_x, door_y + 1, door_z, block_changes[i + 1].block, 1, open, direction, hinge);
+        }
+
+        return;
+      }
+      // Door not found in block_changes, can't interact
+      return;
+    }
+    #endif
   }
 
   // If the selected slot doesn't hold any items, exit
@@ -1466,6 +1749,81 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
   // If the selected item doesn't correspond to a block, exit
   uint8_t block = I_to_B(*item);
   if (block == 0) return;
+
+  // Special handling for door placement
+  #ifdef ALLOW_DOORS
+  if (isDoorBlock(block)) {
+    // Check if there's space above for the upper half
+    if (!isReplaceableBlock(getBlockAt(x, y + 1, z))) {
+      return;
+    }
+    // Doors need a solid block below
+    uint8_t block_below = getBlockAt(x, y - 1, z);
+    if (isReplaceableBlock(block_below) && block_below != block) {
+      // Adjust placement position
+      y -= 1;
+      block_below = getBlockAt(x, y - 1, z);
+      if (isReplaceableBlock(block_below)) {
+        return;  // Can't place door in mid-air
+      }
+    }
+
+    // Calculate door direction based on player facing
+    // Player yaw: -128 to 127, where 0 is South, -64 is East, 64 is West, 128/-128 is North
+    uint8_t direction;
+    if (player->yaw >= -64 && player->yaw < 0) direction = 0;      // North
+    else if (player->yaw >= 0 && player->yaw < 64) direction = 1;  // East
+    else if (player->yaw >= 64 || player->yaw < -96) direction = 2; // South
+    else direction = 3;                                             // West
+
+    // Check if the block's placement conditions are met
+    if (
+      !( // Is player in the way?
+        x == player->x &&
+        (y == player->y || y == player->y + 1) &&
+        z == player->z
+      ) &&
+      isReplaceableBlock(getBlockAt(x, y, z))
+    ) {
+      // Apply server-side block change (this will place both halves)
+      if (makeBlockChange(x, y, z, block)) return;
+
+      // Now update the door state with direction and send updates
+      for (int i = 0; i < block_changes_count; i ++) {
+        if (!isDoorBlock(block_changes[i].block)) continue;
+        if (block_changes[i].x != x || block_changes[i].y != y || block_changes[i].z != z) continue;
+
+        // Found the door, update state
+        uint8_t *state_ptr = (uint8_t *)(&block_changes[i + 2]);
+        state_ptr[0] = direction;  // Store direction
+        state_ptr[1] = 0;          // Closed state, hinge left (bits: open=0, hinge=0)
+        #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
+        writeBlockChangesToDisk(i + 2, i + 2);
+        #endif
+        
+        // Send door updates with proper state to all players
+        for (int j = 0; j < MAX_PLAYERS; j ++) {
+          if (player_data[j].client_fd == -1) continue;
+          if (player_data[j].flags & 0x20) continue;
+          // Lower half (closed, direction, hinge left)
+          sendDoorUpdate(player_data[j].client_fd, x, y, z, block, 0, 0, direction, 0);
+          // Upper half (closed, direction, hinge left)
+          sendDoorUpdate(player_data[j].client_fd, x, y + 1, z, block, 1, 0, direction, 0);
+        }
+        break;
+      }
+
+      // Decrease item amount in selected slot
+      *count -= 1;
+      // Clear item id in slot if amount is zero
+      if (*count == 0) *item = 0;
+
+      // Sync hotbar contents to player
+      sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
+      return;
+    }
+  }
+  #endif
 
   switch (face) {
     case 0: y -= 1; break;

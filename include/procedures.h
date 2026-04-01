@@ -40,6 +40,16 @@ uint8_t isReplaceableBlock (uint8_t block);
 uint32_t isCompostItem (uint16_t item);
 uint8_t getItemStackSize (uint16_t item);
 
+#ifdef ALLOW_DOORS
+uint8_t isDoorBlock (uint8_t block);
+uint8_t isDoorItem (uint16_t item);
+uint16_t getDoorItemFromBlock (uint8_t block);
+uint8_t getDoorBlockFromItem (uint16_t item);
+uint8_t isDoorOpen (short x, uint8_t y, short z);
+uint16_t getDoorStateId (uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge);
+void sendDoorUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge);
+#endif
+
 uint16_t getMiningResult (uint16_t held_item, uint8_t block);
 void bumpToolDurability (PlayerData *player);
 void handlePlayerAction (PlayerData *player, int action, short x, short y, short z);
