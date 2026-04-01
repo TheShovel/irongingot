@@ -6,6 +6,48 @@
 #include "tools.h"
 #include "crafting.h"
 
+// Helper function to check if an item is any type of plank
+uint8_t isPlankItem(uint16_t item) {
+  switch (item) {
+    case I_oak_planks:
+    case I_spruce_planks:
+    case I_birch_planks:
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+// Helper function to get slab item from plank item
+uint16_t getSlabFromPlank(uint16_t plank) {
+  switch (plank) {
+    case I_oak_planks: return I_oak_slab;
+    case I_spruce_planks: return I_spruce_slab;
+    case I_birch_planks: return I_birch_slab;
+    default: return I_oak_slab;  // Fallback for unavailable types
+  }
+}
+
+// Helper function to get stair item from plank item
+uint16_t getStairFromPlank(uint16_t plank) {
+  switch (plank) {
+    case I_oak_planks: return I_oak_stairs;
+    case I_spruce_planks: return I_spruce_stairs;
+    case I_birch_planks: return I_birch_stairs;
+    default: return I_oak_stairs;  // Fallback for unavailable types
+  }
+}
+
+// Helper function to get door item from plank item
+uint16_t getDoorFromPlank(uint16_t plank) {
+  switch (plank) {
+    case I_oak_planks: return I_oak_door;
+    case I_spruce_planks: return I_spruce_door;
+    case I_birch_planks: return I_birch_door;
+    default: return I_oak_door;  // Fallback for unavailable types
+  }
+}
+
 void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
 
   // Exit early if craft_items has been locked
@@ -38,8 +80,20 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
 
     case 1:
       switch (first_item) {
+        // Log to planks recipes
         case I_oak_log: *item = I_oak_planks; *count = 4; return;
-        case I_oak_planks: *item = I_oak_button; *count = 1; return;
+        case I_spruce_log: *item = I_spruce_planks; *count = 4; return;
+        case I_birch_log: *item = I_birch_planks; *count = 4; return;
+        case I_jungle_log: *item = I_jungle_planks; *count = 4; return;
+        case I_acacia_log: *item = I_acacia_planks; *count = 4; return;
+        case I_cherry_log: *item = I_cherry_planks; *count = 4; return;
+        case I_dark_oak_log: *item = I_dark_oak_planks; *count = 4; return;
+        case I_pale_oak_log: *item = I_pale_oak_planks; *count = 4; return;
+        case I_mangrove_log: *item = I_mangrove_planks; *count = 4; return;
+        case I_bamboo_block: *item = I_bamboo_planks; *count = 4; return;
+        case I_crimson_stem: *item = I_crimson_planks; *count = 4; return;
+        case I_warped_stem: *item = I_warped_planks; *count = 4; return;
+        // Block decomposition recipes
         case I_iron_block: *item = I_iron_ingot; *count = 9; return;
         case I_gold_block: *item = I_gold_ingot; *count = 9; return;
         case I_diamond_block: *item = I_diamond; *count = 9; return;
@@ -52,18 +106,14 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
       break;
 
     case 2:
+      // Check for stick recipe (2 planks vertical)
+      if (isPlankItem(first_item) && first_row != 2 && isPlankItem(player->craft_items[first + 3])) {
+        *item = I_stick;
+        *count = 4;
+        return;
+      }
+      // Non-plank case 2 recipes
       switch (first_item) {
-        case I_oak_planks:
-          if (first_col != 2 && player->craft_items[first + 1] == I_oak_planks) {
-            *item = I_oak_pressure_plate;
-            *count = 1;
-            return;
-          } else if (first_row != 2 && player->craft_items[first + 3] == I_oak_planks) {
-            *item = I_stick;
-            *count = 4;
-            return;
-          }
-          break;
         case I_charcoal:
         case I_coal:
           if (first_row != 2 && player->craft_items[first + 3] == I_stick) {
@@ -93,19 +143,25 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
       break;
 
     case 3:
+      // Slab recipes for all plank types (3 planks horizontal = 6 slabs)
+      if (isPlankItem(first_item) && first_col == 0 &&
+          player->craft_items[first + 1] == first_item &&
+          player->craft_items[first + 2] == first_item) {
+        *item = getSlabFromPlank(first_item);
+        *count = 6;
+        return;
+      }
       switch (first_item) {
-        case I_oak_planks:
         case I_cobblestone:
         case I_stone:
         case I_snow_block:
-          // Slab recipes
+          // Non-plank slab recipes
           if (
             first_col == 0 &&
             player->craft_items[first + 1] == first_item &&
             player->craft_items[first + 2] == first_item
           ) {
-            if (first_item == I_oak_planks) *item = I_oak_slab;
-            else if (first_item == I_cobblestone) *item = I_cobblestone_slab;
+            if (first_item == I_cobblestone) *item = I_cobblestone_slab;
             else if (first_item == I_stone) *item = I_stone_slab;
             else if (first_item == I_snow_block) *item = I_snow;
             *count = 6;
@@ -271,121 +327,39 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
       break;
 
     case 6:
-      // Door recipes (2x3 pattern of planks)
-      switch (first_item) {
-        case I_oak_planks:
-          if (
-            first_col == 0 && first_row == 0 &&
-            player->craft_items[1] == I_oak_planks &&
-            player->craft_items[3] == I_oak_planks &&
-            player->craft_items[4] == I_oak_planks &&
-            player->craft_items[6] == I_oak_planks &&
-            player->craft_items[7] == I_oak_planks
-          ) {
-            *item = I_oak_door;
-            *count = 3;
-            return;
-          }
-          break;
-        case I_spruce_planks:
-          if (
-            first_col == 0 && first_row == 0 &&
-            player->craft_items[1] == I_spruce_planks &&
-            player->craft_items[3] == I_spruce_planks &&
-            player->craft_items[4] == I_spruce_planks &&
-            player->craft_items[6] == I_spruce_planks &&
-            player->craft_items[7] == I_spruce_planks
-          ) {
-            *item = I_spruce_door;
-            *count = 3;
-            return;
-          }
-          break;
-        case I_birch_planks:
-          if (
-            first_col == 0 && first_row == 0 &&
-            player->craft_items[1] == I_birch_planks &&
-            player->craft_items[3] == I_birch_planks &&
-            player->craft_items[4] == I_birch_planks &&
-            player->craft_items[6] == I_birch_planks &&
-            player->craft_items[7] == I_birch_planks
-          ) {
-            *item = I_birch_door;
-            *count = 3;
-            return;
-          }
-          break;
-        case I_jungle_planks:
-          if (
-            first_col == 0 && first_row == 0 &&
-            player->craft_items[1] == I_jungle_planks &&
-            player->craft_items[3] == I_jungle_planks &&
-            player->craft_items[4] == I_jungle_planks &&
-            player->craft_items[6] == I_jungle_planks &&
-            player->craft_items[7] == I_jungle_planks
-          ) {
-            *item = I_jungle_door;
-            *count = 3;
-            return;
-          }
-          break;
-        case I_acacia_planks:
-          if (
-            first_col == 0 && first_row == 0 &&
-            player->craft_items[1] == I_acacia_planks &&
-            player->craft_items[3] == I_acacia_planks &&
-            player->craft_items[4] == I_acacia_planks &&
-            player->craft_items[6] == I_acacia_planks &&
-            player->craft_items[7] == I_acacia_planks
-          ) {
-            *item = I_acacia_door;
-            *count = 3;
-            return;
-          }
-          break;
-        case I_cherry_planks:
-          if (
-            first_col == 0 && first_row == 0 &&
-            player->craft_items[1] == I_cherry_planks &&
-            player->craft_items[3] == I_cherry_planks &&
-            player->craft_items[4] == I_cherry_planks &&
-            player->craft_items[6] == I_cherry_planks &&
-            player->craft_items[7] == I_cherry_planks
-          ) {
-            *item = I_cherry_door;
-            *count = 3;
-            return;
-          }
-          break;
-        case I_dark_oak_planks:
-          if (
-            first_col == 0 && first_row == 0 &&
-            player->craft_items[1] == I_dark_oak_planks &&
-            player->craft_items[3] == I_dark_oak_planks &&
-            player->craft_items[4] == I_dark_oak_planks &&
-            player->craft_items[6] == I_dark_oak_planks &&
-            player->craft_items[7] == I_dark_oak_planks
-          ) {
-            *item = I_dark_oak_door;
-            *count = 3;
-            return;
-          }
-          break;
-        case I_bamboo_planks:
-          if (
-            first_col == 0 && first_row == 0 &&
-            player->craft_items[1] == I_bamboo_planks &&
-            player->craft_items[3] == I_bamboo_planks &&
-            player->craft_items[4] == I_bamboo_planks &&
-            player->craft_items[6] == I_bamboo_planks &&
-            player->craft_items[7] == I_bamboo_planks
-          ) {
-            *item = I_bamboo_door;
-            *count = 3;
-            return;
-          }
-          break;
-        default: break;
+      // Door recipes (2x3 pattern of planks) - all plank types
+      if (isPlankItem(first_item) && first_col == 0 && first_row == 0 &&
+          player->craft_items[1] == first_item &&
+          player->craft_items[3] == first_item &&
+          player->craft_items[4] == first_item &&
+          player->craft_items[6] == first_item &&
+          player->craft_items[7] == first_item) {
+        *item = getDoorFromPlank(first_item);
+        *count = 3;
+        return;
+      }
+      // Stair recipes (6 planks in stair pattern) - all plank types
+      // Pattern 1: X.. / XX. / XXX (slots 0,3,4,6,7,8)
+      if (isPlankItem(first_item) && first_col == 0 && first_row == 0 &&
+          player->craft_items[3] == first_item &&
+          player->craft_items[4] == first_item &&
+          player->craft_items[6] == first_item &&
+          player->craft_items[7] == first_item &&
+          player->craft_items[8] == first_item) {
+        *item = getStairFromPlank(first_item);
+        *count = 4;
+        return;
+      }
+      // Pattern 2: ..X / .XX / XXX (slots 2,4,5,6,7,8)
+      if (isPlankItem(first_item) && first_col == 2 && first_row == 0 &&
+          player->craft_items[4] == first_item &&
+          player->craft_items[5] == first_item &&
+          player->craft_items[6] == first_item &&
+          player->craft_items[7] == first_item &&
+          player->craft_items[8] == first_item) {
+        *item = getStairFromPlank(first_item);
+        *count = 4;
+        return;
       }
       break;
 

@@ -844,8 +844,6 @@ uint16_t getMiningResult (uint16_t held_item, uint8_t block) {
 
     case B_stone:
     case B_cobblestone:
-    case B_stone_slab:
-    case B_cobblestone_slab:
     case B_sandstone:
     case B_furnace:
     case B_coal_ore:
@@ -1138,13 +1136,7 @@ uint8_t isDoorBlock (uint8_t block) {
     block == B_oak_door ||
     block == B_spruce_door ||
     block == B_birch_door ||
-    block == B_jungle_door ||
-    block == B_acacia_door ||
-    block == B_cherry_door ||
-    block == B_dark_oak_door ||
-    block == B_pale_oak_door ||
-    block == B_mangrove_door ||
-    block == B_bamboo_door
+    block == B_iron_door
   );
 }
 
@@ -1154,13 +1146,7 @@ uint8_t isDoorItem (uint16_t item) {
     item == I_oak_door ||
     item == I_spruce_door ||
     item == I_birch_door ||
-    item == I_jungle_door ||
-    item == I_acacia_door ||
-    item == I_cherry_door ||
-    item == I_dark_oak_door ||
-    item == I_pale_oak_door ||
-    item == I_mangrove_door ||
-    item == I_bamboo_door
+    item == I_iron_door
   );
 }
 
@@ -1170,13 +1156,7 @@ uint16_t getDoorItemFromBlock (uint8_t block) {
     case B_oak_door: return I_oak_door;
     case B_spruce_door: return I_spruce_door;
     case B_birch_door: return I_birch_door;
-    case B_jungle_door: return I_jungle_door;
-    case B_acacia_door: return I_acacia_door;
-    case B_cherry_door: return I_cherry_door;
-    case B_dark_oak_door: return I_dark_oak_door;
-    case B_pale_oak_door: return I_pale_oak_door;
-    case B_mangrove_door: return I_mangrove_door;
-    case B_bamboo_door: return I_bamboo_door;
+    case B_iron_door: return I_iron_door;
     default: return 0;
   }
 }
@@ -1187,13 +1167,7 @@ uint8_t getDoorBlockFromItem (uint16_t item) {
     case I_oak_door: return B_oak_door;
     case I_spruce_door: return B_spruce_door;
     case I_birch_door: return B_birch_door;
-    case I_jungle_door: return B_jungle_door;
-    case I_acacia_door: return B_acacia_door;
-    case I_cherry_door: return B_cherry_door;
-    case I_dark_oak_door: return B_dark_oak_door;
-    case I_pale_oak_door: return B_pale_oak_door;
-    case I_mangrove_door: return B_mangrove_door;
-    case I_bamboo_door: return B_bamboo_door;
+    case I_iron_door: return B_iron_door;
     default: return 0;
   }
 }
