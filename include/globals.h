@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <pthread.h>
+#include "thread_pool.h"
 
 #ifdef ESP_PLATFORM
   #define WIFI_SSID "your-ssid"
@@ -126,7 +127,8 @@
 // on very low tickrates, at the cost of potential network instability when
 // hosting more than just a couple of players. When disabling this on low
 // tickrates, consider disabling SCALE_MOVEMENT_UPDATES_TO_PLAYER_COUNT too.
-#define BROADCAST_ALL_MOVEMENT
+// DISABLED BY DEFAULT - causes lag with proxies/multiple players
+// #define BROADCAST_ALL_MOVEMENT
 
 // If defined, scales the frequency at which player movement updates are
 // broadcast based on the amount of players, reducing overhead for higher
@@ -189,6 +191,7 @@ typedef struct {
   int client_fd;
   int state;
   int compression_threshold;
+  pthread_mutex_t send_mutex;  // Mutex for protecting packet sending
 } ClientState;
 
 extern ClientState client_states[MAX_PLAYERS];
@@ -326,5 +329,10 @@ extern PlayerData player_data[MAX_PLAYERS];
 extern int player_data_count;
 
 extern MobData mob_data[MAX_MOBS];
+
+// Thread pool functions
+void init_global_thread_pool(void);
+ThreadPool* get_global_thread_pool(void);
+void shutdown_global_thread_pool(void);
 
 #endif

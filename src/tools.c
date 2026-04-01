@@ -163,7 +163,19 @@ ssize_t send_all (int client_fd, const void *buf, ssize_t len) {
   return sent;
 }
 
-void startPacket (int packet_id) {
+void startPacket (int client_fd, int packet_id) {
+  // Find client state for mutex
+  ClientState* state = NULL;
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (client_states[i].client_fd == client_fd) {
+      state = &client_states[i];
+      break;
+    }
+  }
+
+  // Lock mutex if we found the client state
+  if (state) pthread_mutex_lock(&state->send_mutex);
+
   packet_buffer_offset = 0;
   packet_mode = true;
   writeVarInt(-1, packet_id);
@@ -174,6 +186,15 @@ void endPacket (int client_fd) {
   int threshold = getCompressionThreshold(client_fd);
   int uncompressed_len = packet_buffer_offset;
 
+  // Find client state for mutex
+  ClientState* state = NULL;
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (client_states[i].client_fd == client_fd) {
+      state = &client_states[i];
+      break;
+    }
+  }
+
   if (threshold > 0 && uncompressed_len >= threshold) {
     // Compressed format: [Packet Length] [Data Length] [Compressed(Packet ID + Data)]
 
@@ -183,6 +204,7 @@ void endPacket (int client_fd) {
     uint8_t *compressed_buf = malloc(max_compressed_len);
     if (!compressed_buf) {
       perror("Failed to allocate compression buffer");
+      if (state) pthread_mutex_unlock(&state->send_mutex);
       return;
     }
 
@@ -199,6 +221,7 @@ void endPacket (int client_fd) {
     if (ret != Z_OK) {
       fprintf(stderr, "deflateInit failed: %d\n", ret);
       free(compressed_buf);
+      if (state) pthread_mutex_unlock(&state->send_mutex);
       return;
     }
 
@@ -211,7 +234,7 @@ void endPacket (int client_fd) {
       // Fall through to uncompressed path below
       goto send_uncompressed;
     }
-    
+
     // Verify all input was compressed
     if (strm.avail_in != 0) {
       fprintf(stderr, "deflate did not consume all input: %u bytes remaining\n", strm.avail_in);
@@ -221,7 +244,7 @@ void endPacket (int client_fd) {
     }
 
     int compressed_len = strm.total_out;
-    
+
     // Verify zlib header is present (first two bytes should be valid)
     if (compressed_len < 2) {
       fprintf(stderr, "Compression produced invalid output (too short: %d bytes)\n", compressed_len);
@@ -229,7 +252,7 @@ void endPacket (int client_fd) {
       free(compressed_buf);
       goto send_uncompressed;
     }
-    
+
     deflateEnd(&strm);
 
     // 2. Send the packet
@@ -241,6 +264,7 @@ void endPacket (int client_fd) {
     send_all(client_fd, compressed_buf, compressed_len);
 
     free(compressed_buf);
+    if (state) pthread_mutex_unlock(&state->send_mutex);
     return;
 
 send_uncompressed:
@@ -262,6 +286,9 @@ send_uncompressed:
   }
 
   packet_buffer_offset = 0;
+
+  // Unlock mutex
+  if (state) pthread_mutex_unlock(&state->send_mutex);
 }
 
 void sendPreformattedPackets (int client_fd, uint8_t *data, size_t len) {
@@ -290,7 +317,7 @@ void sendPreformattedPackets (int client_fd, uint8_t *data, size_t len) {
     int id_size = offset - id_start_offset;
 
     // 3. Send as a new packet
-    startPacket(packet_id);
+    startPacket(client_fd, packet_id);
     send_all(client_fd, data + offset, packet_len - id_size);
     endPacket(client_fd);
 

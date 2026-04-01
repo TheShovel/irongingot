@@ -538,6 +538,9 @@ int main () {
   printf("Initializing world generation...\n");
   printf("\n");
 
+  // Initialize global thread pool for parallel operations
+  init_global_thread_pool();
+
   // Initialize block changes
   #ifdef INFINITE_BLOCK_CHANGES
     // Start with a minimal capacity, will grow as needed
@@ -572,6 +575,7 @@ int main () {
     client_states[i].client_fd = -1;
     client_states[i].state = STATE_NONE;
     client_states[i].compression_threshold = 0;
+    pthread_mutex_init(&client_states[i].send_mutex, NULL);
     player_data[i].client_fd = -1;
   }
 
@@ -861,6 +865,9 @@ int main () {
 
   // Shutdown chunk generator thread
   shutdown_chunk_generator();
+
+  // Shutdown global thread pool
+  shutdown_global_thread_pool();
 
   close(server_fd);
  

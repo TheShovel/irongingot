@@ -36,7 +36,7 @@ int sc_statusResponse (int client_fd) {
 
   uint16_t string_len = sizeof(header) + sizeof(footer) + motd_len - 2;
 
-  startPacket(0x00);
+  startPacket(client_fd, 0x00);
 
   writeVarInt(client_fd, string_len);
   send_all(client_fd, header, sizeof(header) - 1);
@@ -88,7 +88,7 @@ int cs_loginStart (int client_fd, uint8_t *uuid, char *name) {
 int sc_setCompression (int client_fd, int threshold) {
   printf("Sending Set Compression (threshold: %d)...\n\n", threshold);
 
-  startPacket(0x03);
+  startPacket(client_fd, 0x03);
   writeVarInt(-1, threshold);
   endPacket(client_fd);
 
@@ -102,7 +102,7 @@ int sc_loginSuccess (int client_fd, uint8_t *uuid, char *name) {
   printf("Sending Login Success...\n\n");
 
   uint8_t name_length = strlen(name);
-  startPacket(0x02);
+  startPacket(client_fd, 0x02);
   send_all(client_fd, uuid, 16);
   writeVarInt(client_fd, name_length);
   send_all(client_fd, name, name_length);
@@ -159,7 +159,7 @@ int sc_knownPacks (int client_fd) {
     0x6f, 0x72, 0x65, 0x06, 0x31, 0x2e, 0x32, 0x31,
     0x2e, 0x38
   };
-  startPacket(0x0E);
+  startPacket(client_fd, 0x0E);
   send_all(client_fd, known_packs + 1, 23);
   endPacket(client_fd);
   return 0;
@@ -185,7 +185,7 @@ int sc_sendPluginMessage (int client_fd, const char *channel, const uint8_t *dat
   printf("Sending Plugin Message\n\n");
   int channel_len = (int)strlen(channel);
 
-  startPacket(0x01);
+  startPacket(client_fd, 0x01);
 
   writeVarInt(client_fd, channel_len);
   send_all(client_fd, channel, channel_len);
@@ -200,7 +200,7 @@ int sc_sendPluginMessage (int client_fd, const char *channel, const uint8_t *dat
 
 // S->C Finish Configuration
 int sc_finishConfiguration (int client_fd) {
-  startPacket(0x03);
+  startPacket(client_fd, 0x03);
   endPacket(client_fd);
   return 0;
 }
@@ -208,7 +208,7 @@ int sc_finishConfiguration (int client_fd) {
 // S->C Login (play)
 int sc_loginPlay (int client_fd) {
 
-  startPacket(0x2B);
+  startPacket(client_fd, 0x2B);
   // entity id
   writeUint32(client_fd, client_fd);
   // hardcore
@@ -264,7 +264,7 @@ int sc_loginPlay (int client_fd) {
 // S->C Synchronize Player Position
 int sc_synchronizePlayerPosition (int client_fd, double x, double y, double z, float yaw, float pitch) {
 
-  startPacket(0x41);
+  startPacket(client_fd, 0x41);
 
   // Teleport ID
   writeVarInt(client_fd, -1);
@@ -295,7 +295,7 @@ int sc_synchronizePlayerPosition (int client_fd, double x, double y, double z, f
 // S->C Set Default Spawn Position
 int sc_setDefaultSpawnPosition (int client_fd, int64_t x, int64_t y, int64_t z) {
 
-  startPacket(0x5A);
+  startPacket(client_fd, 0x5A);
 
   writeUint64(client_fd, ((x & 0x3FFFFFF) << 38) | ((z & 0x3FFFFFF) << 12) | (y & 0xFFF));
   writeFloat(client_fd, 0);
@@ -308,7 +308,7 @@ int sc_setDefaultSpawnPosition (int client_fd, int64_t x, int64_t y, int64_t z) 
 // S->C Player Abilities (clientbound)
 int sc_playerAbilities (int client_fd, uint8_t flags) {
 
-  startPacket(0x39);
+  startPacket(client_fd, 0x39);
 
   writeByte(client_fd, flags);
   writeFloat(client_fd, 0.05f);
@@ -322,7 +322,7 @@ int sc_playerAbilities (int client_fd, uint8_t flags) {
 // S->C Update Time
 int sc_updateTime (int client_fd, uint64_t ticks) {
 
-  startPacket(0x6A);
+  startPacket(client_fd, 0x6A);
 
   uint64_t world_age = get_program_time() / 50000;
   writeUint64(client_fd, world_age);
@@ -336,7 +336,7 @@ int sc_updateTime (int client_fd, uint64_t ticks) {
 
 // S->C Game Event 13 (Start waiting for level chunks)
 int sc_startWaitingForChunks (int client_fd) {
-  startPacket(0x22);
+  startPacket(client_fd, 0x22);
   writeByte(client_fd, 13);
   writeUint32(client_fd, 0);
   endPacket(client_fd);
@@ -345,7 +345,7 @@ int sc_startWaitingForChunks (int client_fd) {
 
 // S->C Set Center Chunk
 int sc_setCenterChunk (int client_fd, int x, int y) {
-  startPacket(0x57);
+  startPacket(client_fd, 0x57);
   writeVarInt(client_fd, x);
   writeVarInt(client_fd, y);
   endPacket(client_fd);
@@ -489,7 +489,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
   int chunk_data_size = data_offset;
 
   // 2. Build the full packet
-  startPacket(0x27);
+  startPacket(client_fd, 0x27);
 
   writeUint32(client_fd, _x);
   writeUint32(client_fd, _z);
@@ -606,7 +606,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
 // S->C Clientbound Keep Alive (play)
 int sc_keepAlive (int client_fd) {
 
-  startPacket(0x26);
+  startPacket(client_fd, 0x26);
   writeUint64(client_fd, 0);
   endPacket(client_fd);
 
@@ -616,7 +616,7 @@ int sc_keepAlive (int client_fd) {
 // S->C Set Container Slot
 int sc_setContainerSlot (int client_fd, int window_id, uint16_t slot, uint8_t count, uint16_t item) {
 
-  startPacket(0x14);
+  startPacket(client_fd, 0x14);
 
   writeVarInt(client_fd, window_id);
   writeVarInt(client_fd, 0);
@@ -637,7 +637,7 @@ int sc_setContainerSlot (int client_fd, int window_id, uint16_t slot, uint8_t co
 
 // S->C Block Update
 int sc_blockUpdate (int client_fd, int64_t x, int64_t y, int64_t z, uint8_t block) {
-  startPacket(0x08);
+  startPacket(client_fd, 0x08);
   writeUint64(client_fd, ((x & 0x3FFFFFF) << 38) | ((z & 0x3FFFFFF) << 12) | (y & 0xFFF));
   writeVarInt(client_fd, block_palette[block]);
   endPacket(client_fd);
@@ -647,7 +647,7 @@ int sc_blockUpdate (int client_fd, int64_t x, int64_t y, int64_t z, uint8_t bloc
 #ifdef ALLOW_DOORS
 // S->C Block Update with door state support
 int sc_blockUpdateDoor (int client_fd, int64_t x, int64_t y, int64_t z, uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge) {
-  startPacket(0x08);
+  startPacket(client_fd, 0x08);
   writeUint64(client_fd, ((x & 0x3FFFFFF) << 38) | ((z & 0x3FFFFFF) << 12) | (y & 0xFFF));
   
   // Calculate door block state ID
@@ -673,7 +673,7 @@ int sc_blockUpdateDoor (int client_fd, int64_t x, int64_t y, int64_t z, uint8_t 
 
 // S->C Acknowledge Block Change
 int sc_acknowledgeBlockChange (int client_fd, int sequence) {
-  startPacket(0x04);
+  startPacket(client_fd, 0x04);
   writeVarInt(client_fd, sequence);
   endPacket(client_fd);
   return 0;
@@ -706,7 +706,7 @@ int cs_playerAction (int client_fd) {
 // S->C Open Screen
 int sc_openScreen (int client_fd, uint8_t window, const char *title, uint16_t length) {
 
-  startPacket(0x34);
+  startPacket(client_fd, 0x34);
 
   writeVarInt(client_fd, window);
   writeVarInt(client_fd, window);
@@ -902,7 +902,7 @@ int cs_clickContainer (int client_fd) {
 // S->C Set Cursor Item
 int sc_setCursorItem (int client_fd, uint16_t item, uint8_t count) {
 
-  startPacket(0x59);
+  startPacket(client_fd, 0x59);
 
   writeVarInt(client_fd, count);
   if (count == 0) {
@@ -1024,7 +1024,7 @@ int cs_setHeldItem (int client_fd) {
 // S->C Set Held Item (clientbound)
 int sc_setHeldItem (int client_fd, uint8_t slot) {
 
-  startPacket(0x62);
+  startPacket(client_fd, 0x62);
 
   writeByte(client_fd, slot);
 
@@ -1066,7 +1066,7 @@ int cs_closeContainer (int client_fd) {
 // S->C Player Info Update, "Add Player" action
 int sc_playerInfoUpdateAddPlayer (int client_fd, PlayerData player) {
 
-  startPacket(0x3F); // Packet ID
+  startPacket(client_fd, 0x3F); // Packet ID
 
   writeByte(client_fd, 0x01); // EnumSet: Add Player
   writeByte(client_fd, 1); // Player count (1 per packet)
@@ -1092,7 +1092,7 @@ int sc_spawnEntity (
   uint8_t yaw, uint8_t pitch
 ) {
 
-  startPacket(0x01);
+  startPacket(client_fd, 0x01);
 
   writeVarInt(client_fd, id); // Entity ID
   send_all(client_fd, uuid, 16); // Entity UUID
@@ -1123,7 +1123,7 @@ int sc_spawnEntity (
 
 // S->C Set Entity Metadata
 int sc_setEntityMetadata (int client_fd, int id, EntityData *metadata, size_t length) {
-  startPacket(0x5C);
+  startPacket(client_fd, 0x5C);
 
   writeVarInt(client_fd, id); // Entity ID
 
@@ -1153,7 +1153,7 @@ int sc_spawnEntityPlayer (int client_fd, PlayerData player) {
 
 // S->C Entity Animation
 int sc_entityAnimation (int client_fd, int id, uint8_t animation) {
-  startPacket(0x02);
+  startPacket(client_fd, 0x02);
 
   writeVarInt(client_fd, id); // Entity ID
   writeByte(client_fd, animation); // Animation
@@ -1170,7 +1170,7 @@ int sc_teleportEntity (
   float yaw, float pitch
 ) {
 
-  startPacket(0x1F);
+  startPacket(client_fd, 0x1F);
 
   // Entity ID
   writeVarInt(client_fd, id);
@@ -1196,7 +1196,7 @@ int sc_teleportEntity (
 // S->C Set Head Rotation
 int sc_setHeadRotation (int client_fd, int id, uint8_t yaw) {
 
-  startPacket(0x4C);
+  startPacket(client_fd, 0x4C);
   // Entity ID
   writeVarInt(client_fd, id);
   // Head yaw
@@ -1210,7 +1210,7 @@ int sc_setHeadRotation (int client_fd, int id, uint8_t yaw) {
 // S->C Set Head Rotation
 int sc_updateEntityRotation (int client_fd, int id, uint8_t yaw, uint8_t pitch) {
 
-  startPacket(0x31);
+  startPacket(client_fd, 0x31);
   // Entity ID
   writeVarInt(client_fd, id);
   // Angles
@@ -1227,7 +1227,7 @@ int sc_updateEntityRotation (int client_fd, int id, uint8_t yaw, uint8_t pitch) 
 // S->C Damage Event
 int sc_damageEvent (int client_fd, int entity_id, int type) {
 
-  startPacket(0x19);
+  startPacket(client_fd, 0x19);
 
   writeVarInt(client_fd, entity_id);
   writeVarInt(client_fd, type);
@@ -1243,7 +1243,7 @@ int sc_damageEvent (int client_fd, int entity_id, int type) {
 // S->C Set Health
 int sc_setHealth (int client_fd, uint8_t health, uint8_t food, uint16_t saturation) {
 
-  startPacket(0x61);
+  startPacket(client_fd, 0x61);
 
   writeFloat(client_fd, (float)health);
   writeVarInt(client_fd, food);
@@ -1257,7 +1257,7 @@ int sc_setHealth (int client_fd, uint8_t health, uint8_t food, uint16_t saturati
 // S->C Respawn
 int sc_respawn (int client_fd) {
 
-  startPacket(0x4B);
+  startPacket(client_fd, 0x4B);
 
   // dimension id (from server-sent registries)
   writeVarInt(client_fd, 0);
@@ -1309,7 +1309,7 @@ int cs_clientStatus (int client_fd) {
 // S->C System Chat
 int sc_systemChat (int client_fd, char* message, uint16_t len) {
 
-  startPacket(0x72);
+  startPacket(client_fd, 0x72);
 
   // String NBT tag
   writeByte(client_fd, 8);
@@ -1462,7 +1462,7 @@ int cs_interact (int client_fd) {
 // S->C Entity Event
 int sc_entityEvent (int client_fd, int entity_id, uint8_t status) {
 
-  startPacket(0x1E);
+  startPacket(client_fd, 0x1E);
 
   writeUint32(client_fd, entity_id);
   writeByte(client_fd, status);
@@ -1475,7 +1475,7 @@ int sc_entityEvent (int client_fd, int entity_id, uint8_t status) {
 // S->C Remove Entities, but for only one entity per packet
 int sc_removeEntity (int client_fd, int entity_id) {
 
-  startPacket(0x46);
+  startPacket(client_fd, 0x46);
 
   writeByte(client_fd, 1);
   writeVarInt(client_fd, entity_id);
@@ -1524,7 +1524,7 @@ int cs_playerCommand (int client_fd) {
 // S->C Pickup Item (take_item_entity)
 int sc_pickupItem (int client_fd, int collected, int collector, uint8_t count) {
 
-  startPacket(0x75);
+  startPacket(client_fd, 0x75);
 
   writeVarInt(client_fd, collected);
   writeVarInt(client_fd, collector);

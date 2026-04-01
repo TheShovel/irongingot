@@ -7,15 +7,43 @@
 #include "worldgen.h"
 #include "config.h"
 #include "chunk_generator.h"
+#include "thread_pool.h"
 
 // Simple chunk cache - stores generated chunk section data
 // Size is determined by config.chunk_cache_size
 
 static CachedChunkData* chunk_cache = NULL;
 static pthread_mutex_t cache_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t gen_mutex = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t global_access_counter = 0;
 static int cache_size = 0;
+
+// Per-chunk locks for parallel generation
+// Using a fixed-size hash table of mutexes to limit memory usage
+#define CHUNK_LOCK_BUCKETS 256
+static pthread_mutex_t chunk_locks[CHUNK_LOCK_BUCKETS];
+static int chunk_locks_initialized = 0;
+
+// Hash function for chunk coordinates
+static inline uint32_t chunk_hash(int x, int z) {
+  uint32_t h = (uint32_t)x * 374761393u + (uint32_t)z * 668265263u;
+  h = (h ^ (h >> 13)) * 1274126177u;
+  return h ^ (h >> 16);
+}
+
+// Get lock for specific chunk
+static inline pthread_mutex_t* get_chunk_lock(int x, int z) {
+  return &chunk_locks[chunk_hash(x, z) % CHUNK_LOCK_BUCKETS];
+}
+
+// Initialize per-chunk locks
+static void init_chunk_locks(void) {
+  if (!chunk_locks_initialized) {
+    for (int i = 0; i < CHUNK_LOCK_BUCKETS; i++) {
+      pthread_mutex_init(&chunk_locks[i], NULL);
+    }
+    chunk_locks_initialized = 1;
+  }
+}
 
 // Find cache slot for chunk (must be called with cache_mutex held)
 static CachedChunkData* get_cache_locked(int x, int z) {
@@ -50,14 +78,23 @@ static CachedChunkData* get_cache_locked(int x, int z) {
   return &chunk_cache[lru_slot];
 }
 
-// Generate chunk data (called from worker or main thread)
+// Generate chunk data (can be called from worker thread or main thread)
+// This function now supports parallel generation of non-adjacent chunks
 void generate_chunk_data(int x, int z) {
-  pthread_mutex_lock(&gen_mutex);  // Only one chunk generation at a time
+  pthread_mutex_t* chunk_lock = get_chunk_lock(x, z);
+  pthread_mutex_lock(chunk_lock);  // Lock only this chunk's bucket
   pthread_mutex_lock(&cache_mutex);
 
   CachedChunkData* cache = get_cache_locked(x, z);
-  
-  // Mark as being generated to prevent partial reads
+
+  // Check if another thread already generated this chunk while we were waiting
+  if (cache->valid && !cache->generating) {
+    pthread_mutex_unlock(&cache_mutex);
+    pthread_mutex_unlock(chunk_lock);
+    return;
+  }
+
+  // Mark as being generated to prevent duplicate work
   cache->generating = 1;
 
   pthread_mutex_unlock(&cache_mutex);
@@ -84,7 +121,7 @@ void generate_chunk_data(int x, int z) {
   cache->generating = 0;  // Mark as complete
   pthread_mutex_unlock(&cache_mutex);
 
-  pthread_mutex_unlock(&gen_mutex);
+  pthread_mutex_unlock(chunk_lock);
 }
 
 // Get cached chunk data (returns NULL if not cached or being generated)
@@ -167,7 +204,10 @@ void init_chunk_generator() {
   }
   // Initialize cache entries
   memset(chunk_cache, 0, cache_size * sizeof(CachedChunkData));
-  
+
+  // Initialize per-chunk locks for parallel generation
+  init_chunk_locks();
+
   running = 1;
   pthread_create(&worker_thread, NULL, chunk_generator_worker, NULL);
   printf("Chunk generator thread started (cache size: %d chunks)\n", cache_size);
@@ -181,4 +221,54 @@ void shutdown_chunk_generator() {
     chunk_cache = NULL;
   }
   printf("Chunk generator thread stopped\n");
+}
+
+// Task argument for parallel chunk generation
+typedef struct {
+  int x;
+  int z;
+} ChunkCoord;
+
+// Task function for chunk generation
+static void chunk_gen_task(void* arg) {
+  ChunkCoord* coord = (ChunkCoord*)arg;
+  generate_chunk_data(coord->x, coord->z);
+  free(coord);
+}
+
+// Generate multiple chunks in parallel using thread pool
+void generate_chunks_parallel(int* chunks, int chunk_count, ThreadPool* pool) {
+  if (pool == NULL || chunks == NULL || chunk_count <= 0) {
+    return;
+  }
+
+  // Submit chunk generation tasks
+  int submitted = 0;
+  for (int i = 0; i < chunk_count; i += 2) {
+    int x = chunks[i];
+    int z = chunks[i + 1];
+
+    // Check if already cached before submitting
+    if (get_cached_chunk(x, z) != NULL) {
+      continue;
+    }
+
+    ChunkCoord* coord = (ChunkCoord*)malloc(sizeof(ChunkCoord));
+    if (coord == NULL) {
+      continue;
+    }
+    coord->x = x;
+    coord->z = z;
+
+    if (thread_pool_submit(pool, chunk_gen_task, coord) == 0) {
+      submitted++;
+    } else {
+      free(coord);
+    }
+  }
+
+  // Wait for all submitted tasks to complete
+  if (submitted > 0) {
+    thread_pool_wait(pool);
+  }
 }

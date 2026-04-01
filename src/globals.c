@@ -70,3 +70,38 @@ PlayerData player_data[MAX_PLAYERS];
 int player_data_count = 0;
 
 MobData mob_data[MAX_MOBS];
+
+// Global thread pool for parallel operations
+static ThreadPool global_thread_pool;
+static int thread_pool_initialized = 0;
+
+void init_global_thread_pool(void) {
+  if (!thread_pool_initialized) {
+    int num_threads = get_cpu_count();
+    if (num_threads < 2) num_threads = 2;
+    
+    // Cap at 8 threads to avoid excessive context switching
+    if (num_threads > 8) num_threads = 8;
+    
+    if (thread_pool_init(&global_thread_pool, num_threads) == 0) {
+      thread_pool_initialized = 1;
+      printf("Initialized thread pool with %d worker threads\n", num_threads);
+    } else {
+      fprintf(stderr, "Warning: Failed to initialize thread pool, running single-threaded\n");
+    }
+  }
+}
+
+ThreadPool* get_global_thread_pool(void) {
+  if (!thread_pool_initialized) {
+    init_global_thread_pool();
+  }
+  return thread_pool_initialized ? &global_thread_pool : NULL;
+}
+
+void shutdown_global_thread_pool(void) {
+  if (thread_pool_initialized) {
+    thread_pool_destroy(&global_thread_pool);
+    thread_pool_initialized = 0;
+  }
+}

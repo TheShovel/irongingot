@@ -2,6 +2,7 @@
 #define H_CHUNK_GENERATOR
 
 #include "config.h"
+#include "thread_pool.h"
 
 typedef struct {
   int x;  // Chunk X
@@ -18,5 +19,8 @@ void shutdown_chunk_generator();
 void generate_chunk_data(int x, int z);
 CachedChunkData* get_cached_chunk(int x, int z);
 void invalidate_cached_chunk(int x, int z);
+
+// Parallel chunk generation using thread pool
+void generate_chunks_parallel(int* chunks, int chunk_count, ThreadPool* pool);
 
 #endif

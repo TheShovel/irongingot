@@ -16,6 +16,10 @@
 #include "serialize.h"
 #include "chunk_generator.h"
 #include "procedures.h"
+#include "thread_pool.h"
+
+// Forward declaration for parallel player updates
+static void handlePlayerUpdatesParallel(int64_t time_since_last_tick, ThreadPool* pool);
 
 void setClientState (int client_fd, int new_state) {
   // Look for a client state with a matching file descriptor
@@ -30,6 +34,7 @@ void setClientState (int client_fd, int new_state) {
     client_states[i].client_fd = client_fd;
     client_states[i].state = new_state;
     client_states[i].compression_threshold = 0; // Disabled by default
+    pthread_mutex_init(&client_states[i].send_mutex, NULL);
     return;
   }
 }
@@ -183,6 +188,7 @@ void handlePlayerDisconnect (int client_fd) {
   // Find the client state entry and reset it
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (client_states[i].client_fd == client_fd) {
+      pthread_mutex_destroy(&client_states[i].send_mutex);
       client_states[i].client_fd = -1;
       client_states[i].state = STATE_NONE;
       client_states[i].compression_threshold = 0;
@@ -1302,7 +1308,7 @@ uint16_t getDoorStateId (uint8_t block, uint8_t is_upper, uint8_t open, uint8_t 
 
 // Send door block update with proper state
 void sendDoorUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge) {
-  startPacket(0x08);
+  startPacket(client_fd, 0x08);
   writeUint64(client_fd, (((int64_t)x & 0x3FFFFFF) << 38) | (((int64_t)z & 0x3FFFFFF) << 12) | (y & 0xFFF));
   writeVarInt(client_fd, getDoorStateId(block, is_upper, open, direction, hinge));
   endPacket(client_fd);
@@ -1328,7 +1334,7 @@ uint16_t getStairStateId (uint8_t block, uint8_t half, uint8_t direction) {
 
 // Send stair block update with proper state
 void sendStairUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, uint8_t half, uint8_t direction) {
-  startPacket(0x08);
+  startPacket(client_fd, 0x08);
   writeUint64(client_fd, (((int64_t)x & 0x3FFFFFF) << 38) | (((int64_t)z & 0x3FFFFFF) << 12) | (y & 0xFFF));
   writeVarInt(client_fd, getStairStateId(block, half, direction));
   endPacket(client_fd);
@@ -1560,7 +1566,7 @@ void playPickupAnimation (PlayerData *player, uint16_t item, double x, double y,
 
   // Write a Set Entity Metadata packet for the item
   // Using startPacket/endPacket to properly handle compression
-  startPacket(0x5C);
+  startPacket(player->client_fd, 0x5C);
   writeVarInt(player->client_fd, -1);  // Entity ID
 
   // Describe slot data array entry
@@ -2381,68 +2387,65 @@ void handleServerTick (int64_t time_since_last_tick) {
   // Increment server tick counter
   server_ticks ++;
 
-  // Update player events
-  for (int i = 0; i < MAX_PLAYERS; i ++) {
-    PlayerData *player = &player_data[i];
-    if (player->client_fd == -1) continue; // Skip offline players
-    if (player->flags & 0x20) { // Check "client loading" flag
-      // If 3 seconds (60 vanilla ticks) have passed, assume player has loaded
-      player->flagval_16 ++;
-      if (player->flagval_16 > (uint16_t)(3 * TICKS_PER_SECOND)) {
-        handlePlayerJoin(player);
-      } else continue;
-    }
-    // Reset player attack cooldown
-    if (player->flags & 0x01) {
-      if (player->flagval_8 >= (uint8_t)(0.6f * TICKS_PER_SECOND)) {
-        player->flags &= ~0x01;
-        player->flagval_8 = 0;
-      } else player->flagval_8 ++;
-    }
-    // Handle eating animation
-    if (player->flags & 0x10) {
-      if (player->flagval_16 >= (uint16_t)(1.6f * TICKS_PER_SECOND)) {
-        handlePlayerEating(&player_data[i], false);
-        player->flags &= ~0x10;
-        player->flagval_16 = 0;
-      } else player->flagval_16 ++;
-    }
-    // Reset movement update cooldown if not broadcasting every update
-    // Effectively ties player movement updates to the tickrate
-    #ifndef BROADCAST_ALL_MOVEMENT
-      player->flags &= ~0x40;
-    #endif
-    // Below this, process events that happen once per second
-    if (server_ticks % (uint32_t)TICKS_PER_SECOND != 0) continue;
-    // Send Keep Alive and Update Time packets
-    sc_keepAlive(player->client_fd);
-    sc_updateTime(player->client_fd, world_time);
+  // Get thread pool for parallel operations
+  ThreadPool* pool = get_global_thread_pool();
 
-    // Tick damage from lava
-    uint8_t block = getBlockAt(player->x, player->y, player->z);
-    if (block >= B_lava && block < B_lava + 4) {
-      hurtEntity(player->client_fd, -1, D_lava, 8);
+  // Update player events (parallelized if thread pool is available)
+  if (pool != NULL) {
+    handlePlayerUpdatesParallel(time_since_last_tick, pool);
+  } else {
+    // Fallback to sequential processing
+    for (int i = 0; i < MAX_PLAYERS; i ++) {
+      PlayerData *player = &player_data[i];
+      if (player->client_fd == -1) continue;
+      if (player->flags & 0x20) {
+        player->flagval_16 ++;
+        if (player->flagval_16 > (uint16_t)(3 * TICKS_PER_SECOND)) {
+          handlePlayerJoin(player);
+        } else continue;
+      }
+      if (player->flags & 0x01) {
+        if (player->flagval_8 >= (uint8_t)(0.6f * TICKS_PER_SECOND)) {
+          player->flags &= ~0x01;
+          player->flagval_8 = 0;
+        } else player->flagval_8 ++;
+      }
+      if (player->flags & 0x10) {
+        if (player->flagval_16 >= (uint16_t)(1.6f * TICKS_PER_SECOND)) {
+          handlePlayerEating(&player_data[i], false);
+          player->flags &= ~0x10;
+          player->flagval_16 = 0;
+        } else player->flagval_16 ++;
+      }
+      #ifndef BROADCAST_ALL_MOVEMENT
+        player->flags &= ~0x40;
+      #endif
+      if (server_ticks % (uint32_t)TICKS_PER_SECOND != 0) continue;
+      sc_keepAlive(player->client_fd);
+      sc_updateTime(player->client_fd, world_time);
+      uint8_t block = getBlockAt(player->x, player->y, player->z);
+      if (block >= B_lava && block < B_lava + 4) {
+        hurtEntity(player->client_fd, -1, D_lava, 8);
+      }
+      #ifdef ENABLE_CACTUS_DAMAGE
+      if (block == B_cactus ||
+        getBlockAt(player->x + 1, player->y, player->z) == B_cactus ||
+        getBlockAt(player->x - 1, player->y, player->z) == B_cactus ||
+        getBlockAt(player->x, player->y, player->z + 1) == B_cactus ||
+        getBlockAt(player->x, player->y, player->z - 1) == B_cactus
+      ) hurtEntity(player->client_fd, -1, D_cactus, 4);
+      #endif
+      if (player->health >= 20 || player->health == 0) continue;
+      if (player->hunger < 18) continue;
+      if (player->saturation >= 600) {
+        player->saturation -= 600;
+        player->health ++;
+      } else {
+        player->hunger --;
+        player->health ++;
+      }
+      sc_setHealth(player->client_fd, player->health, player->hunger, player->saturation);
     }
-    #ifdef ENABLE_CACTUS_DAMAGE
-    // Tick damage from a cactus block if one is under/inside or around the player.
-    if (block == B_cactus ||
-      getBlockAt(player->x + 1, player->y, player->z) == B_cactus ||
-      getBlockAt(player->x - 1, player->y, player->z) == B_cactus ||
-      getBlockAt(player->x, player->y, player->z + 1) == B_cactus ||
-      getBlockAt(player->x, player->y, player->z - 1) == B_cactus
-    ) hurtEntity(player->client_fd, -1, D_cactus, 4);
-    #endif
-    // Heal from saturation if player is able and has enough food
-    if (player->health >= 20 || player->health == 0) continue;
-    if (player->hunger < 18) continue;
-    if (player->saturation >= 600) {
-      player->saturation -= 600;
-      player->health ++;
-    } else {
-      player->hunger --;
-      player->health ++;
-    }
-    sc_setHealth(player->client_fd, player->health, player->hunger, player->saturation);
   }
 
   // Perform regular checks for if it's time to write to disk
@@ -2678,6 +2681,186 @@ void handleServerTick (int64_t time_since_last_tick) {
 
   }
 
+}
+
+// Task argument for parallel player state updates
+typedef struct {
+  int player_index;
+  int64_t time_since_last_tick;
+} PlayerUpdateTask;
+
+// Update a single player's state ONLY (called from thread pool)
+// This function does NOT send any packets - only updates player data
+static void updatePlayerStateTask(void* arg) {
+  PlayerUpdateTask* task = (PlayerUpdateTask*)arg;
+  int i = task->player_index;
+  PlayerData* player = &player_data[i];
+
+  if (player->client_fd == -1) {
+    free(task);
+    return;
+  }
+
+  // Handle client loading state (no packet - will be sent in main thread)
+  if (player->flags & 0x20) {
+    player->flagval_16++;
+    free(task);
+    return;
+  }
+
+  // Reset player attack cooldown
+  if (player->flags & 0x01) {
+    if (player->flagval_8 >= (uint8_t)(0.6f * TICKS_PER_SECOND)) {
+      player->flags &= ~0x01;
+      player->flagval_8 = 0;
+    } else {
+      player->flagval_8++;
+    }
+  }
+
+  // Handle eating animation timer (no packet - will be sent in main thread)
+  if (player->flags & 0x10) {
+    if (player->flagval_16 >= (uint16_t)(1.6f * TICKS_PER_SECOND)) {
+      // Complete eating - update state only, packets sent separately
+      uint16_t *held_item = &player->inventory_items[player->hotbar];
+      uint8_t *held_count = &player->inventory_count[player->hotbar];
+
+      uint16_t saturation = 0;
+      uint8_t food = 0;
+      switch (*held_item) {
+        case I_chicken: food = 2; saturation = 600; break;
+        case I_beef: food = 3; saturation = 900; break;
+        case I_porkchop: food = 3; saturation = 300; break;
+        case I_mutton: food = 2; saturation = 600; break;
+        case I_cooked_chicken: food = 6; saturation = 3600; break;
+        case I_cooked_beef: food = 8; saturation = 6400; break;
+        case I_cooked_porkchop: food = 8; saturation = 6400; break;
+        case I_cooked_mutton: food = 6; saturation = 4800; break;
+        case I_rotten_flesh: food = 4; saturation = 0; break;
+        case I_apple: food = 4; saturation = 1200; break;
+        default: break;
+      }
+
+      if (food > 0 && *held_count > 0) {
+        player->saturation += saturation;
+        player->hunger += food;
+        if (player->hunger > 20) player->hunger = 20;
+        *held_count -= 1;
+        if (*held_count == 0) *held_item = 0;
+        // Mark that eating just completed (for packet sending in main thread)
+        player->flagval_16 = 0xFFFF;
+      } else {
+        player->flags &= ~0x10;
+        player->flagval_16 = 0;
+      }
+    } else {
+      player->flagval_16++;
+    }
+  }
+
+  // Reset movement update cooldown if not broadcasting every update
+  #ifndef BROADCAST_ALL_MOVEMENT
+    player->flags &= ~0x40;
+  #endif
+
+  // Process once-per-second state updates (no packet sending here)
+  if (server_ticks % (uint32_t)TICKS_PER_SECOND == 0) {
+    // Calculate lava damage (apply health change, packet sent separately)
+    uint8_t block = getBlockAt(player->x, player->y, player->z);
+    if (block >= B_lava && block < B_lava + 4) {
+      if (player->health > 8) player->health -= 8;
+      else player->health = 0;
+    }
+    #ifdef ENABLE_CACTUS_DAMAGE
+    // Calculate cactus damage (apply health change, packet sent separately)
+    if (block == B_cactus ||
+        getBlockAt(player->x + 1, player->y, player->z) == B_cactus ||
+        getBlockAt(player->x - 1, player->y, player->z) == B_cactus ||
+        getBlockAt(player->x, player->y, player->z + 1) == B_cactus ||
+        getBlockAt(player->x, player->y, player->z - 1) == B_cactus) {
+      if (player->health > 4) player->health -= 4;
+      else player->health = 0;
+    }
+    #endif
+
+    // Heal from saturation (update state only, packet sent separately)
+    if (player->health < 20 && player->health != 0 && player->hunger >= 18) {
+      if (player->saturation >= 600) {
+        player->saturation -= 600;
+        player->health++;
+      } else {
+        player->hunger--;
+        player->health++;
+      }
+    }
+  }
+
+  free(task);
+}
+
+// Send packets for player updates (called from main thread after parallel state updates)
+static void sendPlayerUpdatePackets(int64_t time_since_last_tick) {
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    PlayerData* player = &player_data[i];
+    if (player->client_fd == -1) continue;
+    if (player->flags & 0x20) continue;  // Skip loading players
+
+    // Send once-per-second packets
+    if (server_ticks % (uint32_t)TICKS_PER_SECOND == 0) {
+      sc_keepAlive(player->client_fd);
+      sc_updateTime(player->client_fd, world_time);
+      sc_setHealth(player->client_fd, player->health, player->hunger, player->saturation);
+    }
+
+    // Send eating completion packets if flag is set
+    if (player->flagval_16 == 0xFFFF) {
+      sc_entityEvent(player->client_fd, player->client_fd, 9);
+      sc_setHealth(player->client_fd, player->health, player->hunger, player->saturation);
+      sc_setContainerSlot(
+        player->client_fd, 0,
+        serverSlotToClientSlot(0, player->hotbar),
+        player->inventory_count[player->hotbar],
+        player->inventory_items[player->hotbar]
+      );
+      player->flags &= ~0x10;
+      player->flagval_16 = 0;
+    }
+  }
+
+  // Handle player join packets (after loading state completes)
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    PlayerData* player = &player_data[i];
+    if (player->client_fd == -1) continue;
+    if (!(player->flags & 0x20)) continue;  // Only process loading players
+
+    if (player->flagval_16 > (uint16_t)(3 * TICKS_PER_SECOND)) {
+      handlePlayerJoin(player);
+    }
+  }
+}
+
+// Parallel version of player update loop from handleServerTick
+static void handlePlayerUpdatesParallel(int64_t time_since_last_tick, ThreadPool* pool) {
+  if (pool == NULL) return;
+
+  // Phase 1: Submit parallel state update tasks (no packet sending)
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (player_data[i].client_fd == -1) continue;
+
+    PlayerUpdateTask* task = (PlayerUpdateTask*)malloc(sizeof(PlayerUpdateTask));
+    if (task == NULL) continue;
+
+    task->player_index = i;
+    task->time_since_last_tick = time_since_last_tick;
+
+    thread_pool_submit(pool, updatePlayerStateTask, task);
+  }
+
+  // Wait for all state updates to complete
+  thread_pool_wait(pool);
+
+  // Phase 2: Send packets sequentially on main thread
+  sendPlayerUpdatePackets(time_since_last_tick);
 }
 
 #ifdef ALLOW_CHESTS
