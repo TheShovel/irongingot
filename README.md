@@ -2,6 +2,8 @@
 
 **irongingot** is a fork of [bareiron](https://github.com/p2r3/bareiron) - a minimalist Minecraft server for low-spec hardware and embedded systems. This fork keeps the low memory usage and adds some much-needed features.
 
+Runs on as low as **5MB of RAM**!!!
+
 ![irongingot screenshot](images/Screenshot_20260402_002901.png)
 
 - **Minecraft version:** `1.21.8`
