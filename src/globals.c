@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "globals.h"
+#include "config.h"
 
 #ifdef ESP_PLATFORM
   #include "esp_task_wdt.h"
@@ -47,12 +48,12 @@ uint32_t rng_seed = INITIAL_RNG_SEED;
 uint16_t world_time = 0;
 uint32_t server_ticks = 0;
 
-char motd[] = { "A bareiron server" };
-uint8_t motd_len = sizeof(motd) - 1;
+char motd[MOTD_MAX_LEN] = { "A bareiron server" };
+uint8_t motd_len = sizeof("A bareiron server") - 1;
 
 #ifdef SEND_BRAND
-  char brand[] = { "bareiron" };
-  uint8_t brand_len = sizeof(brand) - 1;
+  char brand[BRAND_MAX_LEN] = { "bareiron" };
+  uint8_t brand_len = sizeof("bareiron") - 1;
 #endif
 
 uint16_t client_count;

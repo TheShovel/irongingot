@@ -41,6 +41,7 @@
 #include "procedures.h"
 #include "serialize.h"
 #include "chunk_generator.h"
+#include "config.h"
 #include <zlib.h>
 
 // Check if a chunk has been visited (sent to player)
@@ -469,12 +470,38 @@ int main () {
       }
   #endif
 
+  // Initialize config with defaults
+  init_config_defaults();
+  
+  // Load config from file (if exists)
+  load_config("server.conf");
+  
+  // Update global variables from config
+  strncpy(motd, config.motd, MOTD_MAX_LEN - 1);
+  motd[MOTD_MAX_LEN - 1] = '\0';
+  motd_len = strlen(motd);
+  #ifdef SEND_BRAND
+    strncpy(brand, config.brand, BRAND_MAX_LEN - 1);
+    brand[BRAND_MAX_LEN - 1] = '\0';
+    brand_len = strlen(brand);
+  #endif
+  
+  // Print config summary
+  printf("Server Configuration:\n");
+  printf("  Port: %d\n", config.port);
+  printf("  Max Players: %d\n", config.max_players);
+  printf("  View Distance: %d\n", config.view_distance);
+  printf("  Gamemode: %d\n", config.gamemode);
+  printf("  Chunk Cache Size: %d\n", config.chunk_cache_size);
+  printf("  MOTD: %s\n", config.motd);
+  printf("\n");
+
   // Hash the seeds to ensure they're random enough
-  world_seed = splitmix64(world_seed);
+  world_seed = splitmix64(config.world_seed);
   printf("World seed (hashed): ");
   for (int i = 3; i >= 0; i --) printf("%X", (unsigned int)((world_seed >> (8 * i)) & 255));
 
-  rng_seed = splitmix64(rng_seed);
+  rng_seed = splitmix64(config.rng_seed);
   printf("\nRNG seed (hashed): ");
   for (int i = 3; i >= 0; i --) printf("%X", (unsigned int)((rng_seed >> (8 * i)) & 255));
   printf("\n\n");
@@ -529,7 +556,7 @@ int main () {
   // Bind socket to IP/port
   server_addr.sin_family = AF_INET;
   server_addr.sin_addr.s_addr = INADDR_ANY;
-  server_addr.sin_port = htons(PORT);
+  server_addr.sin_port = htons(config.port);
 
   if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
     perror("bind failed");

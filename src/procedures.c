@@ -14,6 +14,7 @@
 #include "worldgen.h"
 #include "structures.h"
 #include "serialize.h"
+#include "chunk_generator.h"
 #include "procedures.h"
 
 void setClientState (int client_fd, int new_state) {
@@ -593,6 +594,12 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
       #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
       writeBlockChangesToDisk(i, i);
       #endif
+      // Invalidate cached chunk so it regenerates with the new block change
+      int chunk_x = x / 16;
+      int chunk_z = z / 16;
+      if (x < 0 && x % 16 != 0) chunk_x--;
+      if (z < 0 && z % 16 != 0) chunk_z--;
+      invalidate_cached_chunk(chunk_x, chunk_z);
       return 0;
     }
   }
@@ -635,6 +642,12 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
       #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
       writeBlockChangesToDisk(last_real_entry + 1, last_real_entry + 15);
       #endif
+      // Invalidate cached chunk so it regenerates with the new block change
+      int chunk_x_chest = x / 16;
+      int chunk_z_chest = z / 16;
+      if (x < 0 && x % 16 != 0) chunk_x_chest--;
+      if (z < 0 && z % 16 != 0) chunk_z_chest--;
+      invalidate_cached_chunk(chunk_x_chest, chunk_z_chest);
       return 0;
     }
     // If we're here, no changes were made
@@ -662,6 +675,13 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
   if (first_gap == block_changes_count) {
     block_changes_count ++;
   }
+
+  // Invalidate cached chunk so it regenerates with the new block change
+  int chunk_x_fallback = x / 16;
+  int chunk_z_fallback = z / 16;
+  if (x < 0 && x % 16 != 0) chunk_x_fallback--;
+  if (z < 0 && z % 16 != 0) chunk_z_fallback--;
+  invalidate_cached_chunk(chunk_x_fallback, chunk_z_fallback);
 
   return 0;
 }

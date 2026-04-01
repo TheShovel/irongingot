@@ -1,7 +1,7 @@
 #ifndef H_CHUNK_GENERATOR
 #define H_CHUNK_GENERATOR
 
-#define CHUNK_CACHE_SIZE 512
+#include "config.h"
 
 typedef struct {
   int x;  // Chunk X
@@ -17,5 +17,6 @@ void init_chunk_generator();
 void shutdown_chunk_generator();
 void generate_chunk_data(int x, int z);
 CachedChunkData* get_cached_chunk(int x, int z);
+void invalidate_cached_chunk(int x, int z);
 
 #endif

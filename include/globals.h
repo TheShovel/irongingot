@@ -17,6 +17,7 @@
 #define false 0
 
 // TCP port, Minecraft's default is 25565
+// Note: Actual value is loaded from config, this is a fallback default
 #define PORT 25565
 
 // How many players to keep in memory, NOT the amount of concurrent players
@@ -199,11 +200,13 @@ extern uint32_t rng_seed;
 extern uint16_t world_time;
 extern uint32_t server_ticks;
 
-extern char motd[];
+#define MOTD_MAX_LEN 256
+extern char motd[MOTD_MAX_LEN];
 extern uint8_t motd_len;
 
 #ifdef SEND_BRAND
-  extern char brand[];
+  #define BRAND_MAX_LEN 64
+  extern char brand[BRAND_MAX_LEN];
   extern uint8_t brand_len;
 #endif
 

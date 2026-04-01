@@ -5,29 +5,22 @@
 
 #include "globals.h"
 #include "worldgen.h"
+#include "config.h"
+#include "chunk_generator.h"
 
 // Simple chunk cache - stores generated chunk section data
-#define CHUNK_CACHE_SIZE 512
+// Size is determined by config.chunk_cache_size
 
-typedef struct {
-  int x;  // Chunk X
-  int z;  // Chunk Z
-  uint8_t sections[20][4096];  // Block data for 20 middle sections
-  uint8_t biomes[20];  // Biome for each section
-  uint8_t valid;
-  uint8_t generating;  // Lock-free generation flag
-  uint32_t access_count;  // For LRU eviction
-} CachedChunkData;
-
-static CachedChunkData chunk_cache[CHUNK_CACHE_SIZE];
+static CachedChunkData* chunk_cache = NULL;
 static pthread_mutex_t cache_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t gen_mutex = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t global_access_counter = 0;
+static int cache_size = 0;
 
 // Find cache slot for chunk (must be called with cache_mutex held)
 static CachedChunkData* get_cache_locked(int x, int z) {
   // Check if already cached
-  for (int i = 0; i < CHUNK_CACHE_SIZE; i++) {
+  for (int i = 0; i < cache_size; i++) {
     if (chunk_cache[i].valid && chunk_cache[i].x == x && chunk_cache[i].z == z) {
       chunk_cache[i].access_count = ++global_access_counter;
       return &chunk_cache[i];
@@ -36,7 +29,7 @@ static CachedChunkData* get_cache_locked(int x, int z) {
   // Find empty slot using LRU strategy
   int lru_slot = 0;
   uint32_t lru_count = UINT32_MAX;
-  for (int i = 0; i < CHUNK_CACHE_SIZE; i++) {
+  for (int i = 0; i < cache_size; i++) {
     if (!chunk_cache[i].valid) {
       chunk_cache[i].x = x;
       chunk_cache[i].z = z;
@@ -98,8 +91,8 @@ void generate_chunk_data(int x, int z) {
 CachedChunkData* get_cached_chunk(int x, int z) {
   pthread_mutex_lock(&cache_mutex);
 
-  for (int i = 0; i < CHUNK_CACHE_SIZE; i++) {
-    if (chunk_cache[i].valid && !chunk_cache[i].generating && 
+  for (int i = 0; i < cache_size; i++) {
+    if (chunk_cache[i].valid && !chunk_cache[i].generating &&
         chunk_cache[i].x == x && chunk_cache[i].z == z) {
       chunk_cache[i].access_count = ++global_access_counter;
       pthread_mutex_unlock(&cache_mutex);
@@ -109,6 +102,21 @@ CachedChunkData* get_cached_chunk(int x, int z) {
 
   pthread_mutex_unlock(&cache_mutex);
   return NULL;
+}
+
+// Invalidate cached chunk (called when block changes are made)
+void invalidate_cached_chunk(int x, int z) {
+  pthread_mutex_lock(&cache_mutex);
+
+  for (int i = 0; i < cache_size; i++) {
+    if (chunk_cache[i].valid &&
+        chunk_cache[i].x == x && chunk_cache[i].z == z) {
+      chunk_cache[i].valid = 0;  // Mark as invalid, will regenerate on next access
+      break;
+    }
+  }
+
+  pthread_mutex_unlock(&cache_mutex);
 }
 
 // Worker thread - continuously generates chunks around players
@@ -150,13 +158,27 @@ void* chunk_generator_worker(void* arg) {
 }
 
 void init_chunk_generator() {
+  // Allocate chunk cache based on config
+  cache_size = config.chunk_cache_size;
+  chunk_cache = (CachedChunkData*)malloc(cache_size * sizeof(CachedChunkData));
+  if (!chunk_cache) {
+    fprintf(stderr, "ERROR: Failed to allocate chunk cache (%d entries)\n", cache_size);
+    exit(1);
+  }
+  // Initialize cache entries
+  memset(chunk_cache, 0, cache_size * sizeof(CachedChunkData));
+  
   running = 1;
   pthread_create(&worker_thread, NULL, chunk_generator_worker, NULL);
-  printf("Chunk generator thread started\n");
+  printf("Chunk generator thread started (cache size: %d chunks)\n", cache_size);
 }
 
 void shutdown_chunk_generator() {
   running = 0;
   pthread_join(worker_thread, NULL);
+  if (chunk_cache) {
+    free(chunk_cache);
+    chunk_cache = NULL;
+  }
   printf("Chunk generator thread stopped\n");
 }
