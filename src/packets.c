@@ -552,6 +552,17 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
     
     #ifdef ALLOW_DOORS
     if (isDoorBlock(block_changes[i].block)) {
+      // Bounds check: ensure i+1 and i+2 are valid indices
+      if (i + 2 >= block_changes_count) continue;
+      
+      // Verify that i+1 is the upper half of this door
+      if (block_changes[i + 1].x != block_changes[i].x || 
+          block_changes[i + 1].y != block_changes[i].y + 1 || 
+          block_changes[i + 1].z != block_changes[i].z) continue;
+      
+      // Verify that i+2 is the state entry
+      if (block_changes[i + 2].block != 0 || block_changes[i + 2].z != block_changes[i].z) continue;
+      
       // Send door with proper state (both halves)
       uint8_t *state_ptr = (uint8_t *)(&block_changes[i + 2]);
       uint8_t direction = state_ptr[0];

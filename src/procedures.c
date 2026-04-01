@@ -1706,6 +1706,17 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
           continue;
         }
 
+        // Bounds check: ensure i+1 and i+2 are valid indices
+        if (i + 2 >= block_changes_count) continue;
+        
+        // Verify that i+1 is the upper half of this door (same x,z, y+1)
+        if (block_changes[i + 1].x != door_x || 
+            block_changes[i + 1].y != door_y + 1 || 
+            block_changes[i + 1].z != door_z) continue;
+        
+        // Verify that i+2 is the state entry (block == 0, z matches)
+        if (block_changes[i + 2].block != 0 || block_changes[i + 2].z != door_z) continue;
+
         // Find the door state data (3rd slot after door blocks)
         // State is stored at i + 2
         uint8_t *state_ptr = (uint8_t *)(&block_changes[i + 2]);
@@ -1795,8 +1806,23 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
   #ifdef ALLOW_DOORS
   if (isDoorBlock(block)) {
     // Check if there's space above for the upper half
-    if (!isReplaceableBlock(getBlockAt(x, y + 1, z))) {
+    uint8_t block_above = getBlockAt(x, y + 1, z);
+    if (!isReplaceableBlock(block_above)) {
       return;
+    }
+    // Check that the upper half won't overwrite another door
+    if (isDoorBlock(block_above)) {
+      return;
+    }
+    // Check that we're not replacing an existing door
+    uint8_t existing = getBlockAt(x, y, z);
+    if (isDoorBlock(existing)) {
+      return;
+    }
+    // Check that there's no door above (at y+2) - prevents placing under doors
+    uint8_t block_above_2 = getBlockAt(x, y + 2, z);
+    if (isDoorBlock(block_above_2)) {
+      return;  // Can't place door underneath another door
     }
     // Doors need a solid block below
     uint8_t block_below = getBlockAt(x, y - 1, z);
@@ -1806,6 +1832,19 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       block_below = getBlockAt(x, y - 1, z);
       if (isReplaceableBlock(block_below)) {
         return;  // Can't place door in mid-air
+      }
+      // Re-check all conditions at adjusted position
+      block_above = getBlockAt(x, y + 1, z);
+      if (!isReplaceableBlock(block_above) || isDoorBlock(block_above)) {
+        return;
+      }
+      existing = getBlockAt(x, y, z);
+      if (isDoorBlock(existing)) {
+        return;
+      }
+      block_above_2 = getBlockAt(x, y + 2, z);
+      if (isDoorBlock(block_above_2)) {
+        return;
       }
     }
 
@@ -1849,6 +1888,17 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       for (int i = 0; i < block_changes_count; i ++) {
         if (!isDoorBlock(block_changes[i].block)) continue;
         if (block_changes[i].x != x || block_changes[i].y != y || block_changes[i].z != z) continue;
+
+        // Bounds check: ensure i+1 and i+2 are valid indices
+        if (i + 2 >= block_changes_count) break;
+        
+        // Verify that i+1 is the upper half of this door
+        if (block_changes[i + 1].x != x || 
+            block_changes[i + 1].y != y + 1 || 
+            block_changes[i + 1].z != z) break;
+        
+        // Verify that i+2 is the state entry
+        if (block_changes[i + 2].block != 0 || block_changes[i + 2].z != z) break;
 
         // Found the door, update state
         uint8_t *state_ptr = (uint8_t *)(&block_changes[i + 2]);
