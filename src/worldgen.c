@@ -464,56 +464,67 @@ static inline uint8_t isCaveSimple(int x, int y, int z, uint8_t height, uint8_t 
 
 uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor anchor, ChunkFeature feature, uint8_t height) {
 
-  if (y >= 64 && y >= height && feature.y != 255) switch (anchor.biome) {
+  if (y >= 64 && y >= height) switch (anchor.biome) {
     case W_plains: { // Generate oak trees and grass in plains
 
+      // Tree generation - check if feature is valid (not skipped)
+      if (feature.y == 255) goto plains_vegetation;  // Feature was skipped
+      
       // Don't generate trees underwater or on mountains
-      if (feature.y < 64 || feature.y > 120) break;
+      if (feature.y < 64 || feature.y > 120) goto plains_vegetation;
 
-      // Handle tree trunk and dirt
-      if (x == feature.x && z == feature.z) {
-        if (y == feature.y - 1) return B_dirt;
-        if (y >= feature.y && y < feature.y + 4 + feature.variant) return B_oak_log;
+      // Increased tree spawn rate: 85% chance (was 75%)
+      if ((anchor.hash & 0x0F) <= 12) {
+        // Add random height variation: ±1 block
+        int height_var = (anchor.hash >> (x + z)) & 3;  // 0-3
+        int height_adjust = (height_var == 0) ? -1 : (height_var == 3) ? 1 : 0;
+
+        // Handle tree trunk and dirt
+        if (x == feature.x && z == feature.z) {
+          if (y == feature.y - 1) return B_dirt;
+          if (y >= feature.y && y < feature.y + 4 + feature.variant + height_adjust) return B_oak_log;
+        }
+
+        // Get X/Z distance from center of tree
+        uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
+        uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+        uint8_t dist = dx + dz;
+
+        // Oak canopy - wider leaves (radius 3 instead of 2) for fuller appearance
+        uint8_t trunk_top = feature.y + 4 + feature.variant + height_adjust;
+        // Leaves start 2 blocks below trunk top, wider canopy
+        if (y == trunk_top - 2 && dist <= 3) {
+          if (dist == 3 && (dx == 3 || dz == 3)) break;
+          return B_oak_leaves;
+        }
+        // Middle layers - wider
+        if (y == trunk_top - 1 && dist <= 3) {
+          if (dist == 3 && (dx == 3 || dz == 3)) break;
+          return B_oak_leaves;
+        }
+        if (y == trunk_top && dist <= 3) {
+          if (dist == 3 && (dx == 3 || dz == 3)) break;
+          return B_oak_leaves;
+        }
+        // Top layer - slightly smaller
+        if (y == trunk_top + 1 && dist <= 2) return B_oak_leaves;
       }
-      
-      // Get X/Z distance from center of tree
-      uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
-      uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
-      uint8_t dist = dx + dz;
-      
-      // Oak canopy - starts partway up trunk, rounded shape
-      uint8_t trunk_top = feature.y + 4 + feature.variant;
-      // Leaves start 1 block below trunk top
-      if (y == trunk_top - 1 && dist <= 2) {
-        if (dist == 2 && (dx == 2 || dz == 2)) break;
-        return B_oak_leaves;
-      }
-      // Middle layers
-      if (y == trunk_top && dist <= 2) {
-        if (dx == 2 && dz == 2) break;
-        return B_oak_leaves;
-      }
-      if (y == trunk_top + 1 && dist <= 2) {
-        if (dx == 2 && dz == 2) break;
-        return B_oak_leaves;
-      }
-      // Top layer
-      if (y == trunk_top + 2 && dist <= 1) return B_oak_leaves;
-      
-      // Since we're sure that we're above sea level and in a plains biome,
-      // there's no need to drop down to decide the surrounding blocks.
+
+      plains_vegetation:
+      // Random vegetation and flowers (spawns everywhere, not just near trees)
       if (y == height) return B_grass_block;
-      
-      // Flower and grass decorations
+
       if (y == height + 1) {
+        // Use position-based hash for consistent random decoration
         uint8_t decor_hash = (anchor.hash >> (x + z)) & 255;
-        
-        // 20% chance for short grass
-        if (decor_hash < 51) return B_short_grass;
-        
-        // 3% chance for flowers
-        if (decor_hash >= 51 && decor_hash < 59) {
-          uint8_t flower_type = (decor_hash >> 3) % 6;
+        uint8_t flower_hash = (anchor.hash >> ((x * z) & 7)) & 255;
+
+        // 15% chance for short grass
+        if (decor_hash < 38) return B_short_grass;
+
+        // 2% chance for flowers (scattered randomly)
+        if (decor_hash >= 230 && decor_hash < 235) {
+          uint8_t flower_type = flower_hash % 6;
           if (flower_type == 0) return B_dandelion;
           if (flower_type == 1) return B_poppy;
           if (flower_type == 2) return B_azure_bluet;
@@ -522,90 +533,102 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
           if (flower_type == 5) return B_allium;
         }
       }
-      
+
       return B_air;
     }
     
     case W_forest: { // Generate oak and birch trees in forests
 
+      // Tree generation - check if feature is valid
+      if (feature.y == 255) goto forest_vegetation;
+      
       // Don't generate trees underwater or on mountains
-      if (feature.y < 64 || feature.y > 120) break;
+      if (feature.y < 64 || feature.y > 120) goto forest_vegetation;
 
-      // Use hash to decide between oak and birch
-      uint8_t is_birch = (anchor.hash >> 3) & 1;
+      // Increased tree spawn rate: 90% chance (was 50%)
+      if ((anchor.hash & 0x07) <= 6) {
+        // Use hash to decide between oak and birch
+        uint8_t is_birch = (anchor.hash >> 3) & 1;
 
-      if (x == feature.x && z == feature.z) {
-        if (y == feature.y - 1) return B_dirt;
-        // Birch trees are taller with distinctive white bark
+        // Add random height variation: ±1 block
+        int height_var = (anchor.hash >> (x + z)) & 3;
+        int height_adjust = (height_var == 0) ? -1 : (height_var == 3) ? 1 : 0;
+
+        if (x == feature.x && z == feature.z) {
+          if (y == feature.y - 1) return B_dirt;
+          // Birch trees are taller with distinctive white bark
+          if (is_birch) {
+            if (y >= feature.y && y < feature.y + 5 + feature.variant + height_adjust) return B_birch_log;
+          } else {
+            if (y >= feature.y && y < feature.y + 4 + feature.variant + height_adjust) return B_oak_log;
+          }
+        }
+
+        // Get X/Z distance from center of tree
+        uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
+        uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+        uint8_t dist = dx + dz;
+
+        // Generate leaf clusters
         if (is_birch) {
-          if (y >= feature.y && y < feature.y + 5 + feature.variant) return B_birch_log;
+          // Birch leaves - wider canopy (radius 3), sparse and spread out
+          uint8_t trunk_top = feature.y + 5 + feature.variant + height_adjust;
+          // Leaves start 2 blocks below trunk top, wider canopy
+          if (y == trunk_top - 2 && dist <= 3) {
+            if (dist == 3 && (dx == 3 || dz == 3)) break;
+            return B_birch_leaves;
+          }
+          // Main canopy layers - wider
+          if (y == trunk_top - 1 && dist <= 3) {
+            if (dist == 3 && (dx == 3 || dz == 3)) break;
+            return B_birch_leaves;
+          }
+          if (y == trunk_top && dist <= 3) {
+            if (dist == 3 && (dx == 3 || dz == 3)) break;
+            return B_birch_leaves;
+          }
+          // Top layer - slightly smaller
+          if (y == trunk_top + 1 && dist <= 2) return B_birch_leaves;
+          // Occasional lower leaves - wider
+          if (y == trunk_top - 3 && dist == 3 && (dx == 3 || dz == 3)) {
+            if ((anchor.hash >> (y + x + z)) & 1) return B_birch_leaves;
+          }
         } else {
-          if (y >= feature.y && y < feature.y + 4 + feature.variant) return B_oak_log;
+          // Oak leaves - wider rounded canopy (radius 3)
+          uint8_t trunk_top = feature.y + 4 + feature.variant + height_adjust;
+          // Leaves start 2 blocks below trunk top, wider canopy
+          if (y == trunk_top - 2 && dist <= 3) {
+            if (dist == 3 && (dx == 3 || dz == 3)) break;
+            return B_oak_leaves;
+          }
+          // Middle layers - wider
+          if (y == trunk_top - 1 && dist <= 3) {
+            if (dist == 3 && (dx == 3 || dz == 3)) break;
+            return B_oak_leaves;
+          }
+          if (y == trunk_top && dist <= 3) {
+            if (dist == 3 && (dx == 3 || dz == 3)) break;
+            return B_oak_leaves;
+          }
+          // Top layer - slightly smaller
+          if (y == trunk_top + 1 && dist <= 2) return B_oak_leaves;
         }
-      }
-      
-      // Get X/Z distance from center of tree
-      uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
-      uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
-      uint8_t dist = dx + dz;
-      
-      // Generate leaf clusters
-      if (is_birch) {
-        // Birch leaves - sparse and spread out, typical birch shape
-        uint8_t trunk_top = feature.y + 5 + feature.variant;
-        // Leaves start partway up trunk
-        if (y == trunk_top - 1 && dist <= 2) {
-          if (dist == 2 && (dx == 2 || dz == 2)) break;
-          return B_birch_leaves;
-        }
-        // Main canopy layers
-        if (y == trunk_top && dist <= 2) {
-          if (dx == 2 && dz == 2) break;
-          return B_birch_leaves;
-        }
-        if (y == trunk_top + 1 && dist <= 2) {
-          if (dx == 2 && dz == 2) break;
-          return B_birch_leaves;
-        }
-        // Top layer
-        if (y == trunk_top + 2 && dist <= 1) return B_birch_leaves;
-        // Occasional lower leaves
-        if (y == trunk_top - 2 && dist == 2 && (dx == 2 || dz == 2)) {
-          if ((anchor.hash >> (y + x + z)) & 1) return B_birch_leaves;
-        }
-      } else {
-        // Oak leaves - rounded canopy
-        uint8_t trunk_top = feature.y + 4 + feature.variant;
-        // Leaves start partway up trunk
-        if (y == trunk_top - 1 && dist <= 2) {
-          if (dist == 2 && (dx == 2 || dz == 2)) break;
-          return B_oak_leaves;
-        }
-        // Middle layers
-        if (y == trunk_top && dist <= 2) {
-          if (dx == 2 && dz == 2) break;
-          return B_oak_leaves;
-        }
-        if (y == trunk_top + 1 && dist <= 2) {
-          if (dx == 2 && dz == 2) break;
-          return B_oak_leaves;
-        }
-        // Top layer
-        if (y == trunk_top + 2 && dist <= 1) return B_oak_leaves;
       }
 
+      forest_vegetation:
+      // Random vegetation and flowers (spawns everywhere)
       if (y == height) return B_grass_block;
       
-      // Flower and grass decorations - forests have more vegetation
       if (y == height + 1) {
         uint8_t decor_hash = (anchor.hash >> (x + z)) & 255;
-        
-        // 25% chance for short grass
-        if (decor_hash < 64) return B_short_grass;
-        
-        // 5% chance for flowers (forests have more flowers)
-        if (decor_hash >= 64 && decor_hash < 77) {
-          uint8_t flower_type = (decor_hash >> 3) % 8;
+        uint8_t flower_hash = (anchor.hash >> ((x * z) & 7)) & 255;
+
+        // 20% chance for short grass
+        if (decor_hash < 51) return B_short_grass;
+
+        // 3% chance for flowers (forests have more flowers)
+        if (decor_hash >= 220 && decor_hash < 228) {
+          uint8_t flower_type = flower_hash % 8;
           if (flower_type == 0) return B_dandelion;
           if (flower_type == 1) return B_poppy;
           if (flower_type == 2) return B_azure_bluet;
@@ -616,355 +639,451 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
           if (flower_type == 7) return B_lily_of_the_valley;
         }
       }
-      
+
       return B_air;
     }
 
     case W_taiga: // Generate spruce trees in taiga
     case W_old_growth_pine_taiga: {
 
+      // Tree generation - check if feature is valid
+      if (feature.y == 255) goto taiga_vegetation;
+      
       // Don't generate trees underwater or on mountains
-      if (feature.y < 64 || feature.y > 120) break;
+      if (feature.y < 64 || feature.y > 120) goto taiga_vegetation;
 
-      // Spruce trees are tall and conical
-      if (x == feature.x && z == feature.z) {
-        if (y == feature.y - 1) return B_dirt;
-        if (y >= feature.y && y < feature.y + 6 + feature.variant * 2) return B_spruce_log;
-      }
-      
-      // Get X/Z distance from center of tree
-      uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
-      uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
-      uint8_t dist = dx + dz;
-      
-      // Conical spruce leaves - starts partway up the trunk
-      uint8_t leaf_base = feature.y + 3;
-      uint8_t leaf_top = feature.y + 9 + feature.variant * 2;
-      
-      // Spruce tree leaves form a cone shape
-      for (int ly = leaf_base; ly <= leaf_top; ly++) {
-        int dist_from_top = leaf_top - ly;
-        int max_radius = (dist_from_top / 2) + 1;
-        if (y == ly && dist <= max_radius && dist > 0) {
-          return B_spruce_leaves;
+      // Increased tree spawn rate: 85% chance (was ~50%)
+      if ((anchor.hash & 0x07) <= 6) {
+        // Add random height variation: ±1 block
+        int height_var = (anchor.hash >> (x + z)) & 3;
+        int height_adjust = (height_var == 0) ? -1 : (height_var == 3) ? 1 : 0;
+
+        // Spruce trees are tall and conical
+        if (x == feature.x && z == feature.z) {
+          if (y == feature.y - 1) return B_dirt;
+          if (y >= feature.y && y < feature.y + 6 + feature.variant * 2 + height_adjust) return B_spruce_log;
         }
-      }
-      // Top of the tree
-      if (y == leaf_top + 1 && dist == 0) return B_spruce_leaves;
 
+        // Get X/Z distance from center of tree
+        uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
+        uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+        uint8_t dist = dx + dz;
+
+        // Conical spruce leaves - moved down by 1 block for fuller appearance
+        uint8_t leaf_base = feature.y + 2;
+        uint8_t leaf_top = feature.y + 8 + feature.variant * 2 + height_adjust;
+
+        // Spruce tree leaves form a cone shape
+        for (int ly = leaf_base; ly <= leaf_top; ly++) {
+          int dist_from_top = leaf_top - ly;
+          int max_radius = (dist_from_top / 2) + 1;
+          if (y == ly && dist <= max_radius && dist > 0) {
+            return B_spruce_leaves;
+          }
+        }
+        // Top of the tree
+        if (y == leaf_top + 1 && dist == 0) return B_spruce_leaves;
+      }
+
+      taiga_vegetation:
+      // Random vegetation (spawns everywhere)
       if (y == height) return B_grass_block;
       
-      // Taiga decorations - ferns and grass
       if (y == height + 1) {
         uint8_t decor_hash = (anchor.hash >> (x + z)) & 255;
-        
-        // 30% chance for ferns (taiga has lots of ferns)
-        if (decor_hash < 77) return B_fern;
-        
-        // 15% chance for short grass
-        if (decor_hash >= 77 && decor_hash < 115) return B_short_grass;
-        
+
+        // 25% chance for ferns (taiga has lots of ferns)
+        if (decor_hash < 64) return B_fern;
+
+        // 10% chance for short grass
+        if (decor_hash >= 64 && decor_hash < 90) return B_short_grass;
+
         // 2% chance for berries (bush)
-        if (decor_hash >= 115 && decor_hash < 120) return B_bush;
+        if (decor_hash >= 240 && decor_hash < 245) return B_bush;
       }
-      
+
       return B_air;
     }
 
     case W_snowy_taiga: { // Generate spruce trees with snow in cold taiga
 
+      // Tree generation - check if feature is valid
+      if (feature.y == 255) goto snowy_taiga_vegetation;
+      
       // Don't generate trees underwater or on mountains
-      if (feature.y < 64 || feature.y > 120) break;
+      if (feature.y < 64 || feature.y > 120) goto snowy_taiga_vegetation;
 
-      if (x == feature.x && z == feature.z) {
-        if (y == feature.y - 1) return B_dirt;
-        if (y >= feature.y && y < feature.y + 5 + feature.variant * 2) return B_spruce_log;
-      }
-      
-      // Get X/Z distance from center of tree
-      uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
-      uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
-      uint8_t dist = dx + dz;
-      
-      // Conical spruce leaves with snow
-      uint8_t leaf_base = feature.y + 2;
-      uint8_t leaf_top = feature.y + 8 + feature.variant * 2;
-      
-      for (int ly = leaf_base; ly <= leaf_top; ly++) {
-        int dist_from_top = leaf_top - ly;
-        int max_radius = (dist_from_top / 2) + 1;
-        if (y == ly && dist <= max_radius && dist > 0) {
-          return B_spruce_leaves;
+      // Increased tree spawn rate: 85% chance
+      if ((anchor.hash & 0x07) <= 6) {
+        // Add random height variation: ±1 block
+        int height_var = (anchor.hash >> (x + z)) & 3;
+        int height_adjust = (height_var == 0) ? -1 : (height_var == 3) ? 1 : 0;
+
+        if (x == feature.x && z == feature.z) {
+          if (y == feature.y - 1) return B_dirt;
+          if (y >= feature.y && y < feature.y + 5 + feature.variant * 2 + height_adjust) return B_spruce_log;
         }
-      }
-      if (y == leaf_top + 1 && dist == 0) return B_spruce_leaves;
 
+        // Get X/Z distance from center of tree
+        uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
+        uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+        uint8_t dist = dx + dz;
+
+        // Conical spruce leaves with snow - moved down by 1 block
+        uint8_t leaf_base = feature.y + 1;
+        uint8_t leaf_top = feature.y + 7 + feature.variant * 2 + height_adjust;
+
+        for (int ly = leaf_base; ly <= leaf_top; ly++) {
+          int dist_from_top = leaf_top - ly;
+          int max_radius = (dist_from_top / 2) + 1;
+          if (y == ly && dist <= max_radius && dist > 0) {
+            return B_spruce_leaves;
+          }
+        }
+        if (y == leaf_top + 1 && dist == 0) return B_spruce_leaves;
+      }
+
+      snowy_taiga_vegetation:
+      // Random vegetation (spawns everywhere)
       if (y == height) return B_grass_block;
       
-      // Snowy taiga decorations - ferns and grass stubs under snow
       if (y == height + 1) {
         uint8_t decor_hash = (anchor.hash >> (x + z)) & 255;
-        
-        // 20% chance for ferns
-        if (decor_hash < 51) return B_fern;
-        
-        // 10% chance for short grass (appears under snow layer)
-        if (decor_hash >= 51 && decor_hash < 77) return B_short_grass;
+
+        // 15% chance for ferns
+        if (decor_hash < 38) return B_fern;
+
+        // 8% chance for short grass (appears under snow layer)
+        if (decor_hash >= 38 && decor_hash < 58) return B_short_grass;
       }
-      
+
       return B_air;
     }
 
     case W_jungle: // Generate jungle trees with vines
     case W_bamboo_jungle: {
 
+      // Tree generation - check if feature is valid
+      if (feature.y == 255) goto jungle_vegetation;
+      
       // Don't generate trees underwater or on mountains
-      if (feature.y < 64 || feature.y > 120) break;
+      if (feature.y < 64 || feature.y > 120) goto jungle_vegetation;
 
-      // Jungle trees are very tall with 2x2 trunks
-      int base_x = feature.x & ~1;
-      int base_z = feature.z & ~1;
-      int trunk_height = 10 + feature.variant * 4;
-      
-      // 2x2 trunk
-      if (x >= base_x && x < base_x + 2 && z >= base_z && z < base_z + 2) {
-        if (y == feature.y - 1) return B_dirt;
-        if (y >= feature.y && y < feature.y + trunk_height) return B_jungle_log;
-      }
-      
-      // Get distance from tree center
-      uint8_t cx = base_x + 1;
-      uint8_t cz = base_z + 1;
-      uint8_t dx = x > cx ? x - cx : cx - x;
-      uint8_t dz = z > cz ? z - cz : cz - z;
-      uint8_t dist = (dx > dz ? dx : dz);  // Chebyshev distance for square shape
-      
-      // Large jungle leaf canopy - wide and flat
-      uint8_t canopy_base = feature.y + trunk_height - 2;
-      uint8_t canopy_top = feature.y + trunk_height + 2;
-      
-      // Main canopy layers
-      if (y >= canopy_base && y <= canopy_top) {
-        if (dist <= 3) {
-          if (y == canopy_base && dist == 3) break;
-          return B_jungle_leaves;
+      // Increased tree spawn rate: 80% chance
+      if ((anchor.hash & 0x07) <= 5) {
+        // Add random height variation: ±2 blocks for jungle trees (they vary more)
+        int height_var = (anchor.hash >> (x + z)) & 3;
+        int height_adjust = (height_var == 0) ? -2 : (height_var == 3) ? 2 : ((height_var == 1) ? -1 : 1);
+
+        // Jungle trees are very tall with 2x2 trunks
+        int base_x = feature.x & ~1;
+        int base_z = feature.z & ~1;
+        int trunk_height = 10 + feature.variant * 4 + height_adjust;
+
+        // 2x2 trunk
+        if (x >= base_x && x < base_x + 2 && z >= base_z && z < base_z + 2) {
+          if (y == feature.y - 1) return B_dirt;
+          if (y >= feature.y && y < feature.y + trunk_height) return B_jungle_log;
         }
-      }
-      // Upper canopy
-      if (y == canopy_top + 1 && dist <= 2) return B_jungle_leaves;
-      if (y == canopy_top + 2 && dist <= 1) return B_jungle_leaves;
 
+        // Get distance from tree center
+        uint8_t cx = base_x + 1;
+        uint8_t cz = base_z + 1;
+        uint8_t dx = x > cx ? x - cx : cx - x;
+        uint8_t dz = z > cz ? z - cz : cz - z;
+        uint8_t dist = (dx > dz ? dx : dz);
+
+        // Large jungle leaf canopy - wide and flat, moved down by 1 block
+        uint8_t canopy_base = feature.y + trunk_height - 3;
+        uint8_t canopy_top = feature.y + trunk_height + 1;
+
+        // Main canopy layers
+        if (y >= canopy_base && y <= canopy_top) {
+          if (dist <= 3) {
+            if (y == canopy_base && dist == 3) break;
+            return B_jungle_leaves;
+          }
+        }
+        // Upper canopy
+        if (y == canopy_top + 1 && dist <= 2) return B_jungle_leaves;
+        if (y == canopy_top + 2 && dist <= 1) return B_jungle_leaves;
+      }
+
+      jungle_vegetation:
+      // Random vegetation (spawns everywhere)
       if (y == height) return B_grass_block;
       
-      // Jungle decorations - dense ferns and tall grass
       if (y == height + 1) {
         uint8_t decor_hash = (anchor.hash >> (x + z)) & 255;
-        
-        // 35% chance for ferns (jungles have lots of vegetation)
-        if (decor_hash < 90) return B_fern;
-        
-        // 15% chance for tall grass
-        if (decor_hash >= 90 && decor_hash < 128) return B_short_grass;
-        
-        // 3% chance for melon stems (bush as placeholder)
-        if (decor_hash >= 128 && decor_hash < 136) return B_bush;
+
+        // 30% chance for ferns (jungles have lots of vegetation)
+        if (decor_hash < 77) return B_fern;
+
+        // 10% chance for tall grass
+        if (decor_hash >= 77 && decor_hash < 102) return B_short_grass;
+
+        // 2% chance for melon stems (bush as placeholder)
+        if (decor_hash >= 240 && decor_hash < 245) return B_bush;
       }
-      
+
       return B_air;
     }
 
     case W_savanna: { // Generate acacia trees in savanna
 
+      // Tree generation - check if feature is valid
+      if (feature.y == 255) goto savanna_vegetation;
+      
       // Don't generate trees underwater or on mountains
-      if (feature.y < 64 || feature.y > 120) break;
+      if (feature.y < 64 || feature.y > 120) goto savanna_vegetation;
 
-      // Acacia trees have a distinctive curved shape
-      int trunk_height = 4 + feature.variant;
-      
-      // Main trunk (straight part)
-      if (x == feature.x && z == feature.z) {
-        if (y == feature.y - 1) return B_dirt;
-        if (y >= feature.y && y < feature.y + trunk_height) return B_acacia_log;
-      }
-      
-      // Curved trunk section (extends in +X direction)
-      for (int i = 1; i <= 3; i++) {
-        if (x == feature.x + i && z == feature.z) {
-          if (y >= feature.y + trunk_height && y < feature.y + trunk_height + 2) {
-            return B_acacia_log;
+      // Increased tree spawn rate: 85% chance
+      if ((anchor.hash & 0x07) <= 6) {
+        // Add random height variation: ±1 block
+        int height_var = (anchor.hash >> (x + z)) & 3;
+        int height_adjust = (height_var == 0) ? -1 : (height_var == 3) ? 1 : 0;
+
+        // Acacia trees have a distinctive curved shape
+        int trunk_height = 4 + feature.variant + height_adjust;
+
+        // Main trunk (straight part)
+        if (x == feature.x && z == feature.z) {
+          if (y == feature.y - 1) return B_dirt;
+          if (y >= feature.y && y < feature.y + trunk_height) return B_acacia_log;
+        }
+
+        // Curved trunk section (extends in +X direction)
+        for (int i = 1; i <= 3; i++) {
+          if (x == feature.x + i && z == feature.z) {
+            if (y >= feature.y + trunk_height && y < feature.y + trunk_height + 2) {
+              return B_acacia_log;
+            }
           }
         }
-      }
-      
-      // Get distance from canopy center (offset from trunk)
-      uint8_t canopy_cx = feature.x + 2;
-      uint8_t dx = x > canopy_cx ? x - canopy_cx : canopy_cx - x;
-      uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
-      uint8_t dist = dx + dz;
-      
-      // Acacia leaf canopy (wide, flat umbrella shape)
-      uint8_t canopy_y = feature.y + trunk_height + 2;
-      if (y >= canopy_y && y <= canopy_y + 1) {
-        if (dist <= 3) {
-          if (y == canopy_y && dist == 3) break;
-          return B_acacia_leaves;
-        }
-      }
-      // Top layer
-      if (y == canopy_y + 2 && dist <= 2) return B_acacia_leaves;
 
+        // Get distance from canopy center (offset from trunk)
+        uint8_t canopy_cx = feature.x + 2;
+        uint8_t dx = x > canopy_cx ? x - canopy_cx : canopy_cx - x;
+        uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+        uint8_t dist = dx + dz;
+
+        // Acacia leaf canopy (wide, flat umbrella shape) - moved down by 1 block
+        uint8_t canopy_y = feature.y + trunk_height + 1;
+        if (y >= canopy_y && y <= canopy_y + 1) {
+          if (dist <= 3) {
+            if (y == canopy_y && dist == 3) break;
+            return B_acacia_leaves;
+          }
+        }
+        // Top layer
+        if (y == canopy_y + 2 && dist <= 2) return B_acacia_leaves;
+      }
+
+      savanna_vegetation:
+      // Random vegetation (spawns everywhere)
       if (y == height) return B_grass_block;
       
-      // Savanna decorations - dry grass and sparse flowers
       if (y == height + 1) {
         uint8_t decor_hash = (anchor.hash >> (x + z)) & 255;
-        
-        // 25% chance for tall dry grass
-        if (decor_hash < 64) return B_tall_dry_grass;
-        
-        // 10% chance for short dry grass
-        if (decor_hash >= 64 && decor_hash < 90) return B_short_dry_grass;
-        
-        // 2% chance for dandelions (hardy flowers)
-        if (decor_hash >= 90 && decor_hash < 95) return B_dandelion;
+
+        // 20% chance for tall dry grass
+        if (decor_hash < 51) return B_tall_dry_grass;
+
+        // 8% chance for short dry grass
+        if (decor_hash >= 51 && decor_hash < 71) return B_short_dry_grass;
+
+        // 1% chance for dandelions (hardy flowers)
+        if (decor_hash >= 250 && decor_hash < 253) return B_dandelion;
       }
-      
+
       return B_air;
     }
 
     case W_dark_forest: { // Generate dark oak trees (2x2 trunks)
+
+      // Tree generation - check if feature is valid
+      if (feature.y == 255) goto dark_forest_vegetation;
       
       // Don't generate trees underwater
-      if (feature.y < 64) break;
-      
-      // Dark oak trees have 2x2 trunks
-      int base_x = feature.x & ~1;  // Round down to even
-      int base_z = feature.z & ~1;
-      int trunk_height = 6 + feature.variant;
-      
-      if (x >= base_x && x < base_x + 2 && z >= base_z && z < base_z + 2) {
-        if (y == feature.y - 1) return B_dirt;
-        if (y >= feature.y && y < feature.y + trunk_height) return B_dark_oak_log;
-      }
-      
-      // Get distance from tree center
-      uint8_t cx = base_x + 1;
-      uint8_t cz = base_z + 1;
-      uint8_t dx = x > cx ? x - cx : cx - x;
-      uint8_t dz = z > cz ? z - cz : cz - z;
-      uint8_t dist = dx + dz;
-      
-      // Large dark oak canopy - dome shape
-      uint8_t canopy_base = feature.y + trunk_height;
-      if (y >= canopy_base && y <= canopy_base + 3) {
-        int layer = y - canopy_base;
-        int max_dist = 3 - layer;
-        if (dist <= max_dist + 1 && dist > 0) {
-          return B_dark_oak_leaves;
+      if (feature.y < 64) goto dark_forest_vegetation;
+
+      // Increased tree spawn rate: 90% chance
+      if ((anchor.hash & 0x07) <= 6) {
+        // Add random height variation: ±1 block
+        int height_var = (anchor.hash >> (x + z)) & 3;
+        int height_adjust = (height_var == 0) ? -1 : (height_var == 3) ? 1 : 0;
+
+        // Dark oak trees have 2x2 trunks
+        int base_x = feature.x & ~1;
+        int base_z = feature.z & ~1;
+        int trunk_height = 6 + feature.variant + height_adjust;
+
+        if (x >= base_x && x < base_x + 2 && z >= base_z && z < base_z + 2) {
+          if (y == feature.y - 1) return B_dirt;
+          if (y >= feature.y && y < feature.y + trunk_height) return B_dark_oak_log;
         }
-      }
-      // Top of canopy
-      if (y == canopy_base + 4 && dist <= 1) return B_dark_oak_leaves;
-      
-      if (y == height) return B_grass_block;
-      return B_air;
-    }
-    
-    case W_birch_forest: { // Generate only birch trees
-      
-      // Don't generate trees underwater
-      if (feature.y < 64) break;
-      
-      if (x == feature.x && z == feature.z) {
-        if (y == feature.y - 1) return B_dirt;
-        if (y >= feature.y && y < feature.y + 5 + feature.variant) return B_birch_log;
-      }
-      
-      // Get X/Z distance from center of tree
-      uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
-      uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
-      uint8_t dist = dx + dz;
-      
-      // Birch leaves - sparse and spread out
-      uint8_t trunk_top = feature.y + 5 + feature.variant;
-      // Leaves start partway up trunk
-      if (y == trunk_top - 1 && dist <= 2) {
-        if (dist == 2 && (dx == 2 || dz == 2)) break;
-        return B_birch_leaves;
-      }
-      // Main canopy layers
-      if (y == trunk_top && dist <= 2) {
-        if (dx == 2 && dz == 2) break;
-        return B_birch_leaves;
-      }
-      if (y == trunk_top + 1 && dist <= 2) {
-        if (dx == 2 && dz == 2) break;
-        return B_birch_leaves;
-      }
-      // Top layer
-      if (y == trunk_top + 2 && dist <= 1) return B_birch_leaves;
-      // Occasional lower leaves
-      if (y == trunk_top - 2 && dist == 2 && (dx == 2 || dz == 2)) {
-        if ((anchor.hash >> (y + x + z)) & 1) return B_birch_leaves;
-      }
-      
-      if (y == height) return B_grass_block;
-      return B_air;
-    }
-    
-    case W_cherry_grove: { // Generate cherry blossom trees
-      
-      // Don't generate trees underwater
-      if (feature.y < 64) break;
-      
-      if (x == feature.x && z == feature.z) {
-        if (y == feature.y - 1) return B_dirt;
-        if (y >= feature.y && y < feature.y + 3 + feature.variant) return B_cherry_log;
-      }
-      
-      // Get X/Z distance from center of tree
-      uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
-      uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
-      uint8_t dist = dx + dz;
-      
-      // Cherry blossom canopy (wide, flat, with hanging edges)
-      uint8_t trunk_top = feature.y + 3 + feature.variant;
-      // Leaves start partway up trunk
-      if (y == trunk_top - 1 && dist <= 3) {
-        if (dist == 3 && (dx == 3 || dz == 3)) break;
-        return B_cherry_leaves;
-      }
-      // Main canopy - wide and flat
-      if (y == trunk_top && dist <= 3) {
-        if (dist == 3) break;
-        return B_cherry_leaves;
-      }
-      if (y == trunk_top + 1 && dist <= 2) return B_cherry_leaves;
-      // Top layer
-      if (y == trunk_top + 2 && dist <= 2) return B_cherry_leaves;
-      // Hanging edges (petals falling)
-      if (y == trunk_top - 2 && dist == 3) {
-        if ((anchor.hash >> (x + z)) & 3) return B_cherry_leaves;
+
+        // Get distance from tree center
+        uint8_t cx = base_x + 1;
+        uint8_t cz = base_z + 1;
+        uint8_t dx = x > cx ? x - cx : cx - x;
+        uint8_t dz = z > cz ? z - cz : cz - z;
+        uint8_t dist = dx + dz;
+
+        // Large dark oak canopy - dome shape, moved down by 1 block
+        uint8_t canopy_base = feature.y + trunk_height - 1;
+        if (y >= canopy_base && y <= canopy_base + 3) {
+          int layer = y - canopy_base;
+          int max_dist = 3 - layer;
+          if (dist <= max_dist + 1 && dist > 0) {
+            return B_dark_oak_leaves;
+          }
+        }
+        // Top of canopy
+        if (y == canopy_base + 4 && dist <= 1) return B_dark_oak_leaves;
       }
 
+      dark_forest_vegetation:
+      // Random vegetation (spawns everywhere)
       if (y == height) return B_grass_block;
       
-      // Cherry grove decorations - grass and pink flowers
       if (y == height + 1) {
         uint8_t decor_hash = (anchor.hash >> (x + z)) & 255;
-        
-        // 25% chance for short grass
-        if (decor_hash < 64) return B_short_grass;
-        
-        // 8% chance for pink flowers (tulips)
-        if (decor_hash >= 64 && decor_hash < 84) {
-          uint8_t flower_type = (decor_hash >> 3) % 3;
+
+        // 15% chance for short grass (dark forest has dense ground cover)
+        if (decor_hash < 38) return B_short_grass;
+      }
+
+      return B_air;
+    }
+
+    case W_birch_forest: { // Generate only birch trees
+
+      // Tree generation - check if feature is valid
+      if (feature.y == 255) goto birch_forest_vegetation;
+      
+      // Don't generate trees underwater
+      if (feature.y < 64) goto birch_forest_vegetation;
+
+      // Increased tree spawn rate: 90% chance
+      if ((anchor.hash & 0x07) <= 6) {
+        // Add random height variation: ±1 block
+        int height_var = (anchor.hash >> (x + z)) & 3;
+        int height_adjust = (height_var == 0) ? -1 : (height_var == 3) ? 1 : 0;
+
+        if (x == feature.x && z == feature.z) {
+          if (y == feature.y - 1) return B_dirt;
+          if (y >= feature.y && y < feature.y + 5 + feature.variant + height_adjust) return B_birch_log;
+        }
+
+        // Get X/Z distance from center of tree
+        uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
+        uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+        uint8_t dist = dx + dz;
+
+        // Birch leaves - wider canopy (radius 3), sparse and spread out
+        uint8_t trunk_top = feature.y + 5 + feature.variant + height_adjust;
+        // Leaves start 2 blocks below trunk top, wider canopy
+        if (y == trunk_top - 2 && dist <= 3) {
+          if (dist == 3 && (dx == 3 || dz == 3)) break;
+          return B_birch_leaves;
+        }
+        // Main canopy layers - wider
+        if (y == trunk_top - 1 && dist <= 3) {
+          if (dist == 3 && (dx == 3 || dz == 3)) break;
+          return B_birch_leaves;
+        }
+        if (y == trunk_top && dist <= 3) {
+          if (dist == 3 && (dx == 3 || dz == 3)) break;
+          return B_birch_leaves;
+        }
+        // Top layer - slightly smaller
+        if (y == trunk_top + 1 && dist <= 2) return B_birch_leaves;
+        // Occasional lower leaves - wider
+        if (y == trunk_top - 3 && dist == 3 && (dx == 3 || dz == 3)) {
+          if ((anchor.hash >> (y + x + z)) & 1) return B_birch_leaves;
+        }
+      }
+
+      birch_forest_vegetation:
+      // Random vegetation (spawns everywhere)
+      if (y == height) return B_grass_block;
+      
+      if (y == height + 1) {
+        uint8_t decor_hash = (anchor.hash >> (x + z)) & 255;
+
+        // 15% chance for short grass
+        if (decor_hash < 38) return B_short_grass;
+      }
+
+      return B_air;
+    }
+
+    case W_cherry_grove: { // Generate cherry blossom trees
+
+      // Tree generation - check if feature is valid
+      if (feature.y == 255) goto cherry_grove_vegetation;
+      
+      // Don't generate trees underwater
+      if (feature.y < 64) goto cherry_grove_vegetation;
+
+      // Increased tree spawn rate: 85% chance
+      if ((anchor.hash & 0x07) <= 6) {
+        // Add random height variation: ±1 block
+        int height_var = (anchor.hash >> (x + z)) & 3;
+        int height_adjust = (height_var == 0) ? -1 : (height_var == 3) ? 1 : 0;
+
+        if (x == feature.x && z == feature.z) {
+          if (y == feature.y - 1) return B_dirt;
+          if (y >= feature.y && y < feature.y + 3 + feature.variant + height_adjust) return B_cherry_log;
+        }
+
+        // Get X/Z distance from center of tree
+        uint8_t dx = x > feature.x ? x - feature.x : feature.x - x;
+        uint8_t dz = z > feature.z ? z - feature.z : feature.z - z;
+        uint8_t dist = dx + dz;
+
+        // Cherry blossom canopy (wide, flat, with hanging edges) - moved down by 1 block
+        uint8_t trunk_top = feature.y + 3 + feature.variant + height_adjust;
+        // Leaves start 2 blocks below trunk top (was 1)
+        if (y == trunk_top - 2 && dist <= 3) {
+          if (dist == 3 && (dx == 3 || dz == 3)) break;
+          return B_cherry_leaves;
+        }
+        // Main canopy - wide and flat
+        if (y == trunk_top - 1 && dist <= 3) {
+          if (dist == 3) break;
+          return B_cherry_leaves;
+        }
+        if (y == trunk_top && dist <= 2) return B_cherry_leaves;
+        // Top layer
+        if (y == trunk_top + 1 && dist <= 2) return B_cherry_leaves;
+        // Hanging edges (petals falling)
+        if (y == trunk_top - 3 && dist == 3) {
+          if ((anchor.hash >> (x + z)) & 3) return B_cherry_leaves;
+        }
+      }
+
+      cherry_grove_vegetation:
+      // Random vegetation and flowers (spawns everywhere)
+      if (y == height) return B_grass_block;
+      
+      if (y == height + 1) {
+        uint8_t decor_hash = (anchor.hash >> (x + z)) & 255;
+        uint8_t flower_hash = (anchor.hash >> ((x * z) & 7)) & 255;
+
+        // 15% chance for short grass
+        if (decor_hash < 38) return B_short_grass;
+
+        // 3% chance for pink flowers
+        if (decor_hash >= 230 && decor_hash < 235) {
+          uint8_t flower_type = flower_hash % 3;
           if (flower_type == 0) return B_pink_tulip;
           if (flower_type == 1) return B_red_tulip;
           if (flower_type == 2) return B_poppy;
         }
       }
-      
+
       return B_air;
     }
 
