@@ -538,8 +538,27 @@ int main () {
   printf("Initializing world generation...\n");
   printf("\n");
 
-  // Initialize block changes entries as unallocated
-  for (int i = 0; i < MAX_BLOCK_CHANGES; i ++) {
+  // Initialize block changes
+  #ifdef INFINITE_BLOCK_CHANGES
+    // Start with a minimal capacity, will grow as needed
+    block_changes_capacity = 10;
+    block_changes = (BlockChange *)malloc(block_changes_capacity * sizeof(BlockChange));
+    if (!block_changes) {
+      perror("Failed to allocate memory for block changes");
+      exit(EXIT_FAILURE);
+    }
+    printf("Block changes: dynamic (initial capacity: %d)\n", block_changes_capacity);
+  #else
+    printf("Block changes: fixed (%d)\n", MAX_BLOCK_CHANGES);
+  #endif
+  // Initialize all block change entries as unallocated (0xFF = empty)
+  for (int i = 0; i < (
+    #ifdef INFINITE_BLOCK_CHANGES
+      block_changes_capacity
+    #else
+      MAX_BLOCK_CHANGES
+    #endif
+  ); i ++) {
     block_changes[i].block = 0xFF;
   }
 
@@ -688,7 +707,12 @@ int main () {
     if (recv_buffer[0] == 0xBE && recv_buffer[1] == 0xEF && getClientState(client_fd) == STATE_NONE) {
       // Send block changes and player data back to back
       // The client is expected to know (or calculate) the size of these buffers
-      send_all(client_fd, block_changes, sizeof(block_changes));
+      #ifdef INFINITE_BLOCK_CHANGES
+        send_all(client_fd, &block_changes_capacity, sizeof(int));
+        send_all(client_fd, block_changes, block_changes_capacity * sizeof(BlockChange));
+      #else
+        send_all(client_fd, block_changes, sizeof(block_changes));
+      #endif
       send_all(client_fd, player_data, sizeof(player_data));
       // Flush the socket and receive everything left on the wire
       shutdown(client_fd, SHUT_WR);
@@ -702,10 +726,34 @@ int main () {
       // Consume 0xFEED bytes (previous read was just a peek)
       recv_all(client_fd, recv_buffer, 2, false);
       // Write full buffers straight into memory
-      recv_all(client_fd, block_changes, sizeof(block_changes), false);
+      #ifdef INFINITE_BLOCK_CHANGES
+        // First read the capacity
+        int new_capacity;
+        recv_all(client_fd, &new_capacity, sizeof(int), false);
+        // Reallocate if needed
+        if (new_capacity > block_changes_capacity) {
+          BlockChange *new_block_changes = (BlockChange *)realloc(block_changes, new_capacity * sizeof(BlockChange));
+          if (!new_block_changes) {
+            perror("Failed to reallocate block changes for FEED packet");
+            disconnectClient(&clients[client_index], 7);
+            continue;
+          }
+          block_changes = new_block_changes;
+          block_changes_capacity = new_capacity;
+        }
+        recv_all(client_fd, block_changes, block_changes_capacity * sizeof(BlockChange), false);
+      #else
+        recv_all(client_fd, block_changes, sizeof(block_changes), false);
+      #endif
       recv_all(client_fd, player_data, sizeof(player_data), false);
       // Recover block_changes_count
-      for (int i = 0; i < MAX_BLOCK_CHANGES; i ++) {
+      for (int i = 0; i < (
+        #ifdef INFINITE_BLOCK_CHANGES
+          block_changes_capacity
+        #else
+          MAX_BLOCK_CHANGES
+        #endif
+      ); i ++) {
         if (block_changes[i].block == 0xFF) continue;
         if (block_changes[i].block == B_chest) i += 14;
         if (i >= block_changes_count) block_changes_count = i + 1;

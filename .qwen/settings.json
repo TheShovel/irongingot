@@ -27,7 +27,8 @@
       "Bash(netstat *)",
       "Bash(ss *)",
       "Bash(sed *)",
-      "Bash(lsof *)"
+      "Bash(lsof *)",
+      "Bash(python3 *)"
     ]
   },
   "$version": 3

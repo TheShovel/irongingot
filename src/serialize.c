@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include "globals.h"
 
 #ifdef SYNC_WORLD_TO_DISK
@@ -40,25 +41,102 @@ int initSerializer () {
   // Attempt to open existing world file
   FILE *file = fopen(FILE_PATH, "rb");
   if (file) {
+    size_t read;
+    int has_capacity_header = 0;
+    long block_changes_bytes = 0;
+
+    // Get file size to determine layout
+    fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
+    fseek(file, 0, SEEK_SET);
 
     // Read block changes from the start of the file directly into memory
-    size_t read = fread(block_changes, 1, sizeof(block_changes), file);
-    if (read != sizeof(block_changes)) {
-      printf("Read %u bytes from \"world.bin\", expected %u (block changes). Aborting.\n", read, sizeof(block_changes));
-      fclose(file);
-      return 1;
-    }
+    #ifdef INFINITE_BLOCK_CHANGES
+      // For dynamic mode, first try to read the capacity header
+      int stored_capacity;
+      size_t header_read = fread(&stored_capacity, sizeof(int), 1, file);
+      // Check if this looks like a valid capacity header or old fixed-format file
+      // A valid capacity should be positive and reasonable (< 100 million entries)
+      // Also check if file size matches expected size for that capacity
+      long expected_size_for_capacity = sizeof(int) + (long)stored_capacity * sizeof(BlockChange) + sizeof(player_data);
+      if (header_read == 1 && stored_capacity > 0 && stored_capacity <= 100000000 && file_size >= expected_size_for_capacity - 1000) {
+        // Valid capacity header (new format)
+        has_capacity_header = 1;
+        block_changes_capacity = stored_capacity;
+        block_changes = (BlockChange *)malloc(block_changes_capacity * sizeof(BlockChange));
+        if (!block_changes) {
+          printf("Failed to allocate memory for block changes. Aborting.\n");
+          fclose(file);
+          return 1;
+        }
+        // Read block changes data
+        read = fread(block_changes, sizeof(BlockChange), block_changes_capacity, file);
+        if (read != (size_t)block_changes_capacity) {
+          printf("Read %u block changes from \"world.bin\", expected %d. Aborting.\n", read, block_changes_capacity);
+          fclose(file);
+          return 1;
+        }
+      } else {
+        // Old fixed-format file, rewind and calculate size from file
+        printf("Detected old world file format, converting...\n");
+        rewind(file);
+        // Calculate actual block changes size from file size
+        block_changes_bytes = file_size - sizeof(player_data);
+        if (block_changes_bytes <= 0) {
+          printf("Invalid world file size. Aborting.\n");
+          fclose(file);
+          return 1;
+        }
+        // Start with enough capacity to hold the data
+        block_changes_capacity = (block_changes_bytes / sizeof(BlockChange)) + 100;
+        block_changes = (BlockChange *)malloc(block_changes_capacity * sizeof(BlockChange));
+        if (!block_changes) {
+          printf("Failed to allocate memory for block changes. Aborting.\n");
+          fclose(file);
+          return 1;
+        }
+        // Read the block changes data
+        read = fread(block_changes, 1, block_changes_bytes, file);
+        if (read != (size_t)block_changes_bytes) {
+          printf("Read %u bytes from \"world.bin\", expected %ld. Aborting.\n", read, block_changes_bytes);
+          fclose(file);
+          return 1;
+        }
+      }
+      // Seek past block changes to start reading player data
+      long seek_offset = has_capacity_header 
+        ? sizeof(int) + block_changes_capacity * sizeof(BlockChange)
+        : block_changes_bytes;
+      if (fseek(file, seek_offset, SEEK_SET) != 0) {
+        perror("Failed to seek to player data in \"world.bin\". Aborting.");
+        fclose(file);
+        return 1;
+      }
+    #else
+      size_t read = fread(block_changes, 1, sizeof(block_changes), file);
+      if (read != sizeof(block_changes)) {
+        printf("Read %u bytes from \"world.bin\", expected %u (block changes). Aborting.\n", read, sizeof(block_changes));
+        fclose(file);
+        return 1;
+      }
+      // Seek past block changes to start reading player data
+      if (fseek(file, sizeof(block_changes), SEEK_SET) != 0) {
+        perror("Failed to seek to player data in \"world.bin\". Aborting.");
+        fclose(file);
+        return 1;
+      }
+    #endif
     // Find the index of the last occupied entry to recover block_changes_count
-    for (int i = 0; i < MAX_BLOCK_CHANGES; i ++) {
+    for (int i = 0; i < (
+      #ifdef INFINITE_BLOCK_CHANGES
+        block_changes_capacity
+      #else
+        MAX_BLOCK_CHANGES
+      #endif
+    ); i ++) {
       if (block_changes[i].block == 0xFF) continue;
       if (block_changes[i].block == B_chest) i += 14;
       if (i >= block_changes_count) block_changes_count = i + 1;
-    }
-    // Seek past block changes to start reading player data
-    if (fseek(file, sizeof(block_changes), SEEK_SET) != 0) {
-      perror("Failed to seek to player data in \"world.bin\". Aborting.");
-      fclose(file);
-      return 1;
     }
     // Read player data directly into memory
     read = fread(player_data, 1, sizeof(player_data), file);
@@ -82,17 +160,43 @@ int initSerializer () {
     }
     // Write initial block changes array
     // This should be done after all entries have had `block` set to 0xFF
-    size_t written = fwrite(block_changes, 1, sizeof(block_changes), file);
-    if (written != sizeof(block_changes)) {
-      perror(
-        "Failed to write initial block data to \"world.bin\".\n"
-        "Consider checking permissions or disabling SYNC_WORLD_TO_DISK in \"globals.h\"."
-      );
-      fclose(file);
-      return 1;
-    }
+    #ifdef INFINITE_BLOCK_CHANGES
+      // Write capacity header first
+      size_t written = fwrite(&block_changes_capacity, sizeof(int), 1, file);
+      if (written != 1) {
+        perror("Failed to write block changes header to \"world.bin\".");
+        fclose(file);
+        return 1;
+      }
+      // Write block changes data
+      written = fwrite(block_changes, sizeof(BlockChange), block_changes_capacity, file);
+      if (written != (size_t)block_changes_capacity) {
+        perror(
+          "Failed to write initial block data to \"world.bin\".\n"
+          "Consider checking permissions or disabling SYNC_WORLD_TO_DISK in \"globals.h\"."
+        );
+        fclose(file);
+        return 1;
+      }
+    #else
+      size_t written = fwrite(block_changes, 1, sizeof(block_changes), file);
+      if (written != sizeof(block_changes)) {
+        perror(
+          "Failed to write initial block data to \"world.bin\".\n"
+          "Consider checking permissions or disabling SYNC_WORLD_TO_DISK in \"globals.h\"."
+        );
+        fclose(file);
+        return 1;
+      }
+    #endif
     // Seek past written block changes to start writing player data
-    if (fseek(file, sizeof(block_changes), SEEK_SET) != 0) {
+    if (fseek(file, 
+      #ifdef INFINITE_BLOCK_CHANGES
+        sizeof(int) + block_changes_capacity * sizeof(BlockChange),
+      #else
+        sizeof(block_changes),
+      #endif
+      SEEK_SET) != 0) {
       perror(
         "Failed to seek past block changes in \"world.bin\"."
         "Consider checking permissions or disabling SYNC_WORLD_TO_DISK in \"globals.h\"."
@@ -154,7 +258,13 @@ void writePlayerDataToDisk () {
     return;
   }
   // Seek past block changes in file
-  if (fseek(file, sizeof(block_changes), SEEK_SET) != 0) {
+  if (fseek(file, 
+    #ifdef INFINITE_BLOCK_CHANGES
+      sizeof(int) + block_changes_capacity * sizeof(BlockChange),
+    #else
+      sizeof(block_changes),
+    #endif
+    SEEK_SET) != 0) {
     fclose(file);
     perror("Failed to seek in \"world.bin\". Player updates have been dropped.");
     return;

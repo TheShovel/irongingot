@@ -76,7 +76,14 @@
 
 // How many player-made block changes to allow
 // Determines the fixed amount of memory allocated to blocks
+// Set to 0 to enable infinite block changes (dynamic allocation)
 #define MAX_BLOCK_CHANGES 20000
+
+// If defined, allows unlimited block changes with dynamic memory allocation.
+// Block changes will grow as needed. Can also be enabled via config file
+// by setting infinite_block_changes = true
+// Note: This can consume significant memory on systems with lots of building.
+#define INFINITE_BLOCK_CHANGES
 
 // If defined, writes and reads world data to/from disk (or flash).
 // This is a synchronous operation, and can cause performance issues if
@@ -290,7 +297,12 @@ typedef struct {
   union EntityDataValue value;
 } EntityData;
 
-extern BlockChange block_changes[MAX_BLOCK_CHANGES];
+#ifdef INFINITE_BLOCK_CHANGES
+  extern BlockChange *block_changes;
+  extern int block_changes_capacity;
+#else
+  extern BlockChange block_changes[MAX_BLOCK_CHANGES];
+#endif
 extern int block_changes_count;
 
 extern PlayerData player_data[MAX_PLAYERS];

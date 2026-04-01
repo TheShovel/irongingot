@@ -615,7 +615,27 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
     // which naturally appends the chest to the end if a gap isn't found.
     int last_real_entry = first_gap - 1;
     for (int i = first_gap; i <= block_changes_count + 15; i ++) {
+      #ifdef INFINITE_BLOCK_CHANGES
+      // Grow array if we're running out of space
+      if (i >= block_changes_capacity - 15) {
+        int new_capacity = block_changes_capacity * 2;
+        BlockChange *new_block_changes = (BlockChange *)realloc(block_changes, new_capacity * sizeof(BlockChange));
+        if (!new_block_changes) {
+          failBlockChange(x, y, z, block);
+          return 1;
+        }
+        block_changes = new_block_changes;
+        // Initialize new entries as unallocated
+        for (int j = block_changes_capacity; j < new_capacity; j ++) {
+          block_changes[j].block = 0xFF;
+        }
+        printf("Block changes expanded: %d -> %d\n", block_changes_capacity, new_capacity);
+        fflush(stdout);
+        block_changes_capacity = new_capacity;
+      }
+      #else
       if (i >= MAX_BLOCK_CHANGES) break; // No more space, trigger failBlockChange
+      #endif
 
       if (block_changes[i].block != 0xFF) {
         last_real_entry = i;
@@ -657,10 +677,30 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
   #endif
 
   // Handle running out of memory for new block changes
+  #ifdef INFINITE_BLOCK_CHANGES
+  if (first_gap >= block_changes_capacity - 1) {
+    // Grow the array
+    int new_capacity = block_changes_capacity * 2;
+    BlockChange *new_block_changes = (BlockChange *)realloc(block_changes, new_capacity * sizeof(BlockChange));
+    if (!new_block_changes) {
+      failBlockChange(x, y, z, block);
+      return 1;
+    }
+    block_changes = new_block_changes;
+    // Initialize new entries as unallocated
+    for (int i = block_changes_capacity; i < new_capacity; i ++) {
+      block_changes[i].block = 0xFF;
+    }
+    printf("Block changes expanded: %d -> %d\n", block_changes_capacity, new_capacity);
+    fflush(stdout);
+    block_changes_capacity = new_capacity;
+  }
+  #else
   if (first_gap == MAX_BLOCK_CHANGES) {
     failBlockChange(x, y, z, block);
     return 1;
   }
+  #endif
 
   // Fall back to storing the change at the first possible gap
   block_changes[first_gap].x = x;

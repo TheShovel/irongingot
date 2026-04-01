@@ -52,6 +52,7 @@ void init_config_defaults(void) {
   // Performance settings
   config.chunk_cache_size = 512;
   config.max_block_changes = 20000;
+  config.infinite_block_changes = 0;  // disabled by default
   config.tick_interval = 50000;  // 50ms = 20 TPS
   config.disk_sync_interval = 15000000;  // 15 seconds
 
@@ -157,6 +158,8 @@ int load_config(const char *filename) {
       config.chunk_cache_size = atoi(value);
     } else if (strcmp(key, "max_block_changes") == 0) {
       config.max_block_changes = atoi(value);
+    } else if (strcmp(key, "infinite_block_changes") == 0) {
+      config.infinite_block_changes = parse_bool(value);
     } else if (strcmp(key, "tick_interval") == 0) {
       config.tick_interval = atoi(value);
     } else if (strcmp(key, "disk_sync_interval") == 0) {
@@ -251,6 +254,7 @@ int save_config(const char *filename) {
   fprintf(f, "# ============================================\n");
   fprintf(f, "chunk_cache_size = %d\n", config.chunk_cache_size);
   fprintf(f, "max_block_changes = %d\n", config.max_block_changes);
+  fprintf(f, "infinite_block_changes = %s\n", config.infinite_block_changes ? "true" : "false");
   fprintf(f, "tick_interval = %d\n", config.tick_interval);
   fprintf(f, "disk_sync_interval = %d\n", config.disk_sync_interval);
   fprintf(f, "\n");

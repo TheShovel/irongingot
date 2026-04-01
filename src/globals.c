@@ -58,7 +58,12 @@ uint8_t motd_len = sizeof("A bareiron server") - 1;
 
 uint16_t client_count;
 
+#ifdef INFINITE_BLOCK_CHANGES
+BlockChange *block_changes = NULL;
+int block_changes_capacity = 0;
+#else
 BlockChange block_changes[MAX_BLOCK_CHANGES];
+#endif
 int block_changes_count = 0;
 
 PlayerData player_data[MAX_PLAYERS];
