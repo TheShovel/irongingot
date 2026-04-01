@@ -13,9 +13,6 @@
 #include "perlin.h"
 #include "generator.h"
 
-// Note: USE_TEMPLATES is now defined in worldgen.h
-// Set to 1 to use pre-generated templates, 0 for procedural generation
-
 static Generator g;
 static SurfaceNoise surface_noise_biome;
 OctavePerlinNoiseSampler surface_noise;
@@ -29,11 +26,6 @@ static int gen_initialized = 0;
 // Height cache for smooth chunk generation (covers 32x32 area for seamless borders)
 static int cache_cx = 0x7FFFFFFF, cache_cz = 0x7FFFFFFF;
 static uint8_t height_cache[36][36];  // 32x32 + 2 block border on each side
-
-// External template functions
-extern void initTemplateSystem();
-extern uint8_t buildChunkSectionFromTemplate(int cx, int cy, int cz);
-extern uint8_t getHeightFromTemplate(int x, int z);
 
 void init_worldgen() {
     if (gen_initialized) return;
@@ -345,15 +337,6 @@ static void buildHeightCache (int cx, int cz) {
 // Get terrain height at the given coordinates with caching
 // Does *not* account for block changes
 uint8_t getHeightAt (int x, int z) {
-  // Use template-based height if templates are enabled
-  if (USE_TEMPLATES) {
-    uint8_t template_height = getHeightFromTemplate(x, z);
-    if (template_height != 0) {
-      return template_height;
-    }
-    // Fall through to procedural if template fails
-  }
-  
   init_worldgen();
 
   // Calculate which 16x16 section this coordinate belongs to
@@ -1479,11 +1462,6 @@ uint8_t chunk_section_height[16][16];
 // Builds a 16x16x16 chunk of blocks and writes it to `chunk_section`
 // Returns the biome at the origin corner of the chunk
 uint8_t buildChunkSection (int cx, int cy, int cz) {
-  // Use template-based generation if enabled
-  if (USE_TEMPLATES) {
-    return buildChunkSectionFromTemplate(cx, cy, cz);
-  }
-
   // Precompute hashes, anchors and features for each relevant minichunk
   int anchor_index = 0, feature_index = 0;
   for (int i = cz; i < cz + 16 + CHUNK_SIZE; i += CHUNK_SIZE) {

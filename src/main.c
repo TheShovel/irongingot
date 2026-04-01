@@ -508,11 +508,6 @@ int main () {
 
   // Initialize world generation
   printf("Initializing world generation...\n");
-  #ifdef USE_TEMPLATES_ENABLED
-    generateAllBiomeTemplates();
-  #else
-    printf("Using procedural generation (templates disabled)\n");
-  #endif
   printf("\n");
 
   // Initialize block changes entries as unallocated
