@@ -34,6 +34,7 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block);
 
 uint8_t isInstantlyMined (PlayerData *player, uint8_t block);
 uint8_t isColumnBlock (uint8_t block);
+uint8_t isStairBlock (uint8_t block);
 uint8_t isPassableBlock (uint8_t block);
 uint8_t isPassableSpawnBlock (uint8_t block);
 uint8_t isReplaceableBlock (uint8_t block);
@@ -48,6 +49,8 @@ uint8_t getDoorBlockFromItem (uint16_t item);
 uint8_t isDoorOpen (short x, uint8_t y, short z);
 uint16_t getDoorStateId (uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge);
 void sendDoorUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge);
+uint16_t getStairStateId (uint8_t block, uint8_t half, uint8_t direction);
+void sendStairUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, uint8_t half, uint8_t direction);
 #endif
 
 uint16_t getMiningResult (uint16_t held_item, uint8_t block);

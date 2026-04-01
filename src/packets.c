@@ -531,7 +531,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
   // Sending block updates
   for (int i = 0; i < block_changes_count; i ++) {
     #ifdef ALLOW_CHESTS
-      if (block_changes[i].block != B_torch && block_changes[i].block != B_chest) {
+      if (block_changes[i].block != B_torch && block_changes[i].block != B_chest && !isStairBlock(block_changes[i].block)) {
         #ifdef ALLOW_DOORS
         if (!isDoorBlock(block_changes[i].block)) continue;
         #else
@@ -539,7 +539,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
         #endif
       }
     #else
-      if (block_changes[i].block != B_torch) {
+      if (block_changes[i].block != B_torch && !isStairBlock(block_changes[i].block)) {
         #ifdef ALLOW_DOORS
         if (!isDoorBlock(block_changes[i].block)) continue;
         #else
@@ -578,6 +578,23 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
       continue;
     }
     #endif
+
+    if (isStairBlock(block_changes[i].block)) {
+      // Bounds check: ensure i+1 is a valid index
+      if (i + 1 >= block_changes_count) continue;
+      
+      // Verify that i+1 is the state entry
+      if (block_changes[i + 1].block != 0 || block_changes[i + 1].z != block_changes[i].z) continue;
+      
+      // Send stair with proper state
+      uint8_t *state_ptr = (uint8_t *)(&block_changes[i + 1]);
+      uint8_t direction = state_ptr[0];
+      uint8_t half = state_ptr[1];
+      sendStairUpdate(client_fd, block_changes[i].x, block_changes[i].y, block_changes[i].z, block_changes[i].block, half, direction);
+      // Skip the next entry (state data)
+      i += 1;
+      continue;
+    }
     
     sc_blockUpdate(client_fd, block_changes[i].x, block_changes[i].y, block_changes[i].z, block_changes[i].block);
   }
