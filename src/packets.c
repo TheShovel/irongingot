@@ -29,19 +29,28 @@
 // S->C Status Response (server list ping)
 int sc_statusResponse (int client_fd) {
 
-  char header[] = "{"
-    "\"version\":{\"name\":\"1.21.8\",\"protocol\":772},"
-    "\"description\":{\"text\":\"";
-  char footer[] = "\"}}";
+  char max_players_str[16];
+  snprintf(max_players_str, sizeof(max_players_str), "%d", config.max_players);
+  char online_players_str[16];
+  // Subtract 1 because the pinging client is not yet logged in
+  snprintf(online_players_str, sizeof(online_players_str), "%u", client_count > 0 ? client_count - 1 : 0);
 
-  uint16_t string_len = sizeof(header) + sizeof(footer) + motd_len - 2;
+  // Build the full JSON for debugging
+  char json[512];
+  snprintf(json, sizeof(json),
+    "{\"version\":{\"name\":\"1.21.8\",\"protocol\":772},"
+    "\"players\":{\"max\":%s,\"online\":%s},"
+    "\"description\":{\"text\":\"%.*s\"}}",
+    max_players_str, online_players_str, motd_len, motd);
+
+  printf("Sending Status Response: %s\n", json);
+
+  uint16_t string_len = strlen(json);
 
   startPacket(client_fd, 0x00);
 
   writeVarInt(client_fd, string_len);
-  send_all(client_fd, header, sizeof(header) - 1);
-  send_all(client_fd, motd, motd_len);
-  send_all(client_fd, footer, sizeof(footer) - 1);
+  send_all(client_fd, json, string_len);
 
   endPacket(client_fd);
 
