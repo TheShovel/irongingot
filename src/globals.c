@@ -31,9 +31,9 @@
 
 ClientState client_states[MAX_PLAYERS];
 
-uint8_t packet_buffer[MAX_PACKET_LEN];
-int packet_buffer_offset = 0;
-int packet_mode = false;
+THREAD_LOCAL uint8_t packet_buffer[MAX_PACKET_LEN];
+THREAD_LOCAL int packet_buffer_offset = 0;
+THREAD_LOCAL int packet_mode = false;
 
 uint8_t in_packet_buffer[MAX_PACKET_LEN];
 int in_packet_buffer_offset = 0;
@@ -77,11 +77,13 @@ static int thread_pool_initialized = 0;
 
 void init_global_thread_pool(void) {
   if (!thread_pool_initialized) {
-    int num_threads = get_cpu_count();
-    if (num_threads < 2) num_threads = 2;
-    
-    // Cap at 8 threads to avoid excessive context switching
-    if (num_threads > 8) num_threads = 8;
+    int cpu_count = get_cpu_count();
+    if (cpu_count < 1) cpu_count = 1;
+    // Reserve one core for the main/gameplay loop.
+    int num_threads = cpu_count - 1;
+    if (num_threads < 1) num_threads = 1;
+    // Player update tasks are lightweight; more threads usually just add scheduler pressure.
+    if (num_threads > 4) num_threads = 4;
     
     if (thread_pool_init(&global_thread_pool, num_threads) == 0) {
       thread_pool_initialized = 1;

@@ -38,7 +38,8 @@
       "Bash(grep *)",
       "Bash(cat *)",
       "Bash(stdbuf *)",
-      "Bash(jobs)"
+      "Bash(jobs)",
+      "WebFetch(raw.githubusercontent.com)"
     ]
   },
   "$version": 3

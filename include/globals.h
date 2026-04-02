@@ -6,6 +6,14 @@
 #include <pthread.h>
 #include "thread_pool.h"
 
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+  #define THREAD_LOCAL _Thread_local
+#elif defined(__GNUC__)
+  #define THREAD_LOCAL __thread
+#else
+  #define THREAD_LOCAL
+#endif
+
 #ifdef ESP_PLATFORM
   #define WIFI_SSID "your-ssid"
   #define WIFI_PASS "your-password"
@@ -172,8 +180,19 @@
 // If defined, logs cases when packet length doesn't match parsed byte count
 #define DEV_LOG_LENGTH_DISCREPANCY
 
+// If defined, logs every parsed, enqueued and socket-sent packet.
+// Extremely verbose; use only for debugging.
+// #define DEV_LOG_ALL_PACKETS
+
 // If defined, log chunk generation events
 // #define DEV_LOG_CHUNK_GENERATION
+
+// If defined, prints per-second chunk stream diagnostics.
+// Useful to debug chunk spam/backpressure and packet queue stalls.
+#define DEV_LOG_CHUNK_STREAM_STATS
+// If defined together with DEV_LOG_CHUNK_STREAM_STATS, also logs each
+// chunk enqueue result (very noisy).
+// #define DEV_LOG_CHUNK_STREAM_VERBOSE
 
 // If defined, allows dumping world data by sending 0xBEEF (big-endian),
 // and uploading world data by sending 0xFEED, followed by the data buffer.
@@ -187,20 +206,35 @@
 #define STATE_CONFIGURATION 4
 #define STATE_PLAY 5
 
+typedef struct OutPacket OutPacket;
+
 typedef struct {
   int client_fd;
   int state;
   int compression_threshold;
-  pthread_mutex_t send_mutex;  // Mutex for protecting packet sending
+  // Protects outbound queue fields below.
+  pthread_mutex_t send_mutex;
+  pthread_cond_t send_cond;
+  // High-priority queue for gameplay/control packets.
+  OutPacket *send_head_hi;
+  OutPacket *send_tail_hi;
+  // Low-priority queue for chunk stream packets.
+  OutPacket *send_head_lo;
+  OutPacket *send_tail_lo;
+  // Total queued bytes (high + low).
+  size_t queued_bytes;
+  // Queued bytes in low-priority chunk queue only.
+  size_t queued_chunk_bytes;
+  uint32_t connection_generation;
 } ClientState;
 
 extern ClientState client_states[MAX_PLAYERS];
 
 // Maximum length of a single packet (including chunk data)
 #define MAX_PACKET_LEN 1048576
-extern uint8_t packet_buffer[MAX_PACKET_LEN];
-extern int packet_buffer_offset;
-extern int packet_mode;
+extern THREAD_LOCAL uint8_t packet_buffer[MAX_PACKET_LEN];
+extern THREAD_LOCAL int packet_buffer_offset;
+extern THREAD_LOCAL int packet_mode;
 
 extern uint8_t in_packet_buffer[MAX_PACKET_LEN];
 extern int in_packet_buffer_offset;

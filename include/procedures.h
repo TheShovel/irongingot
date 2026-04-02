@@ -31,6 +31,8 @@ uint8_t clientSlotToServerSlot (int window_id, uint8_t slot);
 
 uint8_t getBlockChange (short x, uint8_t y, short z);
 uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block);
+uint8_t isChunkModified (int chunk_x, int chunk_z);
+void rebuildBlockChangeIndexes (void);
 
 uint8_t isInstantlyMined (PlayerData *player, uint8_t block);
 uint8_t isColumnBlock (uint8_t block);

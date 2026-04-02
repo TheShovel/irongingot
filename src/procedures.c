@@ -34,7 +34,7 @@ void setClientState (int client_fd, int new_state) {
     client_states[i].client_fd = client_fd;
     client_states[i].state = new_state;
     client_states[i].compression_threshold = 0; // Disabled by default
-    pthread_mutex_init(&client_states[i].send_mutex, NULL);
+    client_states[i].connection_generation++;
     return;
   }
 }
@@ -188,10 +188,11 @@ void handlePlayerDisconnect (int client_fd) {
   // Find the client state entry and reset it
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (client_states[i].client_fd == client_fd) {
-      pthread_mutex_destroy(&client_states[i].send_mutex);
+      clear_client_send_queue(client_fd);
       client_states[i].client_fd = -1;
       client_states[i].state = STATE_NONE;
       client_states[i].compression_threshold = 0;
+      client_states[i].connection_generation++;
       return;
     }
   }
@@ -397,8 +398,9 @@ void spawnPlayer (PlayerData *player) {
   sc_startWaitingForChunks(player->client_fd);
   sc_setCenterChunk(player->client_fd, _x, _z);
 
-  // Send only the spawn chunk initially (1 chunk total)
-  // Surrounding chunks will be loaded by the worker thread as player moves
+  // Ensure the spawn chunk is available right away for initial login.
+  // Movement-driven chunk loading uses non-blocking background generation.
+  generate_chunk_data(_x, _z);
   sc_chunkDataAndUpdateLight(player->client_fd, _x, _z);
 
   // Initialize visited chunks tracking
@@ -501,14 +503,144 @@ void broadcastMobMetadata (int client_fd, int entity_id) {
   free(metadata);
 }
 
+#define BLOCK_LOOKUP_CACHE_SIZE 4096
+typedef struct {
+  short x;
+  short z;
+  uint8_t y;
+  uint8_t block;
+  uint32_t epoch;
+} BlockLookupCacheEntry;
+
+static THREAD_LOCAL BlockLookupCacheEntry block_lookup_cache[BLOCK_LOOKUP_CACHE_SIZE];
+static volatile uint32_t block_lookup_cache_epoch = 1;
+
+#define MODIFIED_CHUNK_TABLE_SIZE 16384
+typedef struct {
+  int x;
+  int z;
+} ModifiedChunkEntry;
+
+static ModifiedChunkEntry modified_chunk_table[MODIFIED_CHUNK_TABLE_SIZE];
+static uint8_t modified_chunk_table_initialized = 0;
+
+static inline uint32_t coord_hash(int x, int z) {
+  uint32_t h = (uint32_t)x * 374761393u + (uint32_t)z * 668265263u;
+  h = (h ^ (h >> 13)) * 1274126177u;
+  return h ^ (h >> 16);
+}
+
+static inline uint32_t block_lookup_hash(short x, uint8_t y, short z) {
+  uint32_t h = coord_hash((int)x, (int)z);
+  h ^= (uint32_t)y * 2246822519u;
+  return h;
+}
+
+static void clear_modified_chunk_table(void) {
+  for (int i = 0; i < MODIFIED_CHUNK_TABLE_SIZE; i++) {
+    modified_chunk_table[i].x = INT32_MIN;
+    modified_chunk_table[i].z = INT32_MIN;
+  }
+}
+
+static inline void ensure_modified_chunk_table_initialized(void) {
+  if (modified_chunk_table_initialized) return;
+  clear_modified_chunk_table();
+  modified_chunk_table_initialized = 1;
+}
+
+static inline void invalidate_block_lookup_cache(void) {
+  // Epoch bump invalidates all thread-local lookup entries lazily.
+  block_lookup_cache_epoch++;
+  if (block_lookup_cache_epoch == 0) block_lookup_cache_epoch = 1;
+}
+
+static void mark_modified_chunk(int chunk_x, int chunk_z) {
+  ensure_modified_chunk_table_initialized();
+
+  uint32_t mask = MODIFIED_CHUNK_TABLE_SIZE - 1;
+  uint32_t base = coord_hash(chunk_x, chunk_z) & mask;
+
+  for (uint32_t probe = 0; probe < MODIFIED_CHUNK_TABLE_SIZE; probe++) {
+    uint32_t idx = (base + probe) & mask;
+    ModifiedChunkEntry *entry = &modified_chunk_table[idx];
+
+    if (entry->x == chunk_x && entry->z == chunk_z) return;
+    if (entry->x == INT32_MIN) {
+      entry->x = chunk_x;
+      entry->z = chunk_z;
+      return;
+    }
+  }
+
+  // Table saturated: overwrite home slot as a bounded fallback.
+  modified_chunk_table[base].x = chunk_x;
+  modified_chunk_table[base].z = chunk_z;
+}
+
+uint8_t isChunkModified (int chunk_x, int chunk_z) {
+  ensure_modified_chunk_table_initialized();
+
+  uint32_t mask = MODIFIED_CHUNK_TABLE_SIZE - 1;
+  uint32_t base = coord_hash(chunk_x, chunk_z) & mask;
+
+  for (uint32_t probe = 0; probe < MODIFIED_CHUNK_TABLE_SIZE; probe++) {
+    uint32_t idx = (base + probe) & mask;
+    ModifiedChunkEntry *entry = &modified_chunk_table[idx];
+
+    if (entry->x == chunk_x && entry->z == chunk_z) return true;
+    if (entry->x == INT32_MIN) return false;
+  }
+
+  return false;
+}
+
+void rebuildBlockChangeIndexes (void) {
+  ensure_modified_chunk_table_initialized();
+  clear_modified_chunk_table();
+
+  for (int i = 0; i < block_changes_count; i++) {
+    if (block_changes[i].block == 0xFF) continue;
+    int chunk_x = div_floor(block_changes[i].x, 16);
+    int chunk_z = div_floor(block_changes[i].z, 16);
+    mark_modified_chunk(chunk_x, chunk_z);
+  }
+
+  invalidate_block_lookup_cache();
+}
+
+static inline void notify_block_change_mutation(short x, short z) {
+  int chunk_x = div_floor(x, 16);
+  int chunk_z = div_floor(z, 16);
+  mark_modified_chunk(chunk_x, chunk_z);
+  invalidate_cached_chunk(chunk_x, chunk_z);
+  invalidate_block_lookup_cache();
+}
+
 uint8_t getBlockChange (short x, uint8_t y, short z) {
+  uint32_t epoch = block_lookup_cache_epoch;
+  uint32_t cache_idx = block_lookup_hash(x, y, z) & (BLOCK_LOOKUP_CACHE_SIZE - 1);
+  BlockLookupCacheEntry *cached = &block_lookup_cache[cache_idx];
+  if (
+    cached->epoch == epoch &&
+    cached->x == x &&
+    cached->y == y &&
+    cached->z == z
+  ) {
+    return cached->block;
+  }
+
+  uint8_t block = 0xFF;
   for (int i = 0; i < block_changes_count; i ++) {
     if (block_changes[i].block == 0xFF) continue;
     if (
       block_changes[i].x == x &&
       block_changes[i].y == y &&
       block_changes[i].z == z
-    ) return block_changes[i].block;
+    ) {
+      block = block_changes[i].block;
+      break;
+    }
     #ifdef ALLOW_CHESTS
       // Skip chest contents
       if (block_changes[i].block == B_chest) i += 14;
@@ -518,13 +650,21 @@ uint8_t getBlockChange (short x, uint8_t y, short z) {
       if (isDoorBlock(block_changes[i].block)) {
         // Check if upper half matches before skipping
         if (block_changes[i + 1].x == x && block_changes[i + 1].y == y && block_changes[i + 1].z == z) {
-          return block_changes[i + 1].block;
+          block = block_changes[i + 1].block;
+          break;
         }
         i += 2;
       }
     #endif
   }
-  return 0xFF;
+
+  cached->x = x;
+  cached->y = y;
+  cached->z = z;
+  cached->block = block;
+  cached->epoch = epoch;
+
+  return block;
 }
 
 // Handle running out of memory for new block changes
@@ -643,12 +783,7 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
       #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
       writeBlockChangesToDisk(i, i);
       #endif
-      // Invalidate cached chunk so it regenerates with the new block change
-      int chunk_x = x / 16;
-      int chunk_z = z / 16;
-      if (x < 0 && x % 16 != 0) chunk_x--;
-      if (z < 0 && z % 16 != 0) chunk_z--;
-      invalidate_cached_chunk(chunk_x, chunk_z);
+      notify_block_change_mutation(x, z);
       return 0;
     }
   }
@@ -711,12 +846,7 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
       #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
       writeBlockChangesToDisk(last_real_entry + 1, last_real_entry + 15);
       #endif
-      // Invalidate cached chunk so it regenerates with the new block change
-      int chunk_x_chest = x / 16;
-      int chunk_z_chest = z / 16;
-      if (x < 0 && x % 16 != 0) chunk_x_chest--;
-      if (z < 0 && z % 16 != 0) chunk_z_chest--;
-      invalidate_cached_chunk(chunk_x_chest, chunk_z_chest);
+      notify_block_change_mutation(x, z);
       return 0;
     }
     // If we're here, no changes were made
@@ -783,12 +913,7 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
       #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
       writeBlockChangesToDisk(last_real_entry + 1, last_real_entry + 3);
       #endif
-      // Invalidate cached chunk so it regenerates with the new block change
-      int chunk_x_door = x / 16;
-      int chunk_z_door = z / 16;
-      if (x < 0 && x % 16 != 0) chunk_x_door--;
-      if (z < 0 && z % 16 != 0) chunk_z_door--;
-      invalidate_cached_chunk(chunk_x_door, chunk_z_door);
+      notify_block_change_mutation(x, z);
       return 0;
     }
     // If we're here, no changes were made
@@ -848,12 +973,7 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
       #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
       writeBlockChangesToDisk(last_real_entry + 1, last_real_entry + 2);
       #endif
-      // Invalidate cached chunk so it regenerates with the new block change
-      int chunk_x_stair = x / 16;
-      int chunk_z_stair = z / 16;
-      if (x < 0 && x % 16 != 0) chunk_x_stair--;
-      if (z < 0 && z % 16 != 0) chunk_z_stair--;
-      invalidate_cached_chunk(chunk_x_stair, chunk_z_stair);
+      notify_block_change_mutation(x, z);
       return 0;
     }
     // If we're here, no changes were made
@@ -901,12 +1021,7 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
     block_changes_count ++;
   }
 
-  // Invalidate cached chunk so it regenerates with the new block change
-  int chunk_x_fallback = x / 16;
-  int chunk_z_fallback = z / 16;
-  if (x < 0 && x % 16 != 0) chunk_x_fallback--;
-  if (z < 0 && z % 16 != 0) chunk_z_fallback--;
-  invalidate_cached_chunk(chunk_x_fallback, chunk_z_fallback);
+  notify_block_change_mutation(x, z);
 
   return 0;
 }

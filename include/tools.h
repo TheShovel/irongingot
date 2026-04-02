@@ -17,8 +17,18 @@ ssize_t recv_all (int client_fd, void *buf, size_t n, uint8_t require_first);
 ssize_t send_all (int client_fd, const void *buf, ssize_t len);
 
 void startPacket (int client_fd, int packet_id);
-void endPacket (int client_fd);
+int endPacket (int client_fd);
 void sendPreformattedPackets (int client_fd, uint8_t *data, size_t len);
+void init_packet_sender_workers (void);
+void shutdown_packet_sender_workers (void);
+void clear_client_send_queue (int client_fd);
+size_t get_client_send_queue_bytes (int client_fd);
+
+void chunk_debug_record_stream_request (int client_fd, int chunk_x, int chunk_z);
+void chunk_debug_record_backpressure_skip (int client_fd, size_t queue_bytes);
+void chunk_debug_record_cache_miss_skip (int client_fd);
+void chunk_debug_record_enqueue_result (int client_fd, int chunk_x, int chunk_z, int ok);
+void chunk_debug_record_sent_chunk_packet (int client_fd, size_t packet_len, int ok);
 
 void discard_all (int client_fd, size_t remaining, uint8_t require_first);
 

@@ -363,26 +363,33 @@ int sc_setCenterChunk (int client_fd, int x, int y) {
 
 // S->C Chunk Data and Update Light
 int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
+  chunk_debug_record_stream_request(client_fd, _x, _z);
+
+  // Backpressure: if low-priority chunk backlog is already large, delay chunk packets
+  // so gameplay packets (block updates, interactions) stay responsive.
+  size_t chunk_queue_bytes = get_client_send_queue_bytes(client_fd);
+  if (chunk_queue_bytes > (1024 * 1024)) {
+    chunk_debug_record_backpressure_skip(client_fd, chunk_queue_bytes);
+    request_chunk_generation(_x, _z);
+    return 1;
+  }
 
   // Use a static buffer to build the chunk data part
   // This avoids the overhead of allocating 1MB on every chunk send
-  static uint8_t data_buf[MAX_PACKET_LEN];
+  static THREAD_LOCAL uint8_t data_buf[MAX_PACKET_LEN];
+  static THREAD_LOCAL uint8_t cached_sections[20][4096];
+  static THREAD_LOCAL uint8_t cached_biomes[20];
   int data_offset = 0;
   const int MAX_DATA_OFFSET = MAX_PACKET_LEN - 1024;  // Safety margin
 
   int x = _x * 16, z = _z * 16;
 
   // Try to get cached chunk data
-  CachedChunkData* cached = get_cached_chunk(_x, _z);
-  if (!cached) {
-    // Not cached - generate synchronously
-    generate_chunk_data(_x, _z);
-    cached = get_cached_chunk(_x, _z);
-  }
-
-  // Validate cached data is complete and consistent
-  if (!cached || !cached->valid) {
-    fprintf(stderr, "ERROR: Failed to get valid chunk data for (%d, %d)\n", _x, _z);
+  if (!get_cached_chunk_copy(_x, _z, cached_sections, cached_biomes)) {
+    // Not cached yet: queue generation and skip sending this chunk for now.
+    // This keeps movement packet handling non-blocking.
+    chunk_debug_record_cache_miss_skip(client_fd);
+    request_chunk_generation(_x, _z);
     return 1;
   }
 
@@ -422,8 +429,8 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
       return 1;
     }
     
-    uint8_t* section_data = cached->sections[i];
-    uint8_t biome = cached->biomes[i];
+    uint8_t* section_data = cached_sections[i];
+    uint8_t biome = cached_biomes[i];
 
     // Check if section is uniform
     uint8_t first_block = section_data[0];
@@ -519,23 +526,30 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
 
   // sky light array
   writeVarInt(client_fd, 26);
-  // Reuse chunk_section as temporary buffer for light data
-  memset(chunk_section, 0xFF, 2048);
-  memset(chunk_section + 2048, 0, 2048);
+  // Dedicated light buffer (do NOT reuse worldgen's global chunk_section).
+  // Reusing chunk_section races with the chunk generator thread and corrupts chunks.
+  static THREAD_LOCAL uint8_t light_buf[4096];
+  memset(light_buf, 0xFF, 2048);
+  memset(light_buf + 2048, 0, 2048);
 
   // Cache VarInt for 2048
   for (int i = 0; i < 8; i ++) {
     writeVarInt(client_fd, 2048);
-    send_all(client_fd, chunk_section + 2048, 2048);
+    send_all(client_fd, light_buf + 2048, 2048);
   }
   for (int i = 0; i < 18; i ++) {
     writeVarInt(client_fd, 2048);
-    send_all(client_fd, chunk_section, 2048);
+    send_all(client_fd, light_buf, 2048);
   }
   // don't send block light
   writeVarInt(client_fd, 0);
 
-  endPacket(client_fd);
+  if (endPacket(client_fd) != 0) {
+    // Queue full or client state changed; retry this chunk later.
+    chunk_debug_record_enqueue_result(client_fd, _x, _z, 0);
+    return 1;
+  }
+  chunk_debug_record_enqueue_result(client_fd, _x, _z, 1);
 
   // Sending block updates
   for (int i = 0; i < block_changes_count; i ++) {

@@ -17,7 +17,9 @@ typedef struct {
 void init_chunk_generator();
 void shutdown_chunk_generator();
 void generate_chunk_data(int x, int z);
+void request_chunk_generation(int x, int z);
 CachedChunkData* get_cached_chunk(int x, int z);
+int get_cached_chunk_copy(int x, int z, uint8_t out_sections[20][4096], uint8_t out_biomes[20]);
 void invalidate_cached_chunk(int x, int z);
 
 // Parallel chunk generation using thread pool

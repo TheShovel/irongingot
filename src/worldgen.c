@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <pthread.h>
 
 #include "globals.h"
 #include "tools.h"
@@ -22,43 +23,50 @@ OctavePerlinNoiseSampler mountain_noise;
 // Ore clump noise for clustered ore generation
 static OctavePerlinNoiseSampler ore_clump_noise;
 static int gen_initialized = 0;
+static pthread_mutex_t worldgen_init_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Thread-local storage for height cache state.
+// getHeightAt() is used by both gameplay and async chunk generation threads.
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+  #define TLS_STORAGE _Thread_local
+#elif defined(__GNUC__)
+  #define TLS_STORAGE __thread
+#else
+  #define TLS_STORAGE
+#endif
 
 // Height cache for smooth chunk generation (covers 32x32 area for seamless borders)
-static int cache_cx = 0x7FFFFFFF, cache_cz = 0x7FFFFFFF;
-static uint8_t height_cache[36][36];  // 32x32 + 2 block border on each side
+static TLS_STORAGE int cache_cx = 0x7FFFFFFF, cache_cz = 0x7FFFFFFF;
+static TLS_STORAGE uint8_t height_cache[36][36];  // 32x32 + 2 block border on each side
 
-void init_worldgen() {
-    if (gen_initialized) return;
-    setupGenerator(&g, MC_1_20, 0);
-    applySeed(&g, DIM_OVERWORLD, (uint64_t)world_seed);
-    initSurfaceNoise(&surface_noise_biome, DIM_OVERWORLD, (uint64_t)world_seed);
+// Thread-local biome cache to avoid redundant expensive cubiomes lookups
+#define BIOME_CACHE_SIZE 1024
+#define BIOME_CACHE_MASK (BIOME_CACHE_SIZE - 1)
+typedef struct {
+    int x, z;
+    uint8_t biome;
+    uint8_t valid;
+} BiomeCacheEntry;
+static TLS_STORAGE BiomeCacheEntry biome_cache[BIOME_CACHE_SIZE];
 
-    // Surface noise: increased octaves for more dramatic terrain
-    octave_init(&surface_noise, (uint64_t)world_seed, 6);
-    // Detail noise: more octaves for rugged surface detail
-    octave_init(&detail_noise, (uint64_t)world_seed + 1, 4);
-    // Cave noise uses same settings as surface noise but different seed and scale
-    octave_init(&cave_noise, (uint64_t)world_seed + 0x5DEECE66D, 4);
-    // Mountain noise for large mountain peaks (low frequency, very high amplitude)
-    // Lower frequency (larger features) and more octaves for dramatic peaks
-    octave_init(&mountain_noise, (uint64_t)world_seed + 0x12345678, 5);
-    // Ore clump noise for small scattered ore veins (2 octaves for localized blobs)
-    octave_init(&ore_clump_noise, (uint64_t)world_seed + 0xABCDEF12, 2);
-    gen_initialized = 1;
+uint8_t getChunkBiomeRaw(short x, short z);
+void init_worldgen(void);
+
+uint8_t getChunkBiome(short x, short z) {
+    uint32_t h = (uint32_t)x * 374761393u + (uint32_t)z * 668265263u;
+    uint32_t idx = h & BIOME_CACHE_MASK;
+    if (biome_cache[idx].valid && biome_cache[idx].x == x && biome_cache[idx].z == z) {
+        return biome_cache[idx].biome;
+    }
+    uint8_t b = getChunkBiomeRaw(x, z);
+    biome_cache[idx].x = x;
+    biome_cache[idx].z = z;
+    biome_cache[idx].biome = b;
+    biome_cache[idx].valid = 1;
+    return b;
 }
 
-uint32_t getChunkHash (short x, short z) {
-
-  uint8_t buf[8];
-  memcpy(buf, &x, 2);
-  memcpy(buf + 2, &z, 2);
-  memcpy(buf + 4, &world_seed, 4);
-
-  return splitmix64(*((uint64_t *)buf));
-
-}
-
-uint8_t getChunkBiome (short x, short z) {
+uint8_t getChunkBiomeRaw (short x, short z) {
   init_worldgen();
   
   // Sample biome at an estimated surface height instead of fixed Y=64
@@ -120,6 +128,43 @@ uint8_t getChunkBiome (short x, short z) {
         if (isMesa(biomeID)) return W_badlands;
         return W_plains;
   }
+}
+
+void init_worldgen() {
+    if (gen_initialized) return;
+    pthread_mutex_lock(&worldgen_init_mutex);
+    if (gen_initialized) {
+        pthread_mutex_unlock(&worldgen_init_mutex);
+        return;
+    }
+    setupGenerator(&g, MC_1_20, 0);
+    applySeed(&g, DIM_OVERWORLD, (uint64_t)world_seed);
+    initSurfaceNoise(&surface_noise_biome, DIM_OVERWORLD, (uint64_t)world_seed);
+
+    // Surface noise: increased octaves for more dramatic terrain
+    octave_init(&surface_noise, (uint64_t)world_seed, 6);
+    // Detail noise: more octaves for rugged surface detail
+    octave_init(&detail_noise, (uint64_t)world_seed + 1, 4);
+    // Cave noise uses same settings as surface noise but different seed and scale
+    octave_init(&cave_noise, (uint64_t)world_seed + 0x5DEECE66D, 4);
+    // Mountain noise for large mountain peaks (low frequency, very high amplitude)
+    // Lower frequency (larger features) and more octaves for dramatic peaks
+    octave_init(&mountain_noise, (uint64_t)world_seed + 0x12345678, 5);
+    // Ore clump noise for small scattered ore veins (2 octaves for localized blobs)
+    octave_init(&ore_clump_noise, (uint64_t)world_seed + 0xABCDEF12, 2);
+    gen_initialized = 1;
+    pthread_mutex_unlock(&worldgen_init_mutex);
+}
+
+uint32_t getChunkHash (short x, short z) {
+
+  uint8_t buf[8];
+  memcpy(buf, &x, 2);
+  memcpy(buf + 2, &z, 2);
+  memcpy(buf + 4, &world_seed, 4);
+
+  return splitmix64(*((uint64_t *)buf));
+
 }
 
 uint8_t getCornerHeight (uint32_t hash, uint8_t biome) {
@@ -282,21 +327,21 @@ static void buildHeightCache (int cx, int cz) {
   int base_x = scx * 32;
   int base_z = scz * 32;
 
-  // Generate raw heights for 36x36 area (32x32 superchunk + 2 block border)
+  // Generate raw heights for 37x37 area to allow averaging for 36x36 blocks
+  // Sampling each point once is much faster than sampling 4 points per block.
+  static TLS_STORAGE uint8_t raw_heights[37][37];
+  for (int dz = 0; dz < 37; dz++) {
+    for (int dx = 0; dx < 37; dx++) {
+      raw_heights[dx][dz] = getHeightAtRaw(base_x + dx - 2, base_z + dz - 2);
+    }
+  }
+
   // Apply smoothing filter to reduce visible seams
   for (int dz = 0; dz < 36; dz++) {
     for (int dx = 0; dx < 36; dx++) {
-      int raw_x = base_x + dx - 2;
-      int raw_z = base_z + dz - 2;
-      
-      // Sample multiple points and average for smoother terrain
-      uint8_t h0 = getHeightAtRaw(raw_x, raw_z);
-      uint8_t h1 = getHeightAtRaw(raw_x + 1, raw_z);
-      uint8_t h2 = getHeightAtRaw(raw_x, raw_z + 1);
-      uint8_t h3 = getHeightAtRaw(raw_x + 1, raw_z + 1);
-      
       // Average the samples for smoother transitions
-      height_cache[dx][dz] = (h0 + h1 + h2 + h3) / 4;
+      height_cache[dx][dz] = (raw_heights[dx][dz] + raw_heights[dx+1][dz] +
+                              raw_heights[dx][dz+1] + raw_heights[dx+1][dz+1]) / 4;
     }
   }
 }
@@ -641,10 +686,10 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
         uint8_t leaf_top = feature.y + 8 + feature.variant * 2 + height_adjust;
 
         // Spruce tree leaves form a cone shape
-        for (int ly = leaf_base; ly <= leaf_top; ly++) {
-          int dist_from_top = leaf_top - ly;
+        if (y >= leaf_base && y <= leaf_top) {
+          int dist_from_top = leaf_top - y;
           int max_radius = (dist_from_top / 2) + 1;
-          if (y == ly && dist <= max_radius && dist > 0) {
+          if (dist <= max_radius && dist > 0) {
             return B_spruce_leaves;
           }
         }
@@ -700,10 +745,10 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
         uint8_t leaf_base = feature.y + 1;
         uint8_t leaf_top = feature.y + 7 + feature.variant * 2 + height_adjust;
 
-        for (int ly = leaf_base; ly <= leaf_top; ly++) {
-          int dist_from_top = leaf_top - ly;
+        if (y >= leaf_base && y <= leaf_top) {
+          int dist_from_top = leaf_top - y;
           int max_radius = (dist_from_top / 2) + 1;
-          if (y == ly && dist <= max_radius && dist > 0) {
+          if (dist <= max_radius && dist > 0) {
             return B_spruce_leaves;
           }
         }
@@ -1193,10 +1238,10 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       uint8_t dist = dx + dz;
       uint8_t leaf_top = feature.y + 10 + feature.variant;
 
-      for (int ly = feature.y + 3; ly <= leaf_top; ly++) {
-        int dist_from_top = leaf_top - ly;
+      if (y >= feature.y + 3 && y <= leaf_top) {
+        int dist_from_top = leaf_top - y;
         int max_radius = (dist_from_top / 2) + 1;
-        if (y == ly && dist <= max_radius && dist > 0) {
+        if (dist <= max_radius && dist > 0) {
           return B_spruce_leaves;
         }
       }
@@ -1259,10 +1304,10 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       uint8_t dist = dx + dz;
       uint8_t leaf_top = feature.y + 6 + feature.variant;
 
-      for (int ly = feature.y + 2; ly <= leaf_top; ly++) {
-        int dist_from_top = leaf_top - ly;
+      if (y >= feature.y + 2 && y <= leaf_top) {
+        int dist_from_top = leaf_top - y;
         int max_radius = (dist_from_top / 2) + 1;
-        if (y == ly && dist <= max_radius && dist > 0) {
+        if (dist <= max_radius && dist > 0) {
           return B_spruce_leaves;
         }
       }
@@ -1287,10 +1332,10 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
       uint8_t dist = dx + dz;
       uint8_t leaf_top = feature.y + 12 + feature.variant * 2;
 
-      for (int ly = feature.y + 4; ly <= leaf_top; ly++) {
-        int dist_from_top = leaf_top - ly;
+      if (y >= feature.y + 4 && y <= leaf_top) {
+        int dist_from_top = leaf_top - y;
         int max_radius = (dist_from_top / 2) + 1;
-        if (y == ly && dist <= max_radius && dist > 0) {
+        if (dist <= max_radius && dist > 0) {
           return B_spruce_leaves;
         }
       }
@@ -1540,10 +1585,10 @@ uint8_t getBlockAt (int x, int y, int z) {
 
 }
 
-uint8_t chunk_section[4096];
-ChunkAnchor chunk_anchors[(16 / CHUNK_SIZE + 1) * (16 / CHUNK_SIZE + 1)];
-ChunkFeature chunk_features[256 / (CHUNK_SIZE * CHUNK_SIZE)];
-uint8_t chunk_section_height[16][16];
+WORLDGEN_THREAD_LOCAL uint8_t chunk_section[4096];
+static WORLDGEN_THREAD_LOCAL ChunkAnchor chunk_anchors[(16 / CHUNK_SIZE + 1) * (16 / CHUNK_SIZE + 1)];
+static WORLDGEN_THREAD_LOCAL ChunkFeature chunk_features[256 / (CHUNK_SIZE * CHUNK_SIZE)];
+static WORLDGEN_THREAD_LOCAL uint8_t chunk_section_height[16][16];
 
 // Builds a 16x16x16 chunk of blocks and writes it to `chunk_section`
 // Returns the biome at the origin corner of the chunk
@@ -1555,8 +1600,8 @@ uint8_t buildChunkSection (int cx, int cy, int cz) {
 
       ChunkAnchor *anchor = chunk_anchors + anchor_index;
 
-      anchor->x = j / CHUNK_SIZE;
-      anchor->z = i / CHUNK_SIZE;
+      anchor->x = div_floor(j, CHUNK_SIZE);
+      anchor->z = div_floor(i, CHUNK_SIZE);
       anchor->hash = getChunkHash(anchor->x, anchor->z);
       anchor->biome = getChunkBiome(anchor->x, anchor->z);
 
@@ -1605,6 +1650,12 @@ uint8_t buildChunkSection (int cx, int cy, int cz) {
         );
       }
     }
+  }
+
+  // Skip the expensive block-change overlay scan when this chunk has no
+  // player-made edits recorded.
+  if (!isChunkModified(div_floor(cx, 16), div_floor(cz, 16))) {
+    return chunk_anchors[0].biome;
   }
 
   // Apply block changes on top of terrain

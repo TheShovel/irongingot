@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <math.h>
+#include <limits.h>
 
 #ifndef CLOCK_REALTIME
 #define CLOCK_REALTIME 0
@@ -83,6 +84,159 @@ static void clearDistantVisitedChunks(PlayerData *player, int center_x, int cent
     }
   }
 }
+
+// Dedicated chunk streaming worker.
+// This keeps heavy chunk packet sending out of the movement packet path.
+static pthread_t chunk_streamer_thread;
+static volatile uint8_t chunk_streamer_running = 0;
+
+typedef struct {
+  int x;
+  int z;
+  int64_t retry_after_us;
+} ChunkRetryEntry;
+
+#define CHUNK_RETRY_TABLE_SIZE 2048
+#define CHUNK_RETRY_COOLDOWN_US 120000
+static ChunkRetryEntry chunk_retry_table[CHUNK_RETRY_TABLE_SIZE];
+static uint8_t chunk_retry_table_initialized = 0;
+
+static inline uint32_t chunkRetryHash(int x, int z) {
+  uint32_t h = (uint32_t)x * 374761393u + (uint32_t)z * 668265263u;
+  h = (h ^ (h >> 13)) * 1274126177u;
+  return h ^ (h >> 16);
+}
+
+static void initChunkRetryTable(void) {
+  if (chunk_retry_table_initialized) return;
+  for (int i = 0; i < CHUNK_RETRY_TABLE_SIZE; i++) {
+    chunk_retry_table[i].x = INT_MIN;
+    chunk_retry_table[i].z = INT_MIN;
+    chunk_retry_table[i].retry_after_us = 0;
+  }
+  chunk_retry_table_initialized = 1;
+}
+
+static uint8_t isChunkInRetryCooldown(int x, int z, int64_t now_us) {
+  ChunkRetryEntry *entry = &chunk_retry_table[chunkRetryHash(x, z) % CHUNK_RETRY_TABLE_SIZE];
+  if (entry->x != x || entry->z != z) return false;
+  return now_us < entry->retry_after_us;
+}
+
+static void setChunkRetryCooldown(int x, int z, int64_t now_us) {
+  ChunkRetryEntry *entry = &chunk_retry_table[chunkRetryHash(x, z) % CHUNK_RETRY_TABLE_SIZE];
+  entry->x = x;
+  entry->z = z;
+  entry->retry_after_us = now_us + CHUNK_RETRY_COOLDOWN_US;
+}
+
+static void streamChunksForPlayer(PlayerData *player) {
+  if (player->client_fd == -1) return;
+  if (player->flags & 0x20) return;  // still loading
+
+  int center_x = div_floor(player->x, 16);
+  int center_z = div_floor(player->z, 16);
+
+  clearDistantVisitedChunks(player, center_x, center_z, VIEW_DISTANCE);
+
+  size_t chunk_backlog = get_client_send_queue_bytes(player->client_fd);
+  if (chunk_backlog > (1024 * 1024)) {
+    // Let queued chunk packets drain first.
+    return;
+  }
+
+  int chunks_per_cycle = chunk_backlog > (512 * 1024) ? 1 : 2;
+  int chunk_attempt_budget = chunks_per_cycle * 3;
+  int64_t now_us = get_program_time();
+
+  for (int radius = 0; radius <= VIEW_DISTANCE &&
+       chunks_per_cycle > 0 &&
+       chunk_attempt_budget > 0; radius++) {
+    for (int dz = -radius; dz <= radius &&
+         chunks_per_cycle > 0 &&
+         chunk_attempt_budget > 0; dz++) {
+      for (int dx = -radius; dx <= radius &&
+           chunks_per_cycle > 0 &&
+           chunk_attempt_budget > 0; dx++) {
+        if (radius != 0 &&
+            dx != -radius && dx != radius &&
+            dz != -radius && dz != radius) {
+          continue;
+        }
+
+        int check_x = center_x + dx;
+        int check_z = center_z + dz;
+        if (isChunkVisited(player, check_x, check_z)) continue;
+        if (isChunkInRetryCooldown(check_x, check_z, now_us)) {
+          chunk_attempt_budget--;
+          continue;
+        }
+
+        if (sc_chunkDataAndUpdateLight(player->client_fd, check_x, check_z) == 0) {
+          markChunkVisited(player, check_x, check_z);
+          chunks_per_cycle--;
+        } else {
+          // Avoid hammering not-yet-generated chunks every streamer cycle.
+          setChunkRetryCooldown(check_x, check_z, now_us);
+        }
+
+        chunk_attempt_budget--;
+      }
+    }
+  }
+}
+
+static void* chunk_streamer_worker(void* arg) {
+  (void)arg;
+  while (chunk_streamer_running) {
+    for (int i = 0; i < MAX_PLAYERS; i++) {
+      streamChunksForPlayer(&player_data[i]);
+    }
+    usleep(20000);  // 20ms
+  }
+  return NULL;
+}
+
+static void init_chunk_streamer(void) {
+  initChunkRetryTable();
+  chunk_streamer_running = 1;
+  pthread_create(&chunk_streamer_thread, NULL, chunk_streamer_worker, NULL);
+  printf("Chunk streamer thread started\n");
+}
+
+static void shutdown_chunk_streamer(void) {
+  if (!chunk_streamer_running) return;
+  chunk_streamer_running = 0;
+  pthread_join(chunk_streamer_thread, NULL);
+  printf("Chunk streamer thread stopped\n");
+}
+
+#define MAX_PACKETS_PER_CLIENT_TURN 8
+#define MAX_MOVEMENT_PACKETS_PER_CLIENT_TURN 2
+
+static inline uint8_t isMovementPacketInPlayState(int state, int packet_id) {
+  if (state != STATE_PLAY) return false;
+  return (
+    packet_id == 0x1D ||  // Set Player Position
+    packet_id == 0x1E ||  // Set Player Position and Rotation
+    packet_id == 0x1F ||  // Set Player Rotation
+    packet_id == 0x20     // Set Player Movement Flags
+  );
+}
+
+#ifdef DEV_LOG_ALL_PACKETS
+static void logIncomingPacket(int client_fd, int state, int packet_id, int payload_len, int frame_len, int compressed) {
+  printf(
+    "[pkt-in] fd=%d state=%d id=0x%X payload=%d frame=%d compressed=%d\n",
+    client_fd,
+    state,
+    packet_id,
+    payload_len,
+    frame_len,
+    compressed
+  );
+}
+#endif
 
 /**
  * Routes an incoming packet to its packet handler or procedure.
@@ -354,10 +508,10 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
         if (x < 0) cx -= 1;
         if (z < 0) cz -= 1;
         // Determine the player's chunk coordinates
-        short _x = (cx < 0 ? cx - 16 : cx) / 16, _z = (cz < 0 ? cz - 16 : cz) / 16;
+        short _x = div_floor(cx, 16), _z = div_floor(cz, 16);
         // Calculate distance between previous and current chunk coordinates
-        short dx = _x - (player->x < 0 ? player->x - 16 : player->x) / 16;
-        short dz = _z - (player->z < 0 ? player->z - 16 : player->z) / 16;
+        short dx = _x - div_floor(player->x, 16);
+        short dz = _z - div_floor(player->z, 16);
 
         // Prevent players from leaving the world
         if (cy < 0) {
@@ -374,46 +528,11 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
         player->y = cy;
         player->z = cz;
 
-        // Stream chunks on every movement packet - this creates smooth terrain loading
-        // Send only a few chunks per packet to avoid lag spikes
-        int chunks_per_tick = 16;
-        int sent_this_tick = 0;
-
-        #ifdef DEV_LOG_CHUNK_GENERATION
-          printf("Streaming chunks at (%d, %d)\n", _x, _z);
-          clock_t start, end;
-          start = clock();
-          int count = 0;
-        #endif
-
-        sc_setCenterChunk(client_fd, _x, _z);
-
-        // Clear visited chunks that are now outside view distance
-        // This allows re-sending chunks when player returns to an area
-        // Minecraft clients unload chunks outside view distance, so we need to re-send them
-        clearDistantVisitedChunks(player, _x, _z, VIEW_DISTANCE);
-
-        // Load chunks in a radius around the player
-        for (int dz = -VIEW_DISTANCE; dz <= VIEW_DISTANCE && sent_this_tick < chunks_per_tick; dz++) {
-          for (int dx = -VIEW_DISTANCE; dx <= VIEW_DISTANCE && sent_this_tick < chunks_per_tick; dx++) {
-            int check_x = _x + dx;
-            int check_z = _z + dz;
-            if (!isChunkVisited(player, check_x, check_z)) {
-              sc_chunkDataAndUpdateLight(client_fd, check_x, check_z);
-              markChunkVisited(player, check_x, check_z);
-              #ifdef DEV_LOG_CHUNK_GENERATION
-                count++;
-              #endif
-              sent_this_tick++;
-            }
-          }
+        // Only update center chunk when crossing chunk borders.
+        // Actual chunk streaming is handled asynchronously by chunk_streamer_worker.
+        if (dx != 0 || dz != 0) {
+          sc_setCenterChunk(client_fd, _x, _z);
         }
-        
-        #ifdef DEV_LOG_CHUNK_GENERATION
-          end = clock();
-          double total_ms = (double)(end - start) / CLOCKS_PER_SEC * 1000;
-          printf("Streamed %d chunks in %.0f ms\n", count, total_ms);
-        #endif
 
         // Exit early if no chunk borders were crossed (skip mob spawning etc.)
         if (dx == 0 && dz == 0) break;
@@ -567,6 +686,8 @@ int main () {
 
   // Start the disk/flash serializer (if applicable)
   if (initSerializer()) exit(EXIT_FAILURE);
+  rebuildBlockChangeIndexes();
+  printf("Loaded block changes: %d\n", block_changes_count);
 
   // Initialize all file descriptor references to -1 (unallocated)
   int clients[MAX_PLAYERS], client_index = 0;
@@ -576,8 +697,19 @@ int main () {
     client_states[i].state = STATE_NONE;
     client_states[i].compression_threshold = 0;
     pthread_mutex_init(&client_states[i].send_mutex, NULL);
+    pthread_cond_init(&client_states[i].send_cond, NULL);
+    client_states[i].send_head_hi = NULL;
+    client_states[i].send_tail_hi = NULL;
+    client_states[i].send_head_lo = NULL;
+    client_states[i].send_tail_lo = NULL;
+    client_states[i].queued_bytes = 0;
+    client_states[i].queued_chunk_bytes = 0;
+    client_states[i].connection_generation = 1;
     player_data[i].client_fd = -1;
   }
+
+  // Start packet sender workers (asynchronous outbound network writes)
+  init_packet_sender_workers();
 
   // Create server TCP socket
   int server_fd, opt = 1;
@@ -620,6 +752,8 @@ int main () {
 
   // Start chunk generator thread
   init_chunk_generator();
+  // Start chunk streaming thread (asynchronous chunk sending)
+  init_chunk_streamer();
 
   // Make the socket non-blocking
   // This is necessary to not starve the idle task during slow connections
@@ -638,9 +772,9 @@ int main () {
   int64_t last_tick_time = get_program_time();
 
   /**
-   * Cycles through all connected clients, handling one packet at a time
-   * from each player. With every iteration, attempts to accept a new
-   * client connection.
+   * Cycles through all connected clients and handles small packet bursts
+   * per client. Burst handling drains packet backlogs without letting one
+   * connection monopolize the loop.
    */
   while (true) {
     // Check if it's time to yield to the idle task
@@ -665,10 +799,15 @@ int main () {
       break;
     }
 
-    // Look for valid connected clients
-    client_index ++;
-    if (client_index == MAX_PLAYERS) client_index = 0;
-    if (clients[client_index] == -1) continue;
+    // Look for the next valid connected client.
+    // Skip empty slots in one pass instead of burning full loop turns on them.
+    int searched = 0;
+    do {
+      client_index++;
+      if (client_index == MAX_PLAYERS) client_index = 0;
+      searched++;
+    } while (searched < MAX_PLAYERS && clients[client_index] == -1);
+    if (searched == MAX_PLAYERS && clients[client_index] == -1) continue;
 
     // Handle periodic events (server ticks)
     int64_t time_since_last_tick = get_program_time() - last_tick_time;
@@ -677,197 +816,236 @@ int main () {
       last_tick_time = get_program_time();
     }
 
-    // Handle this individual client
-    int client_fd = clients[client_index];
+    // Handle this individual client in a bounded burst.
+    int movement_packets_processed = 0;
+    for (int packets_processed = 0; packets_processed < MAX_PACKETS_PER_CLIENT_TURN; packets_processed++) {
+      int client_fd = clients[client_index];
+      if (client_fd == -1) break;
 
-    // Check if at least 2 bytes are available for reading
-    #ifdef _WIN32
-    recv_count = recv(client_fd, recv_buffer, 2, MSG_PEEK);
-    if (recv_count == 0) {
-      disconnectClient(&clients[client_index], 1);
-      continue;
-    }
-    if (recv_count == SOCKET_ERROR) {
-      int err = WSAGetLastError();
-      if (err == WSAEWOULDBLOCK) {
-        continue; // no data yet, keep client alive
-      } else {
+      // Check if at least 2 bytes are available for reading.
+      #ifdef _WIN32
+      recv_count = recv(client_fd, recv_buffer, 2, MSG_PEEK);
+      if (recv_count == 0) {
         disconnectClient(&clients[client_index], 1);
-        continue;
+        break;
       }
-    }
-    #else
-    recv_count = recv(client_fd, &recv_buffer, 2, MSG_PEEK);
-    if (recv_count < 2) {
-      if (recv_count == 0 || (recv_count < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
-        disconnectClient(&clients[client_index], 1);
-      }
-      continue;
-    }
-    #endif
-    // Handle 0xBEEF and 0xFEED packets for dumping/uploading world data
-    #ifdef DEV_ENABLE_BEEF_DUMPS
-    // Received BEEF packet, dump world data and disconnect
-    if (recv_buffer[0] == 0xBE && recv_buffer[1] == 0xEF && getClientState(client_fd) == STATE_NONE) {
-      // Send block changes and player data back to back
-      // The client is expected to know (or calculate) the size of these buffers
-      #ifdef INFINITE_BLOCK_CHANGES
-        send_all(client_fd, &block_changes_capacity, sizeof(int));
-        send_all(client_fd, block_changes, block_changes_capacity * sizeof(BlockChange));
-      #else
-        send_all(client_fd, block_changes, sizeof(block_changes));
-      #endif
-      send_all(client_fd, player_data, sizeof(player_data));
-      // Flush the socket and receive everything left on the wire
-      shutdown(client_fd, SHUT_WR);
-      recv_all(client_fd, recv_buffer, sizeof(recv_buffer), false);
-      // Kick the client
-      disconnectClient(&clients[client_index], 6);
-      continue;
-    }
-    // Received FEED packet, load world data from socket and disconnect
-    if (recv_buffer[0] == 0xFE && recv_buffer[1] == 0xED && getClientState(client_fd) == STATE_NONE) {
-      // Consume 0xFEED bytes (previous read was just a peek)
-      recv_all(client_fd, recv_buffer, 2, false);
-      // Write full buffers straight into memory
-      #ifdef INFINITE_BLOCK_CHANGES
-        // First read the capacity
-        int new_capacity;
-        recv_all(client_fd, &new_capacity, sizeof(int), false);
-        // Reallocate if needed
-        if (new_capacity > block_changes_capacity) {
-          BlockChange *new_block_changes = (BlockChange *)realloc(block_changes, new_capacity * sizeof(BlockChange));
-          if (!new_block_changes) {
-            perror("Failed to reallocate block changes for FEED packet");
-            disconnectClient(&clients[client_index], 7);
-            continue;
-          }
-          block_changes = new_block_changes;
-          block_changes_capacity = new_capacity;
+      if (recv_count == SOCKET_ERROR) {
+        int err = WSAGetLastError();
+        if (err == WSAEWOULDBLOCK) {
+          break; // no more data right now
         }
-        recv_all(client_fd, block_changes, block_changes_capacity * sizeof(BlockChange), false);
+        disconnectClient(&clients[client_index], 1);
+        break;
+      }
       #else
-        recv_all(client_fd, block_changes, sizeof(block_changes), false);
+      recv_count = recv(client_fd, &recv_buffer, 2, MSG_PEEK);
+      if (recv_count < 2) {
+        if (recv_count == 0 || (recv_count < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+          disconnectClient(&clients[client_index], 1);
+        }
+        break;
+      }
       #endif
-      recv_all(client_fd, player_data, sizeof(player_data), false);
-      // Recover block_changes_count
-      for (int i = 0; i < (
+
+      // Handle 0xBEEF and 0xFEED packets for dumping/uploading world data.
+      #ifdef DEV_ENABLE_BEEF_DUMPS
+      if (recv_buffer[0] == 0xBE && recv_buffer[1] == 0xEF && getClientState(client_fd) == STATE_NONE) {
+        // Send block changes and player data back to back.
         #ifdef INFINITE_BLOCK_CHANGES
-          block_changes_capacity
+          send_all(client_fd, &block_changes_capacity, sizeof(int));
+          send_all(client_fd, block_changes, block_changes_capacity * sizeof(BlockChange));
         #else
-          MAX_BLOCK_CHANGES
+          send_all(client_fd, block_changes, sizeof(block_changes));
         #endif
-      ); i ++) {
-        if (block_changes[i].block == 0xFF) continue;
-        if (block_changes[i].block == B_chest) i += 14;
-        #ifdef ALLOW_DOORS
-        if (isDoorBlock(block_changes[i].block)) i += 2;
-        #endif
-        if (i >= block_changes_count) block_changes_count = i + 1;
+        send_all(client_fd, player_data, sizeof(player_data));
+        shutdown(client_fd, SHUT_WR);
+        recv_all(client_fd, recv_buffer, sizeof(recv_buffer), false);
+        disconnectClient(&clients[client_index], 6);
+        break;
       }
-      // Update data on disk
-      writeBlockChangesToDisk(0, block_changes_count);
-      writePlayerDataToDisk();
-      // Kick the client
-      disconnectClient(&clients[client_index], 7);
-      continue;
-    }
-    #endif
 
-    // Read packet length
-    int packet_length = readVarInt(client_fd);
-    if (packet_length == VARNUM_ERROR) {
-      disconnectClient(&clients[client_index], 2);
-      continue;
-    }
-
-    int packet_id;
-    int data_length = 0;
-    int threshold = getCompressionThreshold(client_fd);
-
-    if (threshold > 0) {
-      data_length = readVarInt(client_fd);
-      if (data_length == 0) {
-        // Uncompressed
-        packet_id = readVarInt(client_fd);
-        int header_size = sizeVarInt(0) + sizeVarInt(packet_id);
-        handlePacket(client_fd, packet_length - header_size, packet_id, getClientState(client_fd));
-      } else {
-        // Compressed
-        int compressed_len = packet_length - sizeVarInt(data_length);
-        if (compressed_len > MAX_PACKET_LEN || data_length > MAX_PACKET_LEN) {
-          printf("ERROR: Compressed packet too large (%d or %d > %d)\n", compressed_len, data_length, MAX_PACKET_LEN);
-          disconnectClient(&clients[client_index], 8);
-          continue;
+      if (recv_buffer[0] == 0xFE && recv_buffer[1] == 0xED && getClientState(client_fd) == STATE_NONE) {
+        // Consume 0xFEED bytes (previous read was just a peek).
+        recv_all(client_fd, recv_buffer, 2, false);
+        #ifdef INFINITE_BLOCK_CHANGES
+          int new_capacity;
+          recv_all(client_fd, &new_capacity, sizeof(int), false);
+          if (new_capacity > block_changes_capacity) {
+            BlockChange *new_block_changes = (BlockChange *)realloc(block_changes, new_capacity * sizeof(BlockChange));
+            if (!new_block_changes) {
+              perror("Failed to reallocate block changes for FEED packet");
+              disconnectClient(&clients[client_index], 7);
+              break;
+            }
+            block_changes = new_block_changes;
+            block_changes_capacity = new_capacity;
+          }
+          recv_all(client_fd, block_changes, block_changes_capacity * sizeof(BlockChange), false);
+        #else
+          recv_all(client_fd, block_changes, sizeof(block_changes), false);
+        #endif
+        recv_all(client_fd, player_data, sizeof(player_data), false);
+        for (int i = 0; i < (
+          #ifdef INFINITE_BLOCK_CHANGES
+            block_changes_capacity
+          #else
+            MAX_BLOCK_CHANGES
+          #endif
+        ); i ++) {
+          if (block_changes[i].block == 0xFF) continue;
+          if (block_changes[i].block == B_chest) i += 14;
+          #ifdef ALLOW_DOORS
+          if (isDoorBlock(block_changes[i].block)) i += 2;
+          #endif
+          if (i >= block_changes_count) block_changes_count = i + 1;
         }
+        rebuildBlockChangeIndexes();
+        writeBlockChangesToDisk(0, block_changes_count);
+        writePlayerDataToDisk();
+        disconnectClient(&clients[client_index], 7);
+        break;
+      }
+      #endif
 
-        uint8_t *compressed_buf = malloc(compressed_len);
-        if (!compressed_buf) {
-          perror("Failed to allocate compressed buffer");
-          disconnectClient(&clients[client_index], 8);
-          continue;
-        }
+      int packet_length = readVarInt(client_fd);
+      if (packet_length == VARNUM_ERROR) {
+        disconnectClient(&clients[client_index], 2);
+        break;
+      }
 
-        recv_all(client_fd, compressed_buf, compressed_len, false);
+      int packet_id;
+      int threshold = getCompressionThreshold(client_fd);
 
-        z_stream strm;
-        strm.zalloc = Z_NULL;
-        strm.zfree = Z_NULL;
-        strm.opaque = Z_NULL;
-        strm.avail_in = compressed_len;
-        strm.next_in = compressed_buf;
-        strm.avail_out = MAX_PACKET_LEN;
-        strm.next_out = in_packet_buffer;
+      if (threshold > 0) {
+        int data_length = readVarInt(client_fd);
+        if (data_length == 0) {
+          // Uncompressed packet while compression is enabled.
+          packet_id = readVarInt(client_fd);
+          int header_size = sizeVarInt(0) + sizeVarInt(packet_id);
+          int payload_len = packet_length - header_size;
+          int state = getClientState(client_fd);
+          uint8_t movement_packet = isMovementPacketInPlayState(state, packet_id);
+          uint8_t should_skip_movement = movement_packet && movement_packets_processed >= MAX_MOVEMENT_PACKETS_PER_CLIENT_TURN;
 
-        int ret = inflateInit(&strm);
-        if (ret != Z_OK) {
-          fprintf(stderr, "inflateInit failed: %d\n", ret);
-          free(compressed_buf);
-          disconnectClient(&clients[client_index], 8);
-          continue;
-        }
+          #ifdef DEV_LOG_ALL_PACKETS
+          logIncomingPacket(client_fd, state, packet_id, payload_len, packet_length, 0);
+          #endif
 
-        ret = inflate(&strm, Z_FINISH);
-        if (ret != Z_STREAM_END) {
-          fprintf(stderr, "inflate failed: %d\n", ret);
+          if (should_skip_movement) {
+            discard_all(client_fd, payload_len, false);
+          } else {
+            handlePacket(client_fd, payload_len, packet_id, state);
+            if (movement_packet) movement_packets_processed++;
+          }
+        } else {
+          // Compressed packet body.
+          int compressed_len = packet_length - sizeVarInt(data_length);
+          if (compressed_len > MAX_PACKET_LEN || data_length > MAX_PACKET_LEN) {
+            printf("ERROR: Compressed packet too large (%d or %d > %d)\n", compressed_len, data_length, MAX_PACKET_LEN);
+            disconnectClient(&clients[client_index], 8);
+            break;
+          }
+
+          uint8_t *compressed_buf = malloc(compressed_len);
+          if (!compressed_buf) {
+            perror("Failed to allocate compressed buffer");
+            disconnectClient(&clients[client_index], 8);
+            break;
+          }
+
+          recv_all(client_fd, compressed_buf, compressed_len, false);
+
+          z_stream strm;
+          strm.zalloc = Z_NULL;
+          strm.zfree = Z_NULL;
+          strm.opaque = Z_NULL;
+          strm.avail_in = compressed_len;
+          strm.next_in = compressed_buf;
+          strm.avail_out = MAX_PACKET_LEN;
+          strm.next_out = in_packet_buffer;
+
+          int ret = inflateInit(&strm);
+          if (ret != Z_OK) {
+            fprintf(stderr, "inflateInit failed: %d\n", ret);
+            free(compressed_buf);
+            disconnectClient(&clients[client_index], 8);
+            break;
+          }
+
+          ret = inflate(&strm, Z_FINISH);
+          if (ret != Z_STREAM_END) {
+            fprintf(stderr, "inflate failed: %d\n", ret);
+            inflateEnd(&strm);
+            free(compressed_buf);
+            disconnectClient(&clients[client_index], 8);
+            break;
+          }
+
+          in_packet_buffer_len = strm.total_out;
           inflateEnd(&strm);
           free(compressed_buf);
-          disconnectClient(&clients[client_index], 8);
-          continue;
+
+          in_packet_buffer_offset = 0;
+          packet_id = readVarInt(client_fd);
+          int payload_len = in_packet_buffer_len - sizeVarInt(packet_id);
+          int state = getClientState(client_fd);
+          uint8_t movement_packet = isMovementPacketInPlayState(state, packet_id);
+          uint8_t should_skip_movement = movement_packet && movement_packets_processed >= MAX_MOVEMENT_PACKETS_PER_CLIENT_TURN;
+
+          #ifdef DEV_LOG_ALL_PACKETS
+          logIncomingPacket(client_fd, state, packet_id, payload_len, packet_length, 1);
+          #endif
+
+          if (should_skip_movement) {
+            in_packet_buffer_len = 0;
+            in_packet_buffer_offset = 0;
+          } else {
+            handlePacket(client_fd, payload_len, packet_id, state);
+            if (movement_packet) movement_packets_processed++;
+            in_packet_buffer_len = 0;
+            in_packet_buffer_offset = 0;
+          }
         }
-
-        in_packet_buffer_len = strm.total_out;
-        inflateEnd(&strm);
-
-        free(compressed_buf);
-
-        in_packet_buffer_offset = 0;
+      } else {
         packet_id = readVarInt(client_fd);
-        handlePacket(client_fd, in_packet_buffer_len - sizeVarInt(packet_id), packet_id, getClientState(client_fd));
+        if (packet_id == VARNUM_ERROR) {
+          disconnectClient(&clients[client_index], 3);
+          break;
+        }
+        int payload_len = packet_length - sizeVarInt(packet_id);
+        int state = getClientState(client_fd);
+        uint8_t movement_packet = isMovementPacketInPlayState(state, packet_id);
+        uint8_t should_skip_movement = movement_packet && movement_packets_processed >= MAX_MOVEMENT_PACKETS_PER_CLIENT_TURN;
 
-        // Clear in_packet_buffer after use
-        in_packet_buffer_len = 0;
+        #ifdef DEV_LOG_ALL_PACKETS
+        logIncomingPacket(client_fd, state, packet_id, payload_len, packet_length, 0);
+        #endif
+
+        if (should_skip_movement) {
+          discard_all(client_fd, payload_len, false);
+        } else {
+          handlePacket(client_fd, payload_len, packet_id, state);
+          if (movement_packet) movement_packets_processed++;
+        }
       }
-    } else {
-      packet_id = readVarInt(client_fd);
-      if (packet_id == VARNUM_ERROR) {
-        disconnectClient(&clients[client_index], 3);
-        continue;
+
+      if (recv_count == 0 || (recv_count == -1 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+        disconnectClient(&clients[client_index], 4);
+        break;
       }
-      handlePacket(client_fd, packet_length - sizeVarInt(packet_id), packet_id, getClientState(client_fd));
-    }
-    if (recv_count == 0 || (recv_count == -1 && errno != EAGAIN && errno != EWOULDBLOCK)) {
-      disconnectClient(&clients[client_index], 4);
-      continue;
     }
 
   }
 
+  // Shutdown chunk streaming thread
+  shutdown_chunk_streamer();
   // Shutdown chunk generator thread
   shutdown_chunk_generator();
 
   // Shutdown global thread pool
   shutdown_global_thread_pool();
+  // Shutdown packet sender workers
+  shutdown_packet_sender_workers();
 
   close(server_fd);
  
