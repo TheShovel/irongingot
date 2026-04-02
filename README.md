@@ -76,5 +76,5 @@ GPL-3.0 License - see [LICENSE](LICENSE).
 ## Acknowledgments
 
 - Original [bareiron](https://github.com/p2r3/bareiron) by p2r3
-- [cubiomes](https://github.com/hubman/cubiomes) for biome generation
+- [cubiomes](https://github.com/Cubitect/cubiomes) for biome generation
 - [Cosmopolitan Libc](https://github.com/jart/cosmopolitan) for cross-platform binaries
