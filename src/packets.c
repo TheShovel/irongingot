@@ -374,13 +374,36 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
     return 1;
   }
 
-  // Use a static buffer to build the chunk data part
-  // This avoids the overhead of allocating 1MB on every chunk send
-  static THREAD_LOCAL uint8_t data_buf[MAX_PACKET_LEN];
+  // Use a dynamic buffer to build the chunk data part
+  // Grows as needed to handle large chunks
+  static THREAD_LOCAL uint8_t *data_buf = NULL;
+  static THREAD_LOCAL size_t data_buf_capacity = 0;
   static THREAD_LOCAL uint8_t cached_sections[20][4096];
   static THREAD_LOCAL uint8_t cached_biomes[20];
   int data_offset = 0;
-  const int MAX_DATA_OFFSET = MAX_PACKET_LEN - 1024;  // Safety margin
+  
+  // Ensure buffer is large enough
+  if (data_buf == NULL || data_buf_capacity < 32768) {
+    void *new_buf = realloc(data_buf, 32768);
+    if (new_buf) {
+      data_buf = (uint8_t *)new_buf;
+      data_buf_capacity = 32768;
+    } else {
+      return 1;
+    }
+  }
+  
+  // Helper to grow buffer if needed
+  #define ENSURE_SPACE(needed) do { \
+    if (data_offset + (needed) > (int)data_buf_capacity) { \
+      size_t new_cap = data_buf_capacity * 2; \
+      while (new_cap < data_offset + (needed)) new_cap *= 2; \
+      void *nb = realloc(data_buf, new_cap); \
+      if (!nb) return 1; \
+      data_buf = (uint8_t *)nb; \
+      data_buf_capacity = new_cap; \
+    } \
+  } while(0)
 
   int x = _x * 16, z = _z * 16;
 
@@ -396,7 +419,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
   // 1. Send chunk sections
   // send 4 chunk sections (up to Y=0) with no blocks (bedrock)
   for (int i = 0; i < 4; i ++) {
-    if (data_offset >= MAX_DATA_OFFSET) {
+    if (data_offset + 32 > (int)data_buf_capacity) {
       fprintf(stderr, "ERROR: Chunk data buffer overflow at bedrock sections\n");
       return 1;
     }
@@ -408,7 +431,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
     // block palette (bedrock = 85)
     uint32_t val = 85;
     while (true) {
-      if (data_offset >= MAX_DATA_OFFSET) {
+      if (data_offset + 32 > (int)data_buf_capacity) {
         fprintf(stderr, "ERROR: Chunk data buffer overflow at bedrock palette\n");
         return 1;
       }
@@ -424,7 +447,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
 
   // send middle chunk sections using cached data
   for (int i = 0; i < 20; i ++) {
-    if (data_offset >= MAX_DATA_OFFSET) {
+    if (data_offset + 32 > (int)data_buf_capacity) {
       fprintf(stderr, "ERROR: Chunk data buffer overflow at middle sections\n");
       return 1;
     }
@@ -449,7 +472,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
       data_buf[data_offset++] = 0;
       uint32_t val = block_palette[first_block];
       while (true) {
-        if (data_offset >= MAX_DATA_OFFSET) {
+        if (data_offset + 32 > (int)data_buf_capacity) {
           fprintf(stderr, "ERROR: Chunk data buffer overflow at uniform palette\n");
           return 1;
         }
@@ -465,7 +488,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
       data_buf[data_offset++] = 8;
       uint32_t val = 256;
       while (true) {
-        if (data_offset >= MAX_DATA_OFFSET) {
+        if (data_offset + 32 > (int)data_buf_capacity) {
           fprintf(stderr, "ERROR: Chunk data buffer overflow at non-uniform header\n");
           return 1;
         }
@@ -474,10 +497,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
         val >>= 7;
       }
       // Check space for palette and section data
-      if (data_offset + sizeof(network_block_palette) + 4096 >= MAX_DATA_OFFSET) {
-        fprintf(stderr, "ERROR: Chunk data buffer overflow at section copy\n");
-        return 1;
-      }
+      ENSURE_SPACE(sizeof(network_block_palette) + 4096);
       memcpy(data_buf + data_offset, network_block_palette, sizeof(network_block_palette));
       data_offset += sizeof(network_block_palette);
       memcpy(data_buf + data_offset, section_data, 4096);
@@ -490,7 +510,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
 
   // send 8 chunk sections (up to Y=192) with no blocks (air)
   for (int i = 0; i < 8; i ++) {
-    if (data_offset >= MAX_DATA_OFFSET) {
+    if (data_offset + 32 > (int)data_buf_capacity) {
       fprintf(stderr, "ERROR: Chunk data buffer overflow at air sections\n");
       return 1;
     }
