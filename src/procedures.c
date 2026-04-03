@@ -223,6 +223,10 @@ void handlePlayerJoin (PlayerData* player) {
 
 void disconnectClient (int *client_fd, int cause) {
   if (*client_fd == -1) return;
+  
+  // Clear any pending send queue data
+  clear_client_send_queue(*client_fd);
+  
   client_count --;
   setClientState(*client_fd, STATE_NONE);
   handlePlayerDisconnect(*client_fd);

@@ -739,10 +739,14 @@ void shutdown_packet_sender_workers (void) {
   if (!sender_workers_running) return;
   sender_workers_running = 0;
 
+  // Clear all client send queues
   for (int i = 0; i < MAX_PLAYERS; i++) {
-    pthread_mutex_lock(&client_states[i].send_mutex);
-    pthread_cond_broadcast(&client_states[i].send_cond);
-    pthread_mutex_unlock(&client_states[i].send_mutex);
+    if (client_states[i].client_fd != -1) {
+      pthread_mutex_lock(&client_states[i].send_mutex);
+      free_client_queue_locked(&client_states[i]);
+      pthread_cond_broadcast(&client_states[i].send_cond);
+      pthread_mutex_unlock(&client_states[i].send_mutex);
+    }
   }
   for (int i = 0; i < MAX_PLAYERS; i++) {
     pthread_join(sender_threads[i], NULL);
@@ -755,6 +759,46 @@ void clear_client_send_queue (int client_fd) {
   pthread_mutex_lock(&state->send_mutex);
   free_client_queue_locked(state);
   pthread_mutex_unlock(&state->send_mutex);
+}
+
+// Drain old sent packets from the queue to free memory
+// Keeps packets that haven't been sent yet
+static void drain_sent_packets_locked(ClientState *state) {
+  // Free all high-priority sent packets
+  while (state->send_head_hi) {
+    OutPacket *next = state->send_head_hi->next;
+    free(state->send_head_hi->data);
+    free(state->send_head_hi);
+    state->send_head_hi = next;
+  }
+  state->send_tail_hi = NULL;
+  
+  // Free all low-priority sent packets (chunk packets are sent quickly)
+  // Since chunk packets are time-sensitive, drain the entire low queue
+  while (state->send_head_lo) {
+    OutPacket *next = state->send_head_lo->next;
+    free(state->send_head_lo->data);
+    free(state->send_head_lo);
+    state->send_head_lo = next;
+  }
+  state->send_tail_lo = NULL;
+  state->queued_chunk_bytes = 0;
+  
+  // Reset high priority bytes to 0
+  state->queued_bytes = 0;
+}
+
+// Periodically call to free memory from old sent packets
+void drain_client_queues(void) {
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (client_states[i].client_fd == -1) continue;
+    pthread_mutex_lock(&client_states[i].send_mutex);
+    // Only drain if there's significant backlog
+    if (client_states[i].queued_bytes > max_client_chunk_queue_bytes / 2) {
+      drain_sent_packets_locked(&client_states[i]);
+    }
+    pthread_mutex_unlock(&client_states[i].send_mutex);
+  }
 }
 
 size_t get_client_send_queue_bytes (int client_fd) {

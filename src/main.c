@@ -814,6 +814,8 @@ int main () {
     int64_t time_since_last_tick = get_program_time() - last_tick_time;
     if (time_since_last_tick > TIME_BETWEEN_TICKS) {
       handleServerTick(time_since_last_tick);
+      // Periodically drain old packets to free memory
+      drain_client_queues();
       last_tick_time = get_program_time();
     }
 
@@ -1047,7 +1049,11 @@ int main () {
   shutdown_global_thread_pool();
   // Shutdown packet sender workers
   shutdown_packet_sender_workers();
-
+  
+  // Free dynamically allocated buffers
+  if (packet_buffer) free(packet_buffer);
+  if (in_packet_buffer) free(in_packet_buffer);
+  
   close(server_fd);
  
   #ifdef _WIN32 //cleanup windows socket
