@@ -44,6 +44,7 @@ rm -rf "$LINUX_DIR"
 mkdir -p "$LINUX_DIR"
 cp build/bareiron "$LINUX_DIR/"
 cp server.conf "$LINUX_DIR/"
+cp serverIcon.png "$LINUX_DIR/"
 (cd build && zip -rq "irongingot-v${VERSION}-linux.zip" "irongingot-v${VERSION}-linux")
 rm -rf "$LINUX_DIR"
 echo "Linux release: build/irongingot-v${VERSION}-linux.zip"
@@ -91,6 +92,7 @@ if [ -n "$WIN_CC" ]; then
   mkdir -p "$WINDOWS_DIR"
   cp build/bareiron.exe "$WINDOWS_DIR/"
   cp server.conf "$WINDOWS_DIR/"
+  cp serverIcon.png "$WINDOWS_DIR/"
   (cd build && zip -r "irongingot-v${VERSION}-windows.zip" "irongingot-v${VERSION}-windows")
   rm -rf "$WINDOWS_DIR"
   echo "Windows release: build/irongingot-v${VERSION}-windows.zip"
