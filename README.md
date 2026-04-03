@@ -1,8 +1,11 @@
-# irongingot
+![irongingot](images/title.png)
 
-**irongingot** is a fork of [bareiron](https://github.com/p2r3/bareiron) - a minimalist Minecraft server for low-spec hardware and embedded systems. This fork keeps the low memory usage and adds some much-needed features.
+**irongingot** is a fork of [bareiron](https://github.com/p2r3/bareiron) - a minimalist Minecraft server for low-spec hardware. This fork keeps the low memory usage and adds some much-needed features.
 
-Runs on as low as **5MB of RAM**!!!
+Runs on as low as **40MB of RAM**!!!
+
+> [!NOTE]
+> Unlike the original bareiron, **ESP32 is not supported** in this fork.
 
 ![irongingot screenshot](images/Screenshot_20260402_002901.png)
 
@@ -51,7 +54,6 @@ Before compiling, you'll need to dump registry data from a vanilla Minecraft ser
 - **Linux:** `gcc` + `./build.sh`
 - **Windows (native):** MSYS2 MINGW64 shell, install `mingw-w64-x86_64-gcc`, run `./build.sh`
 - **Windows (32-bit):** MSYS2 MINGW64 shell, install `mingw-w64-cross-gcc`, run `./build.sh --9x`
-- **ESP32:** PlatformIO with ESP-IDF framework, clone this repo on top
 
 ## Configuration
 
@@ -61,13 +63,9 @@ Most settings are in `server.conf`. Key options:
 - **Features:** `allow_chests`, `do_fluid_flow`, `enable_flight`, `allow_doors`
 - **World:** `view_distance`, `world_seed`, `infinite_block_changes`
 
-For embedded-specific options, check `include/globals.h`.
-
 ## Non-Volatile Storage
 
-**PC:** World data auto-saves to `world.bin`.
-
-**ESP32:** Set up LittleFS in PlatformIO and set `sync_world_to_disk = true` in `server.conf`.
+World data auto-saves to `world.bin`.
 
 ## License
 
@@ -78,4 +76,4 @@ GPL-3.0 License - see [LICENSE](LICENSE).
 - Original [bareiron](https://github.com/p2r3/bareiron) by p2r3
 - [cubiomes](https://github.com/Cubitect/cubiomes) for biome generation
 - [Cosmopolitan Libc](https://github.com/jart/cosmopolitan) for cross-platform binaries
-- [Alexballistic](https://www.youtube.com/@alexBallistic) for the server icon
+- [Alexballistic](https://www.youtube.com/@alexBallistic) for the server icon/logo

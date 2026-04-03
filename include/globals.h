@@ -253,6 +253,11 @@ extern uint32_t server_ticks;
 extern char motd[MOTD_MAX_LEN];
 extern uint8_t motd_len;
 
+// Favicon (server icon) - base64-encoded PNG with data URI prefix
+#define FAVICON_MAX_LEN 16384
+extern char favicon[FAVICON_MAX_LEN];
+extern uint16_t favicon_len;  // length of the base64 string (excluding null terminator)
+
 #ifdef SEND_BRAND
   #define BRAND_MAX_LEN 64
   extern char brand[BRAND_MAX_LEN];

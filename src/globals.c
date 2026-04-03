@@ -51,6 +51,9 @@ uint32_t server_ticks = 0;
 char motd[MOTD_MAX_LEN] = { "A bareiron server" };
 uint8_t motd_len = sizeof("A bareiron server") - 1;
 
+char favicon[FAVICON_MAX_LEN] = { 0 };
+uint16_t favicon_len = 0;
+
 #ifdef SEND_BRAND
   char brand[BRAND_MAX_LEN] = { "bareiron" };
   uint8_t brand_len = sizeof("bareiron") - 1;

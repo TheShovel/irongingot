@@ -36,12 +36,22 @@ int sc_statusResponse (int client_fd) {
   snprintf(online_players_str, sizeof(online_players_str), "%u", client_count > 0 ? client_count - 1 : 0);
 
   // Build the full JSON for debugging
-  char json[512];
-  snprintf(json, sizeof(json),
-    "{\"version\":{\"name\":\"1.21.8\",\"protocol\":772},"
-    "\"players\":{\"max\":%s,\"online\":%s},"
-    "\"description\":{\"text\":\"%.*s\"}}",
-    max_players_str, online_players_str, motd_len, motd);
+  // Buffer large enough for MOTD + favicon data URI
+  char json[FAVICON_MAX_LEN + 1024];
+  if (favicon_len > 0) {
+    snprintf(json, sizeof(json),
+      "{\"version\":{\"name\":\"1.21.8\",\"protocol\":772},"
+      "\"players\":{\"max\":%s,\"online\":%s},"
+      "\"description\":{\"text\":\"%.*s\"},"
+      "\"favicon\":\"%.*s\"}",
+      max_players_str, online_players_str, motd_len, motd, favicon_len, favicon);
+  } else {
+    snprintf(json, sizeof(json),
+      "{\"version\":{\"name\":\"1.21.8\",\"protocol\":772},"
+      "\"players\":{\"max\":%s,\"online\":%s},"
+      "\"description\":{\"text\":\"%.*s\"}}",
+      max_players_str, online_players_str, motd_len, motd);
+  }
 
   printf("Sending Status Response: %s\n", json);
 

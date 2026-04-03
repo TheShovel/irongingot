@@ -1118,3 +1118,102 @@ int64_t get_program_time () {
   return (int64_t)ts.tv_sec * 1000000LL + ts.tv_nsec / 1000LL;
 }
 #endif
+
+// Base64 encoding table
+static const char base64_table[] =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+// Encode binary data to base64. Returns number of bytes written to out.
+// out must be at least ((len + 2) / 3) * 4 + 1 bytes.
+static int base64_encode(const uint8_t *data, int len, char *out) {
+  int i = 0, j = 0;
+  while (i < len) {
+    uint32_t octet_a = i < len ? data[i++] : 0;
+    uint32_t octet_b = i < len ? data[i++] : 0;
+    uint32_t octet_c = i < len ? data[i++] : 0;
+    uint32_t triple = (octet_a << 16) | (octet_b << 8) | octet_c;
+    out[j++] = base64_table[(triple >> 18) & 0x3F];
+    out[j++] = base64_table[(triple >> 12) & 0x3F];
+    out[j++] = base64_table[(triple >> 6) & 0x3F];
+    out[j++] = base64_table[triple & 0x3F];
+  }
+  // Add padding
+  int mod = len % 3;
+  if (mod == 1) {
+    out[j - 1] = '=';
+    out[j - 2] = '=';
+  } else if (mod == 2) {
+    out[j - 1] = '=';
+  }
+  out[j] = '\0';
+  return j;
+}
+
+// Load a PNG file, base64-encode it, and store in the favicon global.
+// Returns 0 on success, -1 on failure.
+int load_favicon(const char *filepath) {
+  FILE *f = fopen(filepath, "rb");
+  if (!f) {
+    printf("Favicon: Could not open %s, server will have no icon.\n", filepath);
+    favicon_len = 0;
+    return -1;
+  }
+
+  // Get file size
+  fseek(f, 0, SEEK_END);
+  long file_size = ftell(f);
+  fseek(f, 0, SEEK_SET);
+
+  if (file_size <= 0 || file_size > 65536) {
+    printf("Favicon: Invalid file size (%ld bytes), must be 1-65536 bytes.\n", file_size);
+    fclose(f);
+    favicon_len = 0;
+    return -1;
+  }
+
+  // Read file
+  uint8_t *png_data = (uint8_t *)malloc(file_size);
+  if (!png_data) {
+    printf("Favicon: Memory allocation failed.\n");
+    fclose(f);
+    favicon_len = 0;
+    return -1;
+  }
+
+  size_t bytes_read = fread(png_data, 1, file_size, f);
+  fclose(f);
+
+  if ((long)bytes_read != file_size) {
+    printf("Favicon: Failed to read entire file.\n");
+    free(png_data);
+    favicon_len = 0;
+    return -1;
+  }
+
+  // Build the data URI: "data:image/png;base64," + base64 data
+  const char *prefix = "data:image/png;base64,";
+  int prefix_len = strlen(prefix);
+
+  // Base64 output is ceil(file_size / 3) * 4
+  int b64_len = ((file_size + 2) / 3) * 4;
+
+  if (prefix_len + b64_len >= FAVICON_MAX_LEN) {
+    printf("Favicon: Encoded data too large (%d bytes, max %d).\n", prefix_len + b64_len, FAVICON_MAX_LEN);
+    free(png_data);
+    favicon_len = 0;
+    return -1;
+  }
+
+  // Copy prefix
+  memcpy(favicon, prefix, prefix_len);
+
+  // Encode to base64 directly into favicon buffer after prefix
+  base64_encode(png_data, file_size, favicon + prefix_len);
+
+  free(png_data);
+
+  favicon_len = prefix_len + b64_len;
+  printf("Favicon: Loaded %s (%ld bytes, %u bytes encoded).\n", filepath, file_size, favicon_len);
+
+  return 0;
+}

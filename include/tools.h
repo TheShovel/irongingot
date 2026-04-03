@@ -65,4 +65,7 @@ uint64_t splitmix64 (uint64_t state);
   int64_t get_program_time ();
 #endif
 
+// Favicon loading
+int load_favicon(const char *filepath);
+
 #endif

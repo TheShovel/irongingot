@@ -627,6 +627,10 @@ int main () {
   strncpy(motd, config.motd, MOTD_MAX_LEN - 1);
   motd[MOTD_MAX_LEN - 1] = '\0';
   motd_len = strlen(motd);
+
+  // Load server icon (favicon)
+  load_favicon("serverIcon.png");
+
   #ifdef SEND_BRAND
     strncpy(brand, config.brand, BRAND_MAX_LEN - 1);
     brand[BRAND_MAX_LEN - 1] = '\0';

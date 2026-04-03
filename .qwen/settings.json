@@ -39,7 +39,9 @@
       "Bash(cat *)",
       "Bash(stdbuf *)",
       "Bash(jobs)",
-      "WebFetch(raw.githubusercontent.com)"
+      "WebFetch(raw.githubusercontent.com)",
+      "Bash(magick *)",
+      "Bash(identify *)"
     ]
   },
   "$version": 3
