@@ -1098,30 +1098,6 @@ uint16_t getMiningResult (uint16_t held_item, uint8_t block) {
 
 }
 
-// Rolls a random number to determine whether the player's tool should break
-void bumpToolDurability (PlayerData *player) {
-
-  uint16_t held_item = player->inventory_items[player->hotbar];
-
-  // In order to avoid storing durability data, items break randomly with
-  // the probability weighted based on vanilla durability.
-  uint32_t r = fast_rand();
-  if (
-    ((held_item == I_wooden_pickaxe || held_item == I_wooden_axe || held_item == I_wooden_shovel) && r < 72796055) ||
-    ((held_item == I_stone_pickaxe || held_item == I_stone_axe || held_item == I_stone_shovel) && r < 32786009) ||
-    ((held_item == I_iron_pickaxe || held_item == I_iron_axe || held_item == I_iron_shovel) && r < 17179869) ||
-    ((held_item == I_golden_pickaxe || held_item == I_golden_axe || held_item == I_golden_shovel) && r < 134217728) ||
-    ((held_item == I_diamond_pickaxe || held_item == I_diamond_axe || held_item == I_diamond_shovel) && r < 2751420) ||
-    ((held_item == I_netherite_pickaxe || held_item == I_netherite_axe || held_item == I_netherite_shovel) && r < 2114705) ||
-    (held_item == I_shears && r < 18046081)
-  ) {
-    player->inventory_items[player->hotbar] = 0;
-    player->inventory_count[player->hotbar] = 0;
-    sc_entityEvent(player->client_fd, player->client_fd, 47);
-    sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), 0, 0);
-  }
-
-}
 
 // Checks whether the given block would be mined instantly with the held tool
 uint8_t isInstantlyMined (PlayerData *player, uint8_t block) {
@@ -1752,7 +1728,6 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
 
   uint16_t held_item = player->inventory_items[player->hotbar];
   uint16_t item = getMiningResult(held_item, block);
-  bumpToolDurability(player);
 
   #ifdef ALLOW_DOORS
   // If mining a door, also break the other half and clear state data
@@ -2327,8 +2302,6 @@ void interactEntity (int entity_id, int interactor_id) {
         return;
 
       mob->data |= 1 << 5; // Set sheared to true
-
-      bumpToolDurability(player);
 
       #ifdef ENABLE_PICKUP_ANIMATION
       playPickupAnimation(player, I_white_wool, mob->x, mob->y, mob->z);
