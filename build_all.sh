@@ -2,6 +2,8 @@
 
 set -e
 
+VERSION="${VERSION:-1.0}"
+
 # Check for registries before attempting to compile
 if [ ! -f "include/registries.h" ]; then
   echo "Error: 'include/registries.h' is missing."
@@ -30,12 +32,21 @@ LIBS="-lm -lz -pthread"
 # Create build directory
 mkdir -p build
 
-unameOut="$(uname -s)"
-
 # ─── Linux build ───
 echo "=== Building Linux binary ==="
 gcc ${SRC_FILES[@]} $CFLAGS $INCLUDES -o build/bareiron $LIBS -pthread
 echo "Linux binary: build/bareiron"
+
+# Package Linux release
+echo "=== Packaging Linux release ==="
+LINUX_DIR="build/irongingot-v${VERSION}-linux"
+rm -rf "$LINUX_DIR"
+mkdir -p "$LINUX_DIR"
+cp build/bareiron "$LINUX_DIR/"
+cp server.conf "$LINUX_DIR/"
+(cd build && zip -rq "irongingot-v${VERSION}-linux.zip" "irongingot-v${VERSION}-linux")
+rm -rf "$LINUX_DIR"
+echo "Linux release: build/irongingot-v${VERSION}-linux.zip"
 
 # ─── Windows build (cross-compile with mingw) ───
 echo "=== Building Windows binary ==="
@@ -72,6 +83,17 @@ if [ -n "$WIN_CC" ]; then
 
   $WIN_CC ${SRC_FILES[@]} ${ZLIB_SRCS[@]} $CFLAGS $WIN_INCLUDES -o build/bareiron.exe -static -lws2_32 -pthread -lm
   echo "Windows binary: build/bareiron.exe"
+
+  # Package Windows release
+  echo "=== Packaging Windows release ==="
+  WINDOWS_DIR="build/irongingot-v${VERSION}-windows"
+  rm -rf "$WINDOWS_DIR"
+  mkdir -p "$WINDOWS_DIR"
+  cp build/bareiron.exe "$WINDOWS_DIR/"
+  cp server.conf "$WINDOWS_DIR/"
+  (cd build && zip -r "irongingot-v${VERSION}-windows.zip" "irongingot-v${VERSION}-windows")
+  rm -rf "$WINDOWS_DIR"
+  echo "Windows release: build/irongingot-v${VERSION}-windows.zip"
 else
   echo "SKIP: No mingw cross-compiler found."
   echo "  Install it with one of:"
@@ -81,4 +103,4 @@ else
 fi
 
 echo "=== Build complete ==="
-echo "Binaries are in build/"
+echo "Releases are in build/"
