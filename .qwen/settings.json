@@ -49,7 +49,10 @@
       "Bash(pacman *)",
       "Bash(file *)",
       "Bash(curl *)",
-      "Bash(tar *)"
+      "Bash(tar *)",
+      "Bash(git tag *)",
+      "Bash(unzip *)",
+      "Bash(git push *)"
     ]
   },
   "$version": 3
