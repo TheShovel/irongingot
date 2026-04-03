@@ -179,6 +179,24 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
         *count = 6;
         return;
       }
+      // Shovel recipes for any planks
+      if (isPlankItem(first_item) &&
+          first_row == 0 &&
+          player->craft_items[first + 3] == I_stick &&
+          player->craft_items[first + 6] == I_stick) {
+        *item = I_wooden_shovel;
+        *count = 1;
+        return;
+      }
+      // Sword recipes for any planks (check before the switch)
+      if (isPlankItem(first_item) &&
+          first_row == 0 &&
+          player->craft_items[first + 3] == first_item &&
+          player->craft_items[first + 6] == I_stick) {
+        *item = I_wooden_sword;
+        *count = 1;
+        return;
+      }
       switch (first_item) {
         case I_cobblestone:
         case I_stone:
