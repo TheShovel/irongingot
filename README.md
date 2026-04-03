@@ -73,8 +73,9 @@ For embedded-specific options, check `include/globals.h`.
 
 GPL-3.0 License - see [LICENSE](LICENSE).
 
-## Acknowledgments
+## Credits
 
 - Original [bareiron](https://github.com/p2r3/bareiron) by p2r3
 - [cubiomes](https://github.com/Cubitect/cubiomes) for biome generation
 - [Cosmopolitan Libc](https://github.com/jart/cosmopolitan) for cross-platform binaries
+- [Alexballistic](https://www.youtube.com/@alexBallistic) for the server icon
