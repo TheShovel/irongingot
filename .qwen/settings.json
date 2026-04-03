@@ -42,7 +42,14 @@
       "WebFetch(raw.githubusercontent.com)",
       "Bash(magick *)",
       "Bash(identify *)",
-      "Bash(git rm *)"
+      "Bash(git rm *)",
+      "Bash(./build_all.sh)",
+      "Bash(which *)",
+      "Bash(dpkg *)",
+      "Bash(pacman *)",
+      "Bash(file *)",
+      "Bash(curl *)",
+      "Bash(tar *)"
     ]
   },
   "$version": 3

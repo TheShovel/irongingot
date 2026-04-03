@@ -2,7 +2,9 @@
 #include <string.h>
 #include <errno.h>
 
-#ifndef ESP_PLATFORM
+#ifdef _WIN32
+  #include <windows.h>
+#else
   #include <sys/sysinfo.h>
 #endif
 
@@ -191,10 +193,11 @@ void thread_pool_destroy(ThreadPool* pool) {
 }
 
 int get_cpu_count(void) {
-#ifndef ESP_PLATFORM
-  return get_nprocs();
+#ifdef _WIN32
+  SYSTEM_INFO sysinfo;
+  GetSystemInfo(&sysinfo);
+  return (int)sysinfo.dwNumberOfProcessors;
 #else
-  // ESP32 has 2 cores
-  return 2;
+  return get_nprocs();
 #endif
 }

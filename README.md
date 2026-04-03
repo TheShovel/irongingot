@@ -49,9 +49,18 @@ brand = irongingot
 
 Before compiling, you'll need to dump registry data from a vanilla Minecraft server. On Linux, this can be done automatically using the `extract_registries.sh` script. Otherwise, the manual process is as follows: create a folder called `notchian` here, and put a Minecraft server JAR in it. Then, follow [this guide](https://minecraft.wiki/w/Minecraft_Wiki:Projects/wiki.vg_merge/Data_Generators) to dump all of the registries (use the _second_ command with the `--all` flag). Finally, run `build_registries.js` with either [bun](https://bun.sh/), [node](https://nodejs.org/en/download), or [deno](https://docs.deno.com/runtime/getting_started/installation/).
 
+### Dependencies
+
+| Platform | Required Packages |
+|----------|-------------------|
+| **Linux** | `gcc`, `zlib1g-dev` (Debian/Ubuntu) or `zlib` (Arch) |
+| **Windows (cross-compile)** | `mingw-w64` (zlib is bundled, no extra package needed) |
+| **Windows (native/MSYS2)** | `mingw-w64-x86_64-gcc`, `mingw-w64-x86_64-zlib` |
+
 ### Build Commands
 
-- **Linux:** `gcc` + `./build.sh`
+- **Linux + Windows (cross-compile):** `./build_all.sh` — outputs to `build/`
+- **Linux only:** `gcc` + `./build.sh`
 - **Windows (native):** MSYS2 MINGW64 shell, install `mingw-w64-x86_64-gcc`, run `./build.sh`
 - **Windows (32-bit):** MSYS2 MINGW64 shell, install `mingw-w64-cross-gcc`, run `./build.sh --9x`
 
