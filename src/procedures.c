@@ -1144,6 +1144,7 @@ uint8_t isInstantlyMined (PlayerData *player, uint8_t block) {
 
   return (
     block == B_dead_bush ||
+    block == B_bush ||
     block == B_fern ||
     block == B_short_grass ||
     block == B_torch ||
@@ -1176,6 +1177,7 @@ uint8_t isColumnBlock (uint8_t block) {
     block == B_short_grass ||
     block == B_fern ||
     block == B_dead_bush ||
+    block == B_bush ||
     block == B_sand ||
     block == B_torch ||
     block == B_oak_sapling ||
@@ -1209,6 +1211,7 @@ uint8_t isPassableBlock (uint8_t block) {
     block == B_short_grass ||
     block == B_fern ||
     block == B_dead_bush ||
+    block == B_bush ||
     block == B_torch ||
     block == B_dandelion ||
     block == B_torchflower ||
