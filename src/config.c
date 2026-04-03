@@ -50,8 +50,11 @@ void init_config_defaults(void) {
   config.biome_size = 64;  // chunk_size * 8
 
   // Performance settings
-  config.chunk_cache_size = 512;
+  config.chunk_cache_size = 64;
+  config.max_packet_len = 262144;
   config.max_block_changes = 20000;
+  config.send_queue_limit = 6 * 1024 * 1024;
+  config.chunk_queue_limit = 2 * 1024 * 1024;
   config.infinite_block_changes = 0;  // disabled by default
   config.tick_interval = 50000;  // 50ms = 20 TPS
   config.disk_sync_interval = 15000000;  // 15 seconds
@@ -156,6 +159,12 @@ int load_config(const char *filename) {
       config.biome_size = atoi(value);
     } else if (strcmp(key, "chunk_cache_size") == 0) {
       config.chunk_cache_size = atoi(value);
+    } else if (strcmp(key, "max_packet_len") == 0) {
+      config.max_packet_len = atoi(value);
+    } else if (strcmp(key, "send_queue_limit") == 0) {
+      config.send_queue_limit = atoi(value);
+    } else if (strcmp(key, "chunk_queue_limit") == 0) {
+      config.chunk_queue_limit = atoi(value);
     } else if (strcmp(key, "max_block_changes") == 0) {
       config.max_block_changes = atoi(value);
     } else if (strcmp(key, "infinite_block_changes") == 0) {
@@ -253,6 +262,9 @@ int save_config(const char *filename) {
   fprintf(f, "# Performance Settings\n");
   fprintf(f, "# ============================================\n");
   fprintf(f, "chunk_cache_size = %d\n", config.chunk_cache_size);
+  fprintf(f, "max_packet_len = %d\n", config.max_packet_len);
+  fprintf(f, "send_queue_limit = %d\n", config.send_queue_limit);
+  fprintf(f, "chunk_queue_limit = %d\n", config.chunk_queue_limit);
   fprintf(f, "max_block_changes = %d\n", config.max_block_changes);
   fprintf(f, "infinite_block_changes = %s\n", config.infinite_block_changes ? "true" : "false");
   fprintf(f, "tick_interval = %d\n", config.tick_interval);

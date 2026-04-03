@@ -23,6 +23,7 @@ void init_packet_sender_workers (void);
 void shutdown_packet_sender_workers (void);
 void clear_client_send_queue (int client_fd);
 size_t get_client_send_queue_bytes (int client_fd);
+void set_queue_limits(size_t send_limit, size_t chunk_limit);
 
 void chunk_debug_record_stream_request (int client_fd, int chunk_x, int chunk_z);
 void chunk_debug_record_backpressure_skip (int client_fd, size_t queue_bytes);

@@ -57,10 +57,14 @@ static pthread_t sender_threads[MAX_PLAYERS];
 static uint8_t sender_workers_running = 0;
 static THREAD_LOCAL int current_packet_id = -1;
 
-// Cap queued bytes per client to keep memory bounded while preserving
-// space for gameplay packets under chunk-stream pressure.
-#define MAX_CLIENT_SEND_QUEUE_BYTES (6 * 1024 * 1024)
-#define MAX_CLIENT_CHUNK_QUEUE_BYTES (2 * 1024 * 1024)
+// Queue limits - initialized from config in main()
+static size_t max_client_send_queue_bytes = 6 * 1024 * 1024;
+static size_t max_client_chunk_queue_bytes = 2 * 1024 * 1024;
+
+void set_queue_limits(size_t send_limit, size_t chunk_limit) {
+  max_client_send_queue_bytes = send_limit;
+  max_client_chunk_queue_bytes = chunk_limit;
+}
 
 static ssize_t send_all_no_disconnect (int client_fd, const void *buf, ssize_t len);
 
@@ -270,14 +274,14 @@ static int enqueue_packet_bytes(int client_fd, uint8_t *data, uint32_t len, uint
   pkt->generation = state->connection_generation;
 
   // Keep queue bounded.
-  if (state->queued_bytes + len > MAX_CLIENT_SEND_QUEUE_BYTES) {
+  if (state->queued_bytes + len > max_client_send_queue_bytes) {
     pthread_mutex_unlock(&state->send_mutex);
     free(pkt);
     return -1;
   }
 
   // Keep chunk queue separately bounded to avoid long chunk backlogs.
-  if (low_priority && state->queued_chunk_bytes + len > MAX_CLIENT_CHUNK_QUEUE_BYTES) {
+  if (low_priority && state->queued_chunk_bytes + len > max_client_chunk_queue_bytes) {
     #ifdef DEV_LOG_CHUNK_STREAM_STATS
     chunk_debug_record_queue_reject(client_fd, state->queued_chunk_bytes);
     #endif

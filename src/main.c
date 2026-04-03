@@ -709,6 +709,7 @@ int main () {
   }
 
   // Start packet sender workers (asynchronous outbound network writes)
+  set_queue_limits(config.send_queue_limit, config.chunk_queue_limit);
   init_packet_sender_workers();
 
   // Create server TCP socket

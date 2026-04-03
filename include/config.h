@@ -26,7 +26,10 @@ typedef struct {
 
   // Performance settings
   int chunk_cache_size;
+  int max_packet_len;
   int max_block_changes;
+  int send_queue_limit;
+  int chunk_queue_limit;
   int infinite_block_changes;  // 0 = fixed size, 1 = dynamic allocation
   int tick_interval;           // microseconds between server ticks
   int disk_sync_interval;      // microseconds between disk syncs
