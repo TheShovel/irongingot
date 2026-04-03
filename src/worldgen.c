@@ -1665,7 +1665,7 @@ uint8_t buildChunkSection (int cx, int cy, int cz) {
   for (int i = 0; i < block_changes_count; i ++) {
     if (block_changes[i].block == 0xFF) continue;
     // Skip blocks that behave better when sent using a block update
-    if (block_changes[i].block == B_torch || isStairBlock(block_changes[i].block)) continue;
+    if (isStairBlock(block_changes[i].block)) continue;
     #ifdef ALLOW_CHESTS
       if (block_changes[i].block == B_chest) continue;
     #endif
