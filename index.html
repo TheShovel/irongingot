@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>irongingot - Minecraft Server</title>
+        <link rel="icon" href="images/gingotlogo.png" />
+        <style>
+            @font-face {
+                font-family: "Minecraft";
+                src: url("https://dl.dafont.com/dl/?f=minecraft")
+                    format("truetype");
+                font-weight: normal;
+                font-style: normal;
+            }
+
+            /* Fallback: use a pixel-style font stack */
+            :root {
+                --mc-font:
+                    "Minecraft", "Press Start 2P", "Courier New", monospace;
+                --mc-dark: #1a1a1a;
+                --mc-dirt: #5c3a1e;
+                --mc-grass: #4a7a2e;
+                --mc-stone: #7a7a7a;
+                --mc-iron: #d8d8d8;
+                --mc-gold: #fcdb05;
+                --mc-text: #e0e0e0;
+                --mc-text-shadow: 2px 2px 0px #000;
+            }
+
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+
+            body {
+                font-family: var(--mc-font);
+                background-color: var(--mc-dark);
+                color: var(--mc-text);
+                min-height: 100vh;
+                overflow-x: hidden;
+            }
+
+            /* Landscape background */
+            body::before {
+                content: "";
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background:
+                    url("images/bg.png") center/cover no-repeat,
+                    linear-gradient(180deg, #2d1a0e 0%, #1a1a1a 100%);
+                z-index: -1;
+            }
+
+            /* Header */
+            .header {
+                text-align: center;
+                padding: 40px 20px 20px;
+                background: linear-gradient(
+                    180deg,
+                    rgba(0, 0, 0, 0.6) 0%,
+                    transparent 100%
+                );
+            }
+
+            .header img.title-banner {
+                max-width: 90%;
+                width: 600px;
+                height: auto;
+                image-rendering: pixelated;
+                filter: drop-shadow(4px 4px 0px rgba(0, 0, 0, 0.8));
+            }
+
+            .tagline {
+                font-size: 14px;
+                color: var(--mc-iron);
+                text-shadow: var(--mc-text-shadow);
+                margin-top: 16px;
+                letter-spacing: 1px;
+            }
+
+            .ram-badge {
+                display: inline-block;
+                background: var(--mc-grass);
+                color: #fff;
+                padding: 6px 16px;
+                margin-top: 12px;
+                font-size: 12px;
+                text-shadow: var(--mc-text-shadow);
+                border: 2px solid #2d5a1a;
+                box-shadow:
+                    inset 0 -2px 0 rgba(0, 0, 0, 0.3),
+                    inset 0 2px 0 rgba(255, 255, 255, 0.1);
+            }
+
+            .version-badge {
+                display: inline-block;
+                background: #3b6ea5;
+                color: #fff;
+                padding: 6px 16px;
+                margin-top: 12px;
+                margin-left: 8px;
+                font-size: 12px;
+                text-shadow: var(--mc-text-shadow);
+                border: 2px solid #2a4f7a;
+                box-shadow:
+                    inset 0 -2px 0 rgba(0, 0, 0, 0.3),
+                    inset 0 2px 0 rgba(255, 255, 255, 0.1);
+            }
+
+            .esp-notice {
+                display: inline-block;
+                background: #8b0000;
+                color: #ff6b6b;
+                padding: 4px 12px;
+                margin-top: 8px;
+                font-size: 10px;
+                text-shadow: var(--mc-text-shadow);
+                border: 2px solid #5a0000;
+            }
+
+            /* Main content */
+            .container {
+                max-width: 900px;
+                margin: 0 auto;
+                padding: 20px;
+            }
+
+            /* Minecraft-style panel */
+            .panel {
+                background: rgba(0, 0, 0, 0.7);
+                border: 3px solid #555;
+                border-image: linear-gradient(
+                        180deg,
+                        #888 0%,
+                        #555 50%,
+                        #333 100%
+                    )
+                    1;
+                padding: 20px;
+                margin-bottom: 24px;
+                box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.5);
+            }
+
+            .panel-title {
+                font-size: 16px;
+                color: var(--mc-gold);
+                text-shadow: var(--mc-text-shadow);
+                margin-bottom: 12px;
+                padding-bottom: 8px;
+                border-bottom: 2px solid #444;
+                letter-spacing: 1px;
+            }
+
+            /* Screenshot showcase */
+            .screenshot-container {
+                text-align: center;
+                margin: 20px 0;
+            }
+
+            .screenshot-container img {
+                max-width: 100%;
+                height: auto;
+                border: 4px solid #555;
+                box-shadow: 0 0 20px rgba(0, 0, 0, 0.8);
+                image-rendering: pixelated;
+            }
+
+            /* Feature list */
+            .features {
+                list-style: none;
+                padding: 0;
+            }
+
+            .features li {
+                padding: 8px 0;
+                padding-left: 24px;
+                position: relative;
+                font-size: 12px;
+                line-height: 1.6;
+                color: var(--mc-text);
+                text-shadow: 1px 1px 0px #000;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            }
+
+            .features li:last-child {
+                border-bottom: none;
+            }
+
+            .features li::before {
+                content: "▸";
+                position: absolute;
+                left: 4px;
+                color: var(--mc-grass);
+            }
+
+            /* Info grid */
+            .info-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 12px;
+            }
+
+            .info-item {
+                background: rgba(255, 255, 255, 0.05);
+                padding: 12px;
+                border-left: 3px solid var(--mc-grass);
+            }
+
+            .info-item .label {
+                font-size: 10px;
+                color: #888;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+            }
+
+            .info-item .value {
+                font-size: 14px;
+                color: var(--mc-iron);
+                text-shadow: var(--mc-text-shadow);
+                margin-top: 4px;
+            }
+
+            /* Code/config blocks */
+            .code-block {
+                background: #0a0a0a;
+                border: 2px solid #333;
+                padding: 16px;
+                font-family: "Courier New", monospace;
+                font-size: 12px;
+                color: #7ec850;
+                overflow-x: auto;
+                line-height: 1.6;
+            }
+
+            .code-block .comment {
+                color: #666;
+            }
+
+            .code-block .key {
+                color: #fcdb05;
+            }
+
+            .code-block .value {
+                color: #5ce0d8;
+            }
+
+            /* Buttons */
+            .mc-button {
+                display: inline-block;
+                background: linear-gradient(180deg, #7a7a7a 0%, #5a5a5a 100%);
+                color: #fff;
+                padding: 10px 24px;
+                font-family: var(--mc-font);
+                font-size: 14px;
+                text-decoration: none;
+                text-shadow: var(--mc-text-shadow);
+                border: 3px solid;
+                border-color: #aaa #444 #444 #aaa;
+                cursor: pointer;
+                transition: all 0.1s;
+            }
+
+            .mc-button:hover {
+                background: linear-gradient(180deg, #8a8a8a 0%, #6a6a6a 100%);
+                border-color: #bbb #555 #555 #bbb;
+            }
+
+            .mc-button:active {
+                border-color: #444 #aaa #aaa #444;
+            }
+
+            .mc-button.green {
+                background: linear-gradient(180deg, #5a9a3a 0%, #3a7a2a 100%);
+                border-color: #7aba5a #2a5a1a #2a5a1a #7aba5a;
+            }
+
+            .mc-button.green:hover {
+                background: linear-gradient(180deg, #6aaa4a 0%, #4a8a3a 100%);
+            }
+
+            .button-row {
+                display: flex;
+                gap: 12px;
+                flex-wrap: wrap;
+                justify-content: center;
+                margin-top: 20px;
+            }
+
+            /* Footer */
+            .footer {
+                text-align: center;
+                padding: 30px 20px;
+                font-size: 10px;
+                color: #aaa;
+                background: rgba(0, 0, 0, 0.85);
+                border-top: 2px solid #444;
+                margin-top: 40px;
+            }
+
+            .footer a {
+                color: var(--mc-grass);
+                text-decoration: none;
+            }
+
+            .footer a:hover {
+                text-decoration: underline;
+            }
+
+            /* Responsive */
+            @media (max-width: 600px) {
+                .header img.title-banner {
+                    width: 95%;
+                }
+                .tagline {
+                    font-size: 11px;
+                }
+                .panel {
+                    padding: 14px;
+                }
+                .info-grid {
+                    grid-template-columns: 1fr;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <header class="header">
+            <img src="images/title.png" alt="irongingot" class="title-banner" />
+            <p class="tagline">
+                A fork of
+                <a
+                    href="https://github.com/p2r3/bareiron"
+                    target="_blank"
+                    style="color: var(--mc-grass); text-decoration: none"
+                    >bareiron</a
+                >
+                : a minimalist Minecraft server for low-spec hardware
+            </p>
+            <span class="ram-badge">Runs on as low as 40MB of ram!!!</span>
+            <span class="version-badge">For Minecraft 1.21.8</span>
+        </header>
+
+        <main class="container">
+            <!-- Screenshot -->
+            <div class="panel">
+                <div class="screenshot-container">
+                    <img
+                        src="images/Screenshot_20260402_002901.png"
+                        alt="irongingot gameplay screenshot"
+                    />
+                </div>
+            </div>
+
+            <!-- About -->
+            <div class="panel">
+                <h2 class="panel-title">About</h2>
+                <p
+                    style="
+                        font-size: 12px;
+                        line-height: 1.8;
+                        text-shadow: 1px 1px 0 #000;
+                    "
+                >
+                    <strong>irongingot</strong> is a fork of
+                    <a
+                        href="https://github.com/p2r3/bareiron"
+                        target="_blank"
+                        style="color: var(--mc-grass)"
+                        >bareiron</a
+                    >
+                    : a minimalist Minecraft server designed to run on low-spec
+                    hardware. It keeps the tiny memory footprint of the original
+                    while adding features like doors, stairs, trees, better
+                    terrain generation, and a config file so you don't have to
+                    recompile to change settings.
+                </p>
+                <div
+                    class="button-row"
+                    style="justify-content: center; margin-top: 16px"
+                >
+                    <a
+                        href="https://github.com/TheShovel/irongingot"
+                        class="mc-button green"
+                        target="_blank"
+                        >See Source Code</a
+                    >
+                    <a
+                        href="https://github.com/TheShovel/irongingot/releases"
+                        class="mc-button"
+                        target="_blank"
+                        >Download</a
+                    >
+                </div>
+            </div>
+        </main>
+
+        <footer class="footer">
+            <p>
+                irongingot is a fork of
+                <a href="https://github.com/p2r3/bareiron" target="_blank"
+                    >bareiron</a
+                >
+                by p2r3
+            </p>
+            <p style="margin-top: 8px">
+                Biome generation powered by
+                <a href="https://github.com/Cubitect/cubiomes" target="_blank"
+                    >cubiomes</a
+                >
+            </p>
+            <p style="margin-top: 8px">
+                Server icon by
+                <a href="https://www.youtube.com/@alexBallistic" target="_blank"
+                    >Alexballistic</a
+                >
+            </p>
+        </footer>
+    </body>
+</html>

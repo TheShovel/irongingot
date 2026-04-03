@@ -41,7 +41,8 @@
       "Bash(jobs)",
       "WebFetch(raw.githubusercontent.com)",
       "Bash(magick *)",
-      "Bash(identify *)"
+      "Bash(identify *)",
+      "Bash(git rm *)"
     ]
   },
   "$version": 3

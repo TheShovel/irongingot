@@ -6,3 +6,4 @@ src/registries.c
 include/registries.h
 *.bin
 bareiron_test
+*.o
