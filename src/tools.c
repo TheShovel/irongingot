@@ -748,6 +748,12 @@ void shutdown_packet_sender_workers (void) {
       pthread_mutex_unlock(&client_states[i].send_mutex);
     }
   }
+  /* Also signal ALL threads even if client_fd == -1, in case they're idle */
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    pthread_mutex_lock(&client_states[i].send_mutex);
+    pthread_cond_broadcast(&client_states[i].send_cond);
+    pthread_mutex_unlock(&client_states[i].send_mutex);
+  }
   for (int i = 0; i < MAX_PLAYERS; i++) {
     pthread_join(sender_threads[i], NULL);
   }
@@ -772,7 +778,7 @@ static void drain_sent_packets_locked(ClientState *state) {
     state->send_head_hi = next;
   }
   state->send_tail_hi = NULL;
-  
+
   // Free all low-priority sent packets (chunk packets are sent quickly)
   // Since chunk packets are time-sensitive, drain the entire low queue
   while (state->send_head_lo) {
@@ -783,7 +789,7 @@ static void drain_sent_packets_locked(ClientState *state) {
   }
   state->send_tail_lo = NULL;
   state->queued_chunk_bytes = 0;
-  
+
   // Reset high priority bytes to 0
   state->queued_bytes = 0;
 }

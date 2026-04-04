@@ -1085,11 +1085,7 @@ int main () {
   shutdown_global_thread_pool();
   // Shutdown packet sender workers
   shutdown_packet_sender_workers();
-  
-  // Free dynamically allocated buffers
-  if (packet_buffer) free(packet_buffer);
-  if (in_packet_buffer) free(in_packet_buffer);
-  
+
   close(server_fd);
  
   #ifdef _WIN32 //cleanup windows socket
