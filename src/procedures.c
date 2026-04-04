@@ -224,10 +224,10 @@ void handlePlayerJoin (PlayerData* player) {
 
 void disconnectClient (int *client_fd, int cause) {
   if (*client_fd == -1) return;
-  
+
   // Clear any pending send queue data
   clear_client_send_queue(*client_fd);
-  
+
   client_count --;
   setClientState(*client_fd, STATE_NONE);
   handlePlayerDisconnect(*client_fd);
@@ -1532,7 +1532,7 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
     short door_x = x;
     uint8_t door_y = y;
     short door_z = z;
-    
+
     // Search for a door lower half at y-1
     for (int i = 0; i < block_changes_count; i ++) {
       if (!isDoorBlock(block_changes[i].block)) continue;
@@ -1543,7 +1543,7 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
         break;
       }
     }
-    
+
     // Break the other half
     if (is_upper_half) {
       makeBlockChange(x, y - 1, z, 0);  // Break lower half
@@ -1788,7 +1788,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     // Direction: 0=north, 1=east, 2=south, 3=west
     // This represents which way the door "faces" (the side the hinge is NOT on)
     uint8_t direction;
-    
+
     if (face == 0 || face == 1) {
       // Clicked on bottom or top face - use player facing
       // Player yaw: -128 to 127, where 0 is South, -64 is East, 64 is West, 128/-128 is North
@@ -1913,11 +1913,12 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     }
 
     // Determine direction based on player facing
+    // Player yaw: -128 to 127, where 0 is South, -64 is East, 64 is West, 128/-128 is North
     uint8_t direction;
-    if (player->yaw >= -96 && player->yaw < -32) direction = 3;   // East
-    else if (player->yaw >= -32 && player->yaw < 32) direction = 1; // South
-    else if (player->yaw >= 32 && player->yaw < 96) direction = 2;  // West
-    else direction = 0;                                             // North
+    if (player->yaw >= -32 && player->yaw < 32) direction = 2;       // South
+    else if (player->yaw >= -96 && player->yaw < -32) direction = 1; // East
+    else if (player->yaw >= 32 && player->yaw < 96) direction = 3;   // West
+    else direction = 0;                                               // North
 
     // Determine if upside down based on where on the block the player clicked
     uint8_t half = 0; // 0 = bottom, 1 = top
