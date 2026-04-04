@@ -16,6 +16,7 @@
 #include "serialize.h"
 #include "chunk_generator.h"
 #include "procedures.h"
+#include "special_block.h"
 #include "thread_pool.h"
 
 // Forward declaration for parallel player updates
@@ -645,21 +646,27 @@ uint8_t getBlockChange (short x, uint8_t y, short z) {
       block = block_changes[i].block;
       break;
     }
-    #ifdef ALLOW_CHESTS
-      // Skip chest contents
-      if (block_changes[i].block == B_chest) i += 14;
-    #endif
     #ifdef ALLOW_DOORS
-      // Skip door upper half and state data
-      if (isDoorBlock(block_changes[i].block)) {
-        // Check if upper half matches before skipping
-        if (block_changes[i + 1].x == x && block_changes[i + 1].y == y && block_changes[i + 1].z == z) {
-          block = block_changes[i + 1].block;
-          break;
-        }
-        i += 2;
+    // Skip door upper half and state data
+    if (is_door_block(block_changes[i].block)) {
+      // Check if upper half matches before skipping
+      if (i + 1 < block_changes_count &&
+          block_changes[i + 1].x == x && block_changes[i + 1].y == y && block_changes[i + 1].z == z) {
+        block = block_changes[i + 1].block;
+        break;
       }
+      i += 2;
+      continue;
+    }
     #endif
+    // Skip stair and furnace state data
+    if (is_stair_block(block_changes[i].block) || block_changes[i].block == B_furnace) {
+      i += 1;
+    }
+    // Skip chest inventory entries
+    if (block_changes[i].block == B_chest) {
+      i += 14;
+    }
   }
 
   cached->x = x;
@@ -717,6 +724,19 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
   // isn't replacing an existing block change.
   int first_gap = block_changes_count;
 
+  // Helper macro to clear old special block entries at a position
+  #define CLEAR_OLD_SPECIAL_ENTRIES(idx) \
+    do { \
+      if (block_changes[idx].block == B_chest) { \
+        for (int j = 1; j < 15; j++) block_changes[(idx) + j].block = 0xFF; \
+      } else if (is_door_block(block_changes[idx].block)) { \
+        if ((idx) + 1 < block_changes_count) block_changes[(idx) + 1].block = 0xFF; \
+        if ((idx) + 2 < block_changes_count) block_changes[(idx) + 2].block = 0xFF; \
+      } else if (is_stair_block(block_changes[idx].block) || block_changes[idx].block == B_furnace) { \
+        if ((idx) + 1 < block_changes_count) block_changes[(idx) + 1].block = 0xFF; \
+      } \
+    } while (0)
+
   // Prioritize replacing entries with matching coordinates
   // This prevents having conflicting entries for one set of coordinates
   for (int i = 0; i < block_changes_count; i ++) {
@@ -729,60 +749,24 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
       block_changes[i].y == y &&
       block_changes[i].z == z
     ) {
-      #ifdef ALLOW_CHESTS
-      // When replacing chests, clear following 14 entries too (item data)
-      if (block_changes[i].block == B_chest) {
-        for (int j = 1; j < 15; j ++) block_changes[i + j].block = 0xFF;
-      }
-      #endif
-      #ifdef ALLOW_DOORS
-      // When replacing doors, clear following 2 entries too (upper half + state)
-      if (isDoorBlock(block_changes[i].block)) {
-        block_changes[i + 1].block = 0xFF;
-        block_changes[i + 2].block = 0xFF;
-      }
-      #endif
-      // When replacing stairs, clear following entry too (state)
-      if (isStairBlock(block_changes[i].block)) {
-        block_changes[i + 1].block = 0xFF;
-      }
-      if (is_base_block) block_changes[i].block = 0xFF;
-      else {
-        #ifdef ALLOW_CHESTS
-        // When placing chests, just unallocate the target block and fall
-        // through to the chest-specific routine below.
-        if (block == B_chest) {
-          block_changes[i].block = 0xFF;
-          if (first_gap > i) first_gap = i;
-          #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
-          writeBlockChangesToDisk(i, i);
-          #endif
-          break;
-        }
-        #endif
-        #ifdef ALLOW_DOORS
-        // When placing doors, just unallocate the target block and fall
-        // through to the door-specific routine below.
-        if (isDoorBlock(block)) {
-          block_changes[i].block = 0xFF;
-          if (first_gap > i) first_gap = i;
-          #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
-          writeBlockChangesToDisk(i, i);
-          #endif
-          break;
-        }
-        #endif
-        // When placing stairs, just unallocate the target block and fall
-        // through to the stair-specific routine below.
-        if (isStairBlock(block)) {
-          block_changes[i].block = 0xFF;
-          if (first_gap > i) first_gap = i;
-          #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
-          writeBlockChangesToDisk(i, i);
-          #endif
-          break;
-        }
+      // Clear any old special block state entries
+      CLEAR_OLD_SPECIAL_ENTRIES(i);
+
+      if (is_base_block) {
+        block_changes[i].block = 0xFF;
+        special_block_clear(x, y, z);
+      } else {
         block_changes[i].block = block;
+        // Initialize default state for special blocks
+        if (is_door_block(block)) {
+          special_block_set_state(x, y, z, block, door_encode_state(0, 0, 0));
+        } else if (is_stair_block(block)) {
+          special_block_set_state(x, y, z, block, stair_encode_state(0, 0));
+        } else if (block == B_furnace) {
+          special_block_set_state(x, y, z, block, furnace_encode_state(0, 0));
+        } else if (block == B_chest) {
+          special_block_set_state(x, y, z, block, oriented_encode_state(0));
+        }
       }
       #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
       writeBlockChangesToDisk(i, i);
@@ -790,244 +774,105 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
       notify_block_change_mutation(x, z);
       return 0;
     }
+    // Skip extra entries for special blocks during search
+    if (block_changes[i].block == B_chest) { i += 14; continue; }
+    #ifdef ALLOW_DOORS
+    if (is_door_block(block_changes[i].block)) { i += 2; continue; }
+    #endif
+    if (is_stair_block(block_changes[i].block) || block_changes[i].block == B_furnace) { i += 1; }
   }
 
   // Don't create a new entry if it contains the base terrain block
   if (is_base_block) return 0;
 
-  #ifdef ALLOW_CHESTS
-  if (block == B_chest) {
-    // Chests require 15 entries total, so for maximum space-efficiency,
-    // we have to find a continuous gap that's at least 15 slots wide.
-    // By design, this loop also continues past the current search range,
-    // which naturally appends the chest to the end if a gap isn't found.
-    int last_real_entry = first_gap - 1;
-    for (int i = first_gap; i <= block_changes_count + 15; i ++) {
-      #ifdef INFINITE_BLOCK_CHANGES
-      // Grow array if we're running out of space
-      if (i >= block_changes_capacity - 15) {
-        int new_capacity = block_changes_capacity * 2;
-        BlockChange *new_block_changes = (BlockChange *)realloc(block_changes, new_capacity * sizeof(BlockChange));
-        if (!new_block_changes) {
-          failBlockChange(x, y, z, block);
-          return 1;
-        }
-        block_changes = new_block_changes;
-        // Initialize new entries as unallocated
-        for (int j = block_changes_capacity; j < new_capacity; j ++) {
-          block_changes[j].block = 0xFF;
-        }
-        printf("Block changes expanded: %d -> %d\n", block_changes_capacity, new_capacity);
-        fflush(stdout);
-        block_changes_capacity = new_capacity;
-      }
-      #else
-      if (i >= MAX_BLOCK_CHANGES) break; // No more space, trigger failBlockChange
-      #endif
-
-      if (block_changes[i].block != 0xFF) {
-        last_real_entry = i;
-        continue;
-      }
-      if (i - last_real_entry != 15) continue;
-      // A wide enough gap has been found, assign the chest
-      block_changes[last_real_entry + 1].x = x;
-      block_changes[last_real_entry + 1].y = y;
-      block_changes[last_real_entry + 1].z = z;
-      block_changes[last_real_entry + 1].block = block;
-      // Zero out the following 14 entries for item data
-      for (int i = 2; i <= 15; i ++) {
-        block_changes[last_real_entry + i].x = 0;
-        block_changes[last_real_entry + i].y = 0;
-        block_changes[last_real_entry + i].z = 0;
-        block_changes[last_real_entry + i].block = 0;
-      }
-      // Extend future search range if necessary
-      if (i >= block_changes_count) {
-        block_changes_count = i + 1;
-      }
-      // Write changes to disk (if applicable)
-      #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
-      writeBlockChangesToDisk(last_real_entry + 1, last_real_entry + 15);
-      #endif
-      notify_block_change_mutation(x, z);
-      return 0;
-    }
-    // If we're here, no changes were made
-    failBlockChange(x, y, z, block);
-    return 1;
-  }
-  #endif
-
+  // Determine how many block_changes entries this block needs
+  int slots_needed = 1;
+  if (block == B_chest) slots_needed = 15;
   #ifdef ALLOW_DOORS
-  if (isDoorBlock(block)) {
-    // Doors require 3 entries total: lower half, upper half, and state data
-    // We need to find a continuous gap that's at least 3 slots wide
-    int last_real_entry = first_gap - 1;
-    for (int i = first_gap; i <= block_changes_count + 3; i ++) {
-      #ifdef INFINITE_BLOCK_CHANGES
-      // Grow array if we're running out of space
-      if (i >= block_changes_capacity - 3) {
-        int new_capacity = block_changes_capacity * 2;
-        BlockChange *new_block_changes = (BlockChange *)realloc(block_changes, new_capacity * sizeof(BlockChange));
-        if (!new_block_changes) {
-          failBlockChange(x, y, z, block);
-          return 1;
-        }
-        block_changes = new_block_changes;
-        // Initialize new entries as unallocated
-        for (int j = block_changes_capacity; j < new_capacity; j ++) {
-          block_changes[j].block = 0xFF;
-        }
-        printf("Block changes expanded: %d -> %d\n", block_changes_capacity, new_capacity);
-        fflush(stdout);
-        block_changes_capacity = new_capacity;
-      }
-      #else
-      if (i >= MAX_BLOCK_CHANGES) break; // No more space, trigger failBlockChange
-      #endif
-
-      if (block_changes[i].block != 0xFF) {
-        last_real_entry = i;
-        continue;
-      }
-      if (i - last_real_entry != 3) continue;
-      // A wide enough gap has been found, assign the door
-      // Slot 1: Lower half
-      block_changes[last_real_entry + 1].x = x;
-      block_changes[last_real_entry + 1].y = y;
-      block_changes[last_real_entry + 1].z = z;
-      block_changes[last_real_entry + 1].block = block;
-      // Slot 2: Upper half (y + 1)
-      block_changes[last_real_entry + 2].x = x;
-      block_changes[last_real_entry + 2].y = y + 1;
-      block_changes[last_real_entry + 2].z = z;
-      block_changes[last_real_entry + 2].block = block;
-      // Slot 3: Door state data (direction, open/closed, hinge)
-      // Store direction in x, state in z
-      block_changes[last_real_entry + 3].x = 0;  // Direction (0-3)
-      block_changes[last_real_entry + 3].y = 0;  // State flags
-      block_changes[last_real_entry + 3].z = z;  // Reference to original z
-      block_changes[last_real_entry + 3].block = 0;  // Marker for door state
-      // Extend future search range if necessary
-      if (i >= block_changes_count) {
-        block_changes_count = i + 1;
-      }
-      // Write changes to disk (if applicable)
-      #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
-      writeBlockChangesToDisk(last_real_entry + 1, last_real_entry + 3);
-      #endif
-      notify_block_change_mutation(x, z);
-      return 0;
-    }
-    // If we're here, no changes were made
-    failBlockChange(x, y, z, block);
-    return 1;
-  }
+  else if (is_door_block(block)) slots_needed = 3;
   #endif
+  else if (is_stair_block(block) || block == B_furnace) slots_needed = 2;
 
-  if (isStairBlock(block)) {
-    // Stairs require 2 entries total: the block and state data
-    // We need to find a continuous gap that's at least 2 slots wide
-    int last_real_entry = first_gap - 1;
-    for (int i = first_gap; i <= block_changes_count + 2; i ++) {
-      #ifdef INFINITE_BLOCK_CHANGES
-      // Grow array if we're running out of space
-      if (i >= block_changes_capacity - 2) {
-        int new_capacity = block_changes_capacity * 2;
-        BlockChange *new_block_changes = (BlockChange *)realloc(block_changes, new_capacity * sizeof(BlockChange));
-        if (!new_block_changes) {
-          failBlockChange(x, y, z, block);
-          return 1;
-        }
-        block_changes = new_block_changes;
-        // Initialize new entries as unallocated
-        for (int j = block_changes_capacity; j < new_capacity; j ++) {
-          block_changes[j].block = 0xFF;
-        }
-        printf("Block changes expanded: %d -> %d\n", block_changes_capacity, new_capacity);
-        fflush(stdout);
-        block_changes_capacity = new_capacity;
-      }
-      #else
-      if (i >= MAX_BLOCK_CHANGES) break; // No more space, trigger failBlockChange
-      #endif
-
-      if (block_changes[i].block != 0xFF) {
-        last_real_entry = i;
-        continue;
-      }
-      if (i - last_real_entry != 2) continue;
-      // A wide enough gap has been found, assign the stair
-      // Slot 1: Stair block
-      block_changes[last_real_entry + 1].x = x;
-      block_changes[last_real_entry + 1].y = y;
-      block_changes[last_real_entry + 1].z = z;
-      block_changes[last_real_entry + 1].block = block;
-      // Slot 2: Stair state data (direction, half)
-      block_changes[last_real_entry + 2].x = 0;  // Direction (0-3)
-      block_changes[last_real_entry + 2].y = 0;  // Half (0-1)
-      block_changes[last_real_entry + 2].z = z;  // Reference to original z
-      block_changes[last_real_entry + 2].block = 0;  // Marker for stair state
-      // Extend future search range if necessary
-      if (i >= block_changes_count) {
-        block_changes_count = i + 1;
-      }
-      // Write changes to disk (if applicable)
-      #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
-      writeBlockChangesToDisk(last_real_entry + 1, last_real_entry + 2);
-      #endif
-      notify_block_change_mutation(x, z);
-      return 0;
+  // Find or create a gap of sufficient size
+  int last_real_entry = first_gap - 1;
+  for (int i = first_gap; i <= block_changes_count + slots_needed; i ++) {
+    #ifdef INFINITE_BLOCK_CHANGES
+    if (i >= block_changes_capacity - slots_needed) {
+      int new_capacity = block_changes_capacity * 2;
+      BlockChange *new_block_changes = (BlockChange *)realloc(block_changes, new_capacity * sizeof(BlockChange));
+      if (!new_block_changes) { failBlockChange(x, y, z, block); return 1; }
+      block_changes = new_block_changes;
+      for (int j = block_changes_capacity; j < new_capacity; j ++) block_changes[j].block = 0xFF;
+      printf("Block changes expanded: %d -> %d\n", block_changes_capacity, new_capacity);
+      fflush(stdout);
+      block_changes_capacity = new_capacity;
     }
-    // If we're here, no changes were made
-    failBlockChange(x, y, z, block);
-    return 1;
-  }
+    #else
+    if (i >= MAX_BLOCK_CHANGES) break;
+    #endif
 
-  // Handle running out of memory for new block changes
-  #ifdef INFINITE_BLOCK_CHANGES
-  if (first_gap >= block_changes_capacity - 1) {
-    // Grow the array
-    int new_capacity = block_changes_capacity * 2;
-    BlockChange *new_block_changes = (BlockChange *)realloc(block_changes, new_capacity * sizeof(BlockChange));
-    if (!new_block_changes) {
-      failBlockChange(x, y, z, block);
-      return 1;
+    if (block_changes[i].block != 0xFF) {
+      last_real_entry = i;
+      continue;
     }
-    block_changes = new_block_changes;
-    // Initialize new entries as unallocated
-    for (int i = block_changes_capacity; i < new_capacity; i ++) {
-      block_changes[i].block = 0xFF;
+    if (i - last_real_entry != slots_needed) continue;
+
+    // Found a sufficient gap -- place the block
+    int base = last_real_entry + 1;
+    block_changes[base].x = x;
+    block_changes[base].y = y;
+    block_changes[base].z = z;
+    block_changes[base].block = block;
+
+    if (block == B_chest) {
+      // Zero out the following 14 entries for item data
+      for (int j = 1; j < 15; j ++) {
+        block_changes[base + j].x = 0;
+        block_changes[base + j].y = 0;
+        block_changes[base + j].z = 0;
+        block_changes[base + j].block = 0;
+      }
+      special_block_set_state(x, y, z, block, oriented_encode_state(0));
     }
-    printf("Block changes expanded: %d -> %d\n", block_changes_capacity, new_capacity);
-    fflush(stdout);
-    block_changes_capacity = new_capacity;
-  }
-  #else
-  if (first_gap == MAX_BLOCK_CHANGES) {
-    failBlockChange(x, y, z, block);
-    return 1;
-  }
-  #endif
+    #ifdef ALLOW_DOORS
+    else if (is_door_block(block)) {
+      // Upper half
+      block_changes[base + 1].x = x;
+      block_changes[base + 1].y = y + 1;
+      block_changes[base + 1].z = z;
+      block_changes[base + 1].block = block;
+      // State entry
+      block_changes[base + 2].x = 0;
+      block_changes[base + 2].y = 0;
+      block_changes[base + 2].z = z;
+      block_changes[base + 2].block = 0;
+      special_block_set_state(x, y, z, block, door_encode_state(0, 0, 0));
+    }
+    #endif
+    else if (is_stair_block(block) || block == B_furnace) {
+      // State entry
+      block_changes[base + 1].x = 0;
+      block_changes[base + 1].y = 0;
+      block_changes[base + 1].z = z;
+      block_changes[base + 1].block = 0;
+      if (is_stair_block(block)) {
+        special_block_set_state(x, y, z, block, stair_encode_state(0, 0));
+      } else {
+        special_block_set_state(x, y, z, block, furnace_encode_state(0, 0));
+      }
+    }
 
-  // Fall back to storing the change at the first possible gap
-  block_changes[first_gap].x = x;
-  block_changes[first_gap].y = y;
-  block_changes[first_gap].z = z;
-  block_changes[first_gap].block = block;
-  // Write change to disk (if applicable)
-  #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
-  writeBlockChangesToDisk(first_gap, first_gap);
-  #endif
-  // Extend future search range if we've appended to the end
-  if (first_gap == block_changes_count) {
-    block_changes_count ++;
+    if (i >= block_changes_count) block_changes_count = i + 1;
+    #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
+    writeBlockChangesToDisk(base, base + slots_needed - 1);
+    #endif
+    notify_block_change_mutation(x, z);
+    return 0;
   }
 
-  notify_block_change_mutation(x, z);
-
-  return 0;
+  // If we're here, no changes were made
+  failBlockChange(x, y, z, block);
+  return 1;
 }
 
 // Returns the result of mining a block, taking into account the block type and tools
@@ -1312,27 +1157,11 @@ uint8_t getItemStackSize (uint16_t item) {
 }
 
 #ifdef ALLOW_DOORS
-// Checks whether the given block is a door block
-uint8_t isDoorBlock (uint8_t block) {
-  return (
-    block == B_oak_door ||
-    block == B_spruce_door ||
-    block == B_birch_door ||
-    block == B_iron_door
-  );
-}
-
-// Checks whether the given block is a stair block
-uint8_t isStairBlock (uint8_t block) {
-  return (
-    block == B_oak_stairs ||
-    block == B_spruce_stairs ||
-    block == B_birch_stairs ||
-    block == B_cobblestone_stairs
-  );
-}
-
-// Checks whether the given item is a door item
+/* Legacy wrappers for compatibility with existing code that calls these.
+ * All actual logic is in special_block.c */
+uint8_t isDoorBlock (uint8_t block) { return is_door_block(block); }
+uint8_t isStairBlock (uint8_t block) { return is_stair_block(block); }
+uint8_t isOrientedBlock (uint8_t block) { return is_oriented_block(block); }
 uint8_t isDoorItem (uint16_t item) {
   return (
     item == I_oak_door ||
@@ -1341,8 +1170,6 @@ uint8_t isDoorItem (uint16_t item) {
     item == I_iron_door
   );
 }
-
-// Returns the door item corresponding to the given door block
 uint16_t getDoorItemFromBlock (uint8_t block) {
   switch (block) {
     case B_oak_door: return I_oak_door;
@@ -1352,8 +1179,6 @@ uint16_t getDoorItemFromBlock (uint8_t block) {
     default: return 0;
   }
 }
-
-// Returns the door block corresponding to the given door item
 uint8_t getDoorBlockFromItem (uint16_t item) {
   switch (item) {
     case I_oak_door: return B_oak_door;
@@ -1364,77 +1189,47 @@ uint8_t getDoorBlockFromItem (uint16_t item) {
   }
 }
 
-// Checks if a door at the given coordinates is open
-// Returns 1 if open, 0 if closed or not a door
+/* Checks if a door at the given coordinates is open */
 uint8_t isDoorOpen (short x, uint8_t y, short z) {
-  for (int i = 0; i < block_changes_count; i ++) {
-    if (!isDoorBlock(block_changes[i].block)) continue;
-    // Check if this matches the door position (lower or upper half)
-    if (block_changes[i].x == x && block_changes[i].z == z) {
-      if (block_changes[i].y == y || block_changes[i].y == y - 1) {
-        // Found the door, check state
-        uint8_t *state_ptr = (uint8_t *)(&block_changes[i + 2]);
-        return state_ptr[1] & 0x01;  // Return bit 0 (open/closed)
-      }
-    }
-  }
-  return 0;  // Door not found or closed
+  return is_door_open_at(x, y, z);
 }
 
-// Get door state ID for network packet
-// Returns the Minecraft block state ID for the given door configuration
+/* Legacy wrappers for network state ID computation */
 uint16_t getDoorStateId (uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge) {
-  // Get base palette ID for this door type (lower, closed, north, left, unpowered)
-  uint16_t base_id = block_palette[block];
-  
-  // Minecraft door state offset formula (derived from actual registry):
-  // facing: north=0, south=16, west=32, east=48
-  // hinge: left=0, right=4
-  // open: closed=0, open=-2
-  // half: lower=0, upper=-8
-  // Note: powered is always false (0 offset) for player-placed doors
-  
-  // Direction mapping (player yaw: 0=north, 1=east, 2=south, 3=west)
-  uint16_t facing_offset[4] = {0, 48, 16, 32};  // north, east, south, west
-  int16_t offset = facing_offset[direction];
-  if (hinge) offset += 4;      // right hinge
-  if (open) offset -= 2;       // open
-  if (is_upper) offset -= 8;   // upper half
-  
-  return base_id + offset;
+  return get_door_state_id(block, is_upper, open, direction, hinge);
 }
 
 // Send door block update with proper state
 void sendDoorUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge) {
   startPacket(client_fd, 0x08);
   writeUint64(client_fd, (((int64_t)x & 0x3FFFFFF) << 38) | (((int64_t)z & 0x3FFFFFF) << 12) | (y & 0xFFF));
-  writeVarInt(client_fd, getDoorStateId(block, is_upper, open, direction, hinge));
+  writeVarInt(client_fd, get_door_state_id(block, is_upper, open, direction, hinge));
+  endPacket(client_fd);
+}
+
+// Get oriented block state ID for network packet
+uint16_t getOrientedStateId (uint8_t block, uint8_t direction) {
+  return get_oriented_state_id(block, direction);
+}
+
+// Send oriented block update with proper state
+void sendOrientedUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, uint8_t direction) {
+  startPacket(client_fd, 0x08);
+  writeUint64(client_fd, (((int64_t)x & 0x3FFFFFF) << 38) | (((int64_t)z & 0x3FFFFFF) << 12) | (y & 0xFFF));
+  writeVarInt(client_fd, get_oriented_state_id(block, direction));
   endPacket(client_fd);
 }
 
 // Get stair state ID for network packet
-// Returns the Minecraft block state ID for the given stair configuration
 uint16_t getStairStateId (uint8_t block, uint8_t half, uint8_t direction) {
-  // Get base palette ID for this stair type (north, bottom, straight, false)
-  uint16_t base_id = block_palette[block];
-
-  // Minecraft stair state offset formula:
-  // facing: north=0, south=20, west=40, east=60
-  // half: bottom=0, top=-10
-  // shape: straight=0 (we only support straight for now)
-  // waterlogged: false=0, true=-1
-
-  int16_t offset = direction * 20;
-  if (half) offset -= 10;  // top half
-
-  return base_id + offset;
+  return get_stair_state_id(block, half, direction);
 }
 
 // Send stair block update with proper state
 void sendStairUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, uint8_t half, uint8_t direction) {
   startPacket(client_fd, 0x08);
   writeUint64(client_fd, (((int64_t)x & 0x3FFFFFF) << 38) | (((int64_t)z & 0x3FFFFFF) << 12) | (y & 0xFFF));
-  writeVarInt(client_fd, getStairStateId(block, half, direction));
+  writeVarInt(client_fd, get_stair_state_id(block, half, direction));
   endPacket(client_fd);
 }
 #endif
@@ -1755,19 +1550,9 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
     } else {
       makeBlockChange(x, y + 1, z, 0);  // Break upper half
     }
-    
-    // Find and clear the door state entry
-    for (int i = 0; i < block_changes_count; i ++) {
-      if (!isDoorBlock(block_changes[i].block)) continue;
-      if (block_changes[i].x == door_x && block_changes[i].y == door_y && block_changes[i].z == door_z) {
-        // Clear the state entry (i + 2)
-        block_changes[i + 2].block = 0xFF;
-        #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
-        writeBlockChangesToDisk(i + 2, i + 2);
-        #endif
-        break;
-      }
-    }
+
+    // Clear door state from the unified special block table
+    special_block_clear(door_x, door_y, door_z);
     // Give door item (only once for the whole door)
     if (item) {
       #ifdef ENABLE_PICKUP_ANIMATION
@@ -1879,67 +1664,27 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     #endif
     #ifdef ALLOW_DOORS
     else if (isDoorBlock(target)) {
-      // Find the door in block_changes and toggle its state
-      for (int i = 0; i < block_changes_count; i ++) {
-        if (!isDoorBlock(block_changes[i].block)) continue;
-        // Check if this is the lower half of the door
-        short door_x = block_changes[i].x;
-        uint8_t door_y = block_changes[i].y;
-        short door_z = block_changes[i].z;
-        if (door_x != x || door_z != z) continue;
+      // Use the unified special block system to toggle the door
+      uint16_t state = special_block_get_state(x, y, z);
+      uint8_t open = door_get_open(state);
+      uint8_t hinge = door_get_hinge(state);
+      uint8_t direction = door_get_direction(state);
 
-        // Check if clicking on lower or upper half
-        if (door_y == y) {
-          // Clicked on lower half - proceed
-        } else if (door_y + 1 == y) {
-          // Clicked on upper half - use lower half's y
-        } else {
-          continue;
+      // Toggle open/closed
+      open ^= 1;
+      state = door_encode_state(open, hinge, direction);
+      special_block_set_state(x, y, z, target, state);
+
+      // Broadcast door update to all players
+      for (int j = 0; j < MAX_PLAYERS; j++) {
+        if (player_data[j].client_fd == -1) continue;
+        if (player_data[j].flags & 0x20) continue;
+        sendDoorUpdate(player_data[j].client_fd, x, y, z, target, 0, open, direction, hinge);
+        uint8_t above = getBlockChange(x, y + 1, z);
+        if (isDoorBlock(above)) {
+          sendDoorUpdate(player_data[j].client_fd, x, y + 1, z, above, 1, open, direction, hinge);
         }
-
-        // Bounds check: ensure i+1 and i+2 are valid indices
-        if (i + 2 >= block_changes_count) continue;
-        
-        // Verify that i+1 is the upper half of this door (same x,z, y+1)
-        if (block_changes[i + 1].x != door_x || 
-            block_changes[i + 1].y != door_y + 1 || 
-            block_changes[i + 1].z != door_z) continue;
-        
-        // Verify that i+2 is the state entry (block == 0, z matches)
-        if (block_changes[i + 2].block != 0 || block_changes[i + 2].z != door_z) continue;
-
-        // Find the door state data (3rd slot after door blocks)
-        // State is stored at i + 2
-        uint8_t *state_ptr = (uint8_t *)(&block_changes[i + 2]);
-        uint8_t direction = state_ptr[0];
-        uint8_t state_flags = state_ptr[1];
-
-        // Toggle open/closed state (bit 0)
-        state_flags ^= 0x01;
-        uint8_t open = state_flags & 0x01;
-        uint8_t hinge = (state_flags >> 1) & 0x01;
-
-        // Update state in block_changes
-        state_ptr[0] = direction;
-        state_ptr[1] = state_flags;
-
-        #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
-        writeBlockChangesToDisk(i + 2, i + 2);
-        #endif
-
-        // Broadcast door update to all players with proper state
-        for (int j = 0; j < MAX_PLAYERS; j ++) {
-          if (player_data[j].client_fd == -1) continue;
-          if (player_data[j].flags & 0x20) continue;
-          // Update lower half with new state
-          sendDoorUpdate(player_data[j].client_fd, door_x, door_y, door_z, block_changes[i].block, 0, open, direction, hinge);
-          // Update upper half with new state
-          sendDoorUpdate(player_data[j].client_fd, door_x, door_y + 1, door_z, block_changes[i + 1].block, 1, open, direction, hinge);
-        }
-
-        return;
       }
-      // Door not found in block_changes, can't interact
       return;
     }
     #endif
@@ -2072,43 +1817,19 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       ) &&
       isReplaceableBlock(getBlockAt(x, y, z))
     ) {
-      // Apply server-side block change (this will place both halves)
+      // Apply server-side block change (this will place both halves and set default state)
       if (makeBlockChange(x, y, z, block)) return;
 
-      // Now update the door state with direction and send updates
-      for (int i = 0; i < block_changes_count; i ++) {
-        if (!isDoorBlock(block_changes[i].block)) continue;
-        if (block_changes[i].x != x || block_changes[i].y != y || block_changes[i].z != z) continue;
+      // Update the door state with the correct direction in the unified special block table
+      uint16_t state = door_encode_state(0, 0, direction);  // closed, hinge left, direction
+      special_block_set_state(x, y, z, block, state);
 
-        // Bounds check: ensure i+1 and i+2 are valid indices
-        if (i + 2 >= block_changes_count) break;
-        
-        // Verify that i+1 is the upper half of this door
-        if (block_changes[i + 1].x != x || 
-            block_changes[i + 1].y != y + 1 || 
-            block_changes[i + 1].z != z) break;
-        
-        // Verify that i+2 is the state entry
-        if (block_changes[i + 2].block != 0 || block_changes[i + 2].z != z) break;
-
-        // Found the door, update state
-        uint8_t *state_ptr = (uint8_t *)(&block_changes[i + 2]);
-        state_ptr[0] = direction;  // Store direction
-        state_ptr[1] = 0;          // Closed state, hinge left (bits: open=0, hinge=0)
-        #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
-        writeBlockChangesToDisk(i + 2, i + 2);
-        #endif
-
-        // Send door updates with proper state to all players
-        for (int j = 0; j < MAX_PLAYERS; j ++) {
-          if (player_data[j].client_fd == -1) continue;
-          if (player_data[j].flags & 0x20) continue;
-          // Lower half (closed, direction, hinge left)
-          sendDoorUpdate(player_data[j].client_fd, x, y, z, block, 0, 0, direction, 0);
-          // Upper half (closed, direction, hinge left)
-          sendDoorUpdate(player_data[j].client_fd, x, y + 1, z, block, 1, 0, direction, 0);
-        }
-        break;
+      // Send door updates with proper state to all players
+      for (int j = 0; j < MAX_PLAYERS; j++) {
+        if (player_data[j].client_fd == -1) continue;
+        if (player_data[j].flags & 0x20) continue;
+        sendDoorUpdate(player_data[j].client_fd, x, y, z, block, 0, 0, direction, 0);
+        sendDoorUpdate(player_data[j].client_fd, x, y + 1, z, block, 1, 0, direction, 0);
       }
 
       // Decrease item amount in selected slot
@@ -2122,6 +1843,61 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     }
   }
   #endif
+
+  // Special handling for oriented block placement (chests, furnaces)
+  if (isOrientedBlock(block)) {
+    // Determine placement position
+    switch (face) {
+      case 0: y -= 1; break;
+      case 1: y += 1; break;
+      case 2: z -= 1; break;
+      case 3: z += 1; break;
+      case 4: x -= 1; break;
+      case 5: x += 1; break;
+      default: break;
+    }
+
+    // Determine direction based on player facing
+    uint8_t direction;
+    if (player->yaw >= -96 && player->yaw < -32) direction = 3;   // East
+    else if (player->yaw >= -32 && player->yaw < 32) direction = 1; // South
+    else if (player->yaw >= 32 && player->yaw < 96) direction = 2;  // West
+    else direction = 0;                                             // North
+
+    // Chests and furnaces face TOWARDS the player
+    direction ^= 1;
+
+    // Check if the block's placement conditions are met
+    if (
+      !( // Is player in the way?
+        x == player->x &&
+        (y == player->y || y == player->y + 1) &&
+        z == player->z
+      ) &&
+      isReplaceableBlock(getBlockAt(x, y, z))
+    ) {
+      // Apply server-side block change
+      if (makeBlockChange(x, y, z, block)) return;
+
+      // Update state with direction in the unified special block table
+      uint16_t state = oriented_encode_state(direction);
+      special_block_set_state(x, y, z, block, state);
+
+      // Send oriented updates to all players
+      for (int j = 0; j < MAX_PLAYERS; j++) {
+        if (player_data[j].client_fd == -1) continue;
+        if (player_data[j].flags & 0x20) continue;
+        sendOrientedUpdate(player_data[j].client_fd, x, y, z, block, direction);
+      }
+
+      // Decrease item amount in selected slot
+      *count -= 1;
+      if (*count == 0) *item = 0;
+      sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
+      return;
+    }
+    return;
+  }
 
   // Special handling for stair placement
   if (isStairBlock(block)) {
@@ -2146,8 +1922,6 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     // Determine if upside down based on where on the block the player clicked
     uint8_t half = 0; // 0 = bottom, 1 = top
     if (face == 0) half = 1;
-    // Side faces are harder to determine without cursor-y, so we'll skip for now
-    // or just use bottom half for side faces.
 
     // Check if the block's placement conditions are met
     if (
@@ -2161,44 +1935,24 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       // Apply server-side block change
       if (makeBlockChange(x, y, z, block)) return;
 
-      // Now update the stair state with direction and send updates
-      for (int i = 0; i < block_changes_count; i ++) {
-        if (block_changes[i].block != block) continue;
-        if (block_changes[i].x != x || block_changes[i].y != y || block_changes[i].z != z) continue;
-        
-        // Bounds check: ensure i+1 is a valid index
-        if (i + 1 >= block_changes_count) break;
-        
-        // Verify that i+1 is the state entry
-        if (block_changes[i + 1].block != 0 || block_changes[i + 1].z != z) break;
+      // Update stair state in the unified special block table
+      uint16_t state = stair_encode_state(half, direction);
+      special_block_set_state(x, y, z, block, state);
 
-        // Found the stair, update state
-        uint8_t *state_ptr = (uint8_t *)(&block_changes[i + 1]);
-        state_ptr[0] = direction;
-        state_ptr[1] = half;
-        #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
-        writeBlockChangesToDisk(i + 1, i + 1);
-        #endif
-
-        // Send stair updates to all players
-        for (int j = 0; j < MAX_PLAYERS; j ++) {
-          if (player_data[j].client_fd == -1) continue;
-          if (player_data[j].flags & 0x20) continue;
-          sendStairUpdate(player_data[j].client_fd, x, y, z, block, half, direction);
-        }
-        break;
+      // Send stair updates to all players
+      for (int j = 0; j < MAX_PLAYERS; j++) {
+        if (player_data[j].client_fd == -1) continue;
+        if (player_data[j].flags & 0x20) continue;
+        sendStairUpdate(player_data[j].client_fd, x, y, z, block, half, direction);
       }
 
-      // Decrease item amount in selected slot
+      // Decrease item amount
       *count -= 1;
-      // Clear item id in slot if amount is zero
       if (*count == 0) *item = 0;
-
-      // Sync hotbar contents to player
       sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
       return;
     }
-    return; // Block placement failed or was blocked
+    return;
   }
 
   switch (face) {

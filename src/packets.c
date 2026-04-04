@@ -25,6 +25,7 @@
 #include "procedures.h"
 #include "packets.h"
 #include "chunk_generator.h"
+#include "special_block.h"
 
 // S->C Status Response (server list ping)
 int sc_statusResponse (int client_fd) {
@@ -581,50 +582,76 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
   }
   chunk_debug_record_enqueue_result(client_fd, _x, _z, 1);
 
-  // Sending block updates
+  // Sending block updates for special blocks and torches.
+  // Stairs, doors, chests, and furnaces are NOT in chunk_section[] because
+  // their block state IDs don't fit in the fixed 256-entry global palette.
+  // They are sent as individual block update packets here with correct state.
+
+  /* Debug: scan ALL special blocks in the entire block_changes array */
+  fprintf(stderr, "[DBG-SCAN] Chunk (%d,%d) x=[%d,%d) z=[%d,%d)\n", _x, _z, x, x+16, z, z+16);
+  for (int di = 0; di < block_changes_count; di++) {
+    if (block_changes[di].block == 0xFF) continue;
+    if (isStairBlock(block_changes[di].block) || isOrientedBlock(block_changes[di].block)
+        #ifdef ALLOW_DOORS
+        || isDoorBlock(block_changes[di].block)
+        #endif
+    ) {
+      uint8_t b = block_changes[di].block;
+      fprintf(stderr, "[DBG-SCAN]  idx=%d type=%d pos=(%d,%d,%d)", di, b, block_changes[di].x, block_changes[di].y, block_changes[di].z);
+      if (b == B_chest) { di += 14; }
+      else if (isStairBlock(b) || b == B_furnace) { di += 1; }
+      #ifdef ALLOW_DOORS
+      else if (isDoorBlock(b)) { di += 2; }
+      #endif
+      fprintf(stderr, "\n");
+    }
+  }
+
   for (int i = 0; i < block_changes_count; i ++) {
-    #ifdef ALLOW_CHESTS
-      if (block_changes[i].block != B_torch && block_changes[i].block != B_chest && !isStairBlock(block_changes[i].block)) {
-        #ifdef ALLOW_DOORS
-        if (!isDoorBlock(block_changes[i].block)) continue;
-        #else
-        continue;
-        #endif
-      }
-    #else
-      if (block_changes[i].block != B_torch && !isStairBlock(block_changes[i].block)) {
-        #ifdef ALLOW_DOORS
-        if (!isDoorBlock(block_changes[i].block)) continue;
-        #else
-        continue;
-        #endif
-      }
-    #endif
-    if (block_changes[i].x < x || block_changes[i].x >= x + 16) continue;
-    if (block_changes[i].z < z || block_changes[i].z >= z + 16) continue;
-    
+    if (block_changes[i].block == 0xFF) continue;
+    if (
+      block_changes[i].block != B_torch &&
+      !isOrientedBlock(block_changes[i].block) &&
+      !isStairBlock(block_changes[i].block)
+      #ifdef ALLOW_DOORS
+      && !isDoorBlock(block_changes[i].block)
+      #endif
+    ) continue;
+
+    if (block_changes[i].x < x || block_changes[i].x >= x + 16) {
+      if (block_changes[i].block == B_chest) i += 14;
+      else if (isStairBlock(block_changes[i].block) || block_changes[i].block == B_furnace) i += 1;
+      else if (isDoorBlock(block_changes[i].block)) i += 2;
+      continue;
+    }
+    if (block_changes[i].z < z || block_changes[i].z >= z + 16) {
+      if (block_changes[i].block == B_chest) i += 14;
+      else if (isStairBlock(block_changes[i].block) || block_changes[i].block == B_furnace) i += 1;
+      else if (isDoorBlock(block_changes[i].block)) i += 2;
+      continue;
+    }
+
     #ifdef ALLOW_DOORS
     if (isDoorBlock(block_changes[i].block)) {
       // Bounds check: ensure i+1 and i+2 are valid indices
       if (i + 2 >= block_changes_count) continue;
-      
+
       // Verify that i+1 is the upper half of this door
-      if (block_changes[i + 1].x != block_changes[i].x || 
-          block_changes[i + 1].y != block_changes[i].y + 1 || 
+      if (block_changes[i + 1].x != block_changes[i].x ||
+          block_changes[i + 1].y != block_changes[i].y + 1 ||
           block_changes[i + 1].z != block_changes[i].z) continue;
-      
+
       // Verify that i+2 is the state entry
       if (block_changes[i + 2].block != 0 || block_changes[i + 2].z != block_changes[i].z) continue;
-      
+
+      // Read state from the unified special block table
+      uint16_t state = special_block_get_state(block_changes[i].x, block_changes[i].y, block_changes[i].z);
+      uint8_t open = door_get_open(state);
+      uint8_t hinge = door_get_hinge(state);
+      uint8_t direction = door_get_direction(state);
+
       // Send door with proper state (both halves)
-      uint8_t *state_ptr = (uint8_t *)(&block_changes[i + 2]);
-      uint8_t direction = state_ptr[0];
-      uint8_t state_flags = state_ptr[1];
-      uint8_t open = state_flags & 0x01;
-      uint8_t hinge = (state_flags >> 1) & 0x01;
-      // Lower half
       sendDoorUpdate(client_fd, block_changes[i].x, block_changes[i].y, block_changes[i].z, block_changes[i].block, 0, open, direction, hinge);
-      // Upper half
       sendDoorUpdate(client_fd, block_changes[i].x, block_changes[i].y + 1, block_changes[i].z, block_changes[i + 1].block, 1, open, direction, hinge);
       // Skip the next two entries (upper half and state data)
       i += 2;
@@ -632,23 +659,39 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
     }
     #endif
 
+    if (isOrientedBlock(block_changes[i].block)) {
+      // Read direction from the unified special block table
+      uint16_t state = special_block_get_state(block_changes[i].x, block_changes[i].y, block_changes[i].z);
+      uint8_t direction = oriented_get_direction(state);
+      fprintf(stderr, "[DBG] Sending oriented at (%d,%d,%d) block=%d dir=%d state=%d\n",
+        block_changes[i].x, block_changes[i].y, block_changes[i].z, block_changes[i].block, direction, state);
+
+      if (block_changes[i].block == B_chest) {
+        sendOrientedUpdate(client_fd, block_changes[i].x, block_changes[i].y, block_changes[i].z, block_changes[i].block, direction);
+        fprintf(stderr, "[DBG] Sent chest update\n");
+        i += 14;
+      } else {
+        sendOrientedUpdate(client_fd, block_changes[i].x, block_changes[i].y, block_changes[i].z, block_changes[i].block, direction);
+        i += 1;
+      }
+      continue;
+    }
+
     if (isStairBlock(block_changes[i].block)) {
       // Bounds check: ensure i+1 is a valid index
       if (i + 1 >= block_changes_count) continue;
-      
-      // Verify that i+1 is the state entry
-      if (block_changes[i + 1].block != 0 || block_changes[i + 1].z != block_changes[i].z) continue;
-      
-      // Send stair with proper state
-      uint8_t *state_ptr = (uint8_t *)(&block_changes[i + 1]);
-      uint8_t direction = state_ptr[0];
-      uint8_t half = state_ptr[1];
+
+      // Read state from the unified special block table
+      uint16_t state = special_block_get_state(block_changes[i].x, block_changes[i].y, block_changes[i].z);
+      uint8_t half = stair_get_half(state);
+      uint8_t direction = stair_get_direction(state);
+
       sendStairUpdate(client_fd, block_changes[i].x, block_changes[i].y, block_changes[i].z, block_changes[i].block, half, direction);
       // Skip the next entry (state data)
       i += 1;
       continue;
     }
-    
+
     sc_blockUpdate(client_fd, block_changes[i].x, block_changes[i].y, block_changes[i].z, block_changes[i].block);
   }
 

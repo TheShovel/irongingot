@@ -13,6 +13,7 @@
 #include "worldgen.h"
 #include "perlin.h"
 #include "generator.h"
+#include "special_block.h"
 
 static Generator g;
 static SurfaceNoise surface_noise_biome;
@@ -1659,17 +1660,26 @@ uint8_t buildChunkSection (int cx, int cy, int cz) {
   }
 
   // Apply block changes on top of terrain
-  // This does mean that we're generating some terrain only to replace it,
-  // but it's better to apply changes in one run rather than in individual
-  // runs per block, as this is more expensive than terrain generation.
+  // Special blocks (stairs, doors, chests, furnaces) are SKIPPED here because
+  // their state IDs don't fit in the uint8_t chunk_section[] / fixed 256-entry
+  // global palette. They are sent via individual block update packets after the
+  // chunk bulk (see sc_chunkDataAndUpdateLight).
   for (int i = 0; i < block_changes_count; i ++) {
     if (block_changes[i].block == 0xFF) continue;
-    // Skip blocks that behave better when sent using a block update
-    if (isStairBlock(block_changes[i].block)) continue;
-    #ifdef ALLOW_CHESTS
-      if (block_changes[i].block == B_chest) continue;
+    // Skip special blocks — they use block updates, not chunk data
+    if (is_stair_block(block_changes[i].block) || is_oriented_block(block_changes[i].block)) {
+      if (block_changes[i].block == B_chest) i += 14;
+      else if (is_stair_block(block_changes[i].block) || block_changes[i].block == B_furnace) i += 1;
+      continue;
+    }
+    #ifdef ALLOW_DOORS
+    if (is_door_block(block_changes[i].block)) {
+      // Still write the raw door block ID into chunk_section so the client
+      // sees *something*. The correct state comes via block update packets.
+    } else
     #endif
-    if ( // Check if block is within this chunk section
+    // Check if block is within this chunk section
+    if (
       block_changes[i].x >= cx && block_changes[i].x < cx + 16 &&
       block_changes[i].y >= cy && block_changes[i].y < cy + 16 &&
       block_changes[i].z >= cz && block_changes[i].z < cz + 16
@@ -1677,8 +1687,6 @@ uint8_t buildChunkSection (int cx, int cy, int cz) {
       int dx = block_changes[i].x - cx;
       int dy = block_changes[i].y - cy;
       int dz = block_changes[i].z - cz;
-      // Same 8-block sequence reversal as before, this time 10x dirtier
-      // because we're working with specific indexes.
       unsigned address = (unsigned)(dx + (dz << 4) + (dy << 8));
       unsigned index = (address & ~7u) | (7u - (address & 7u));
       chunk_section[index] = block_changes[i].block;

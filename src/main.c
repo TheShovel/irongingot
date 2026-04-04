@@ -45,6 +45,19 @@
 #include "config.h"
 #include <zlib.h>
 
+#ifndef _WIN32
+#include <signal.h>
+#endif
+
+static volatile sig_atomic_t server_running = 1;
+
+#ifndef _WIN32
+static void handle_shutdown_signal(int sig) {
+  (void)sig;
+  server_running = 0;
+}
+#endif
+
 // Check if a chunk has been visited (sent to player)
 static int isChunkVisited(PlayerData *player, int x, int z) {
   for (int i = 0; i < VISITED_HISTORY; i++) {
@@ -771,6 +784,18 @@ int main () {
   #else
   int flags = fcntl(server_fd, F_GETFL, 0);
   fcntl(server_fd, F_SETFL, flags | O_NONBLOCK);
+
+  /* Install signal handlers for graceful shutdown */
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = handle_shutdown_signal;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  sigaction(SIGINT, &sa, NULL);
+  sigaction(SIGTERM, &sa, NULL);
+  /* Ignore SIGPIPE to avoid crashes when clients disconnect during writes */
+  sa.sa_handler = SIG_IGN;
+  sigaction(SIGPIPE, &sa, NULL);
   #endif
 
   // Track time of last server tick (in microseconds)
@@ -781,7 +806,7 @@ int main () {
    * per client. Burst handling drains packet backlogs without letting one
    * connection monopolize the loop.
    */
-  while (true) {
+  while (server_running) {
     // Check if it's time to yield to the idle task
     task_yield();
 
@@ -902,8 +927,9 @@ int main () {
           if (block_changes[i].block == 0xFF) continue;
           if (block_changes[i].block == B_chest) i += 14;
           #ifdef ALLOW_DOORS
-          if (isDoorBlock(block_changes[i].block)) i += 2;
+          if (isDoorBlock(block_changes[i].block)) { i += 2; continue; }
           #endif
+          if (isStairBlock(block_changes[i].block) || block_changes[i].block == B_furnace) i += 1;
           if (i >= block_changes_count) block_changes_count = i + 1;
         }
         rebuildBlockChangeIndexes();
@@ -1043,6 +1069,12 @@ int main () {
     }
 
   }
+
+  // Save all data before exiting
+  #ifdef SYNC_WORLD_TO_DISK
+  printf("Saving world data...\n");
+  writePlayerDataToDisk();
+  #endif
 
   // Shutdown chunk streaming thread
   shutdown_chunk_streamer();

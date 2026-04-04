@@ -15,6 +15,7 @@
 #include "registries.h"
 #include "procedures.h"
 #include "serialize.h"
+#include "special_block.h"
 
 int64_t last_disk_sync_time = 0;
 
@@ -42,6 +43,7 @@ int initSerializer () {
   // Attempt to open existing world file
   FILE *file = fopen(FILE_PATH, "rb");
   if (file) {
+    fprintf(stderr, "[LOAD] Opened world.bin for reading\n");
     size_t read;
     int has_capacity_header = 0;
     long block_changes_bytes = 0;
@@ -50,6 +52,7 @@ int initSerializer () {
     fseek(file, 0, SEEK_END);
     long file_size = ftell(file);
     fseek(file, 0, SEEK_SET);
+    fprintf(stderr, "[LOAD] File size: %ld bytes\n", file_size);
 
     // Read block changes from the start of the file directly into memory
     #ifdef INFINITE_BLOCK_CHANGES
@@ -140,18 +143,116 @@ int initSerializer () {
       #ifdef ALLOW_DOORS
       if (isDoorBlock(block_changes[i].block)) i += 2;
       #endif
+      if (isStairBlock(block_changes[i].block) || block_changes[i].block == B_furnace) i += 1;
       if (i >= block_changes_count) block_changes_count = i + 1;
     }
     // Read player data directly into memory
     read = fread(player_data, 1, sizeof(player_data), file);
-    fclose(file);
     if (read != sizeof(player_data)) {
       printf("Read %u bytes from \"world.bin\", expected %u (player data). Aborting.\n", read, sizeof(player_data));
+      fclose(file);
       return 1;
     }
 
+    // Read special block state table (new format -- appended after player data)
+    special_block_init();
+    fprintf(stderr, "[LOAD] About to read sb_count, file pos=%ld\n", ftell(file));
+    int sb_count = 0;
+    read = fread(&sb_count, sizeof(int), 1, file);
+    fprintf(stderr, "[LOAD] Read sb_count: read=%zd, value=%d\n", read, sb_count);
+    if (read == 1 && sb_count > 0 && sb_count <= MAX_SPECIAL_BLOCKS) {
+      size_t expected = sizeof(SpecialBlockEntry) * MAX_SPECIAL_BLOCKS;
+      fprintf(stderr, "[LOAD] Reading %zd bytes of special block data\n", expected);
+      read = fread(special_blocks, 1, expected, file);
+      fprintf(stderr, "[LOAD] Read %zd of %zd bytes\n", read, expected);
+      if (read == expected) {
+        special_blocks_count = sb_count;
+        fprintf(stderr, "[LOAD] Successfully loaded %d special block entries\n", special_blocks_count);
+      } else {
+        fprintf(stderr, "[LOAD] ERROR: short read of special block data\n");
+      }
+    } else {
+      fprintf(stderr, "[LOAD] No special block table found (read=%zd, sb_count=%d)\n", read, sb_count);
+    }
+
+    /* Migrate legacy state data from block_changes entries into the
+     * unified special_block table. This handles worlds saved before
+     * the special_block system was introduced.
+     * Only populates entries that are MISSING, so it won't overwrite
+     * correct state from a previously-saved new-format world. */
+    int migrated = 0;
+    for (int i = 0; i < block_changes_count; i++) {
+      if (block_changes[i].block == 0xFF) continue;
+
+      if (block_changes[i].block == B_chest) {
+        fprintf(stderr, "[MIGRATE] chest at (%d,%d,%d) idx=%d has_entry=%d\n",
+          block_changes[i].x, block_changes[i].y, block_changes[i].z, i,
+          special_block_has_entry(block_changes[i].x, block_changes[i].y, block_changes[i].z));
+        if (i + 14 < block_changes_count &&
+            !special_block_has_entry(block_changes[i].x, block_changes[i].y, block_changes[i].z)) {
+          uint8_t dir = block_changes[i + 14].y;
+          if (dir > 3) dir = 0;
+          special_block_set_state(block_changes[i].x, block_changes[i].y,
+                                  block_changes[i].z, B_chest,
+                                  (uint16_t)(dir & 3));
+          migrated++;
+        }
+        i += 14;
+      }
+      #ifdef ALLOW_DOORS
+      else if (isDoorBlock(block_changes[i].block)) {
+        if (i + 2 < block_changes_count &&
+            !special_block_has_entry(block_changes[i].x, block_changes[i].y, block_changes[i].z)) {
+          uint8_t dir   = block_changes[i + 2].x;
+          uint8_t flags = block_changes[i + 2].y;
+          if (dir > 3) dir = 0;
+          uint8_t open  = flags & 0x01;
+          uint8_t hinge = (flags >> 1) & 0x01;
+          uint16_t state = (uint16_t)((dir << 2) | (hinge << 1) | open);
+          special_block_set_state(block_changes[i].x, block_changes[i].y,
+                                  block_changes[i].z, block_changes[i].block,
+                                  state);
+          migrated++;
+        }
+        i += 2;
+      }
+      #endif
+      else if (isStairBlock(block_changes[i].block) || block_changes[i].block == B_furnace) {
+        if (i + 1 < block_changes_count &&
+            !special_block_has_entry(block_changes[i].x, block_changes[i].y, block_changes[i].z)) {
+          uint8_t dir   = block_changes[i + 1].x;
+          uint8_t extra = block_changes[i + 1].y;
+          if (dir > 3) dir = 0;
+          if (isStairBlock(block_changes[i].block)) {
+            uint8_t half = extra & 0x03;
+            uint16_t state = (uint16_t)((dir << 2) | (half & 3));
+            special_block_set_state(block_changes[i].x, block_changes[i].y,
+                                    block_changes[i].z, block_changes[i].block,
+                                    state);
+          } else {
+            uint8_t lit = (extra >> 2) & 0x01;
+            uint16_t state = (uint16_t)((lit << 2) | (dir & 3));
+            special_block_set_state(block_changes[i].x, block_changes[i].y,
+                                    block_changes[i].z, B_furnace,
+                                    state);
+          }
+          migrated++;
+        }
+        i += 1;
+      }
+    }
+    printf("Loaded special block table: %d entries (migrated %d legacy)\n",
+           special_blocks_count, migrated);
+    fprintf(stderr, "[LOAD] Loaded special block table: %d entries, migrated %d legacy, file_size=%ld\n",
+           special_blocks_count, migrated, file_size);
+
+    fclose(file);
+
   } else { // World file doesn't exist or failed to open
     printf("No \"world.bin\" file found, creating one...\n\n");
+
+    // Initialize special block table
+    special_block_init();
 
     // Try to create the file in binary write mode
     file = fopen(FILE_PATH, "wb");
@@ -194,7 +295,7 @@ int initSerializer () {
       }
     #endif
     // Seek past written block changes to start writing player data
-    if (fseek(file, 
+    if (fseek(file,
       #ifdef INFINITE_BLOCK_CHANGES
         sizeof(int) + block_changes_capacity * sizeof(BlockChange),
       #else
@@ -210,12 +311,20 @@ int initSerializer () {
     }
     // Write initial player data to disk (should be just nulls?)
     written = fwrite(player_data, 1, sizeof(player_data), file);
-    fclose(file);
     if (written != sizeof(player_data)) {
       perror(
         "Failed to write initial player data to \"world.bin\".\n"
         "Consider checking permissions or disabling SYNC_WORLD_TO_DISK in \"globals.h\"."
       );
+      fclose(file);
+      return 1;
+    }
+    // Write special block count (0 initially)
+    int sb_count = 0;
+    written = fwrite(&sb_count, sizeof(int), 1, file);
+    fclose(file);
+    if (written != 1) {
+      perror("Failed to write special block header to \"world.bin\".");
       return 1;
     }
 
@@ -252,35 +361,63 @@ void writeBlockChangesToDisk (int from, int to) {
   fclose(file);
 }
 
-// Writes all player data to disk
+// Writes all player data and special block state table to disk.
+// Rewrites the ENTIRE file to keep the layout consistent with the
+// current block_changes_capacity (which may have grown via realloc).
 void writePlayerDataToDisk () {
 
-  // Try to open the file in rw (without overwriting)
-  FILE *file = fopen(FILE_PATH, "r+b");
+  fprintf(stderr, "[SAVE] writePlayerDataToDisk called, sb_count=%d, bc_capacity=%d\n",
+    special_blocks_count, block_changes_capacity);
+
+  FILE *file = fopen(FILE_PATH, "wb");  /* Rewrite entire file */
   if (!file) {
-    perror("Failed to open \"world.bin\". Player updates have been dropped.");
-    return;
-  }
-  // Seek past block changes in file
-  if (fseek(file, 
-    #ifdef INFINITE_BLOCK_CHANGES
-      sizeof(int) + block_changes_capacity * sizeof(BlockChange),
-    #else
-      sizeof(block_changes),
-    #endif
-    SEEK_SET) != 0) {
-    fclose(file);
-    perror("Failed to seek in \"world.bin\". Player updates have been dropped.");
-    return;
-  }
-  // Write full player data array to file
-  // Since this is a bigger write, it should ideally be done infrequently
-  if (fwrite(&player_data, 1, sizeof(player_data), file) != sizeof(player_data)) {
-    fclose(file);
-    perror("Failed to write to \"world.bin\". Player updates have been dropped.");
+    perror("Failed to open \"world.bin\" for writing. Player updates have been dropped.");
     return;
   }
 
+  #ifdef INFINITE_BLOCK_CHANGES
+    /* Write capacity header */
+    if (fwrite(&block_changes_capacity, sizeof(int), 1, file) != 1) {
+      fclose(file);
+      perror("Failed to write block changes capacity header.");
+      return;
+    }
+    /* Write entire block_changes array */
+    if (fwrite(block_changes, sizeof(BlockChange), block_changes_capacity, file) != (size_t)block_changes_capacity) {
+      fclose(file);
+      perror("Failed to write block changes.");
+      return;
+    }
+  #else
+    if (fwrite(block_changes, 1, sizeof(block_changes), file) != sizeof(block_changes)) {
+      fclose(file);
+      perror("Failed to write block changes.");
+      return;
+    }
+  #endif
+
+  /* Write player data */
+  if (fwrite(&player_data, 1, sizeof(player_data), file) != sizeof(player_data)) {
+    fclose(file);
+    perror("Failed to write player data.");
+    return;
+  }
+
+  /* Write special block state table */
+  int sb_count = special_blocks_count;
+  if (fwrite(&sb_count, sizeof(int), 1, file) != 1) {
+    fclose(file);
+    perror("Failed to write special block count.");
+    return;
+  }
+  size_t expected = sizeof(SpecialBlockEntry) * MAX_SPECIAL_BLOCKS;
+  if (fwrite(special_blocks, 1, expected, file) != expected) {
+    fclose(file);
+    perror("Failed to write special blocks.");
+    return;
+  }
+
+  fprintf(stderr, "[SAVE] wrote full world file successfully\n");
   fclose(file);
 }
 
