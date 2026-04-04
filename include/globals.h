@@ -318,11 +318,16 @@ typedef struct {
 
 typedef struct {
   uint8_t type;
-  short x;
+  double x;  // Floating-point position for smooth movement
   // When the mob is dead (health is 0), the Y coordinate acts
   // as a timer for deleting and deallocating the mob
-  uint8_t y;
-  short z;
+  double y;
+  double z;
+  // Movement direction (persisted across ticks for smoother walking)
+  double move_dx;
+  double move_dz;
+  int move_timer;  // How many ticks to keep moving in this direction
+  uint8_t yaw_store;  // Consistent yaw while walking
   // Lower 5 bits: health
   // Middle 1 bit: sheep sheared, unused for other mobs
   // Upper 2 bits: panic timer

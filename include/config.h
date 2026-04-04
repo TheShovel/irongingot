@@ -15,6 +15,11 @@ typedef struct {
   int gamemode;              // 0 - survival; 1 - creative; 2 - adventure; 3 - spectator
   int view_distance;
   int mob_despawn_distance;
+  int mob_spawn_enabled;
+  int mob_spawn_max_per_player;
+  int mob_spawn_range;
+  int mob_spawn_min_distance;
+  int mob_spawn_interval;
   uint32_t world_seed;
   uint32_t rng_seed;
 

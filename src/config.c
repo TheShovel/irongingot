@@ -40,6 +40,11 @@ void init_config_defaults(void) {
   config.gamemode = 0;  // survival
   config.view_distance = 5;
   config.mob_despawn_distance = 256;
+  config.mob_spawn_enabled = 1;
+  config.mob_spawn_max_per_player = 5;
+  config.mob_spawn_range = 24;
+  config.mob_spawn_min_distance = 6;
+  config.mob_spawn_interval = 10;  // spawn check every N server ticks
   config.world_seed = 0xA103DE6C;
   config.rng_seed = 0xE2B9419;
 
@@ -145,6 +150,16 @@ int load_config(const char *filename) {
       if (config.view_distance > 32) config.view_distance = 32;
     } else if (strcmp(key, "mob_despawn_distance") == 0) {
       config.mob_despawn_distance = atoi(value);
+    } else if (strcmp(key, "mob_spawn_enabled") == 0) {
+      config.mob_spawn_enabled = parse_bool(value);
+    } else if (strcmp(key, "mob_spawn_max_per_player") == 0) {
+      config.mob_spawn_max_per_player = atoi(value);
+    } else if (strcmp(key, "mob_spawn_range") == 0) {
+      config.mob_spawn_range = atoi(value);
+    } else if (strcmp(key, "mob_spawn_min_distance") == 0) {
+      config.mob_spawn_min_distance = atoi(value);
+    } else if (strcmp(key, "mob_spawn_interval") == 0) {
+      config.mob_spawn_interval = atoi(value);
     } else if (strcmp(key, "world_seed") == 0) {
       config.world_seed = (uint32_t)strtoul(value, NULL, 0);
     } else if (strcmp(key, "rng_seed") == 0) {
@@ -245,6 +260,11 @@ int save_config(const char *filename) {
   fprintf(f, "gamemode = %d\n", config.gamemode);
   fprintf(f, "view_distance = %d\n", config.view_distance);
   fprintf(f, "mob_despawn_distance = %d\n", config.mob_despawn_distance);
+  fprintf(f, "mob_spawn_enabled = %s\n", config.mob_spawn_enabled ? "true" : "false");
+  fprintf(f, "mob_spawn_max_per_player = %d\n", config.mob_spawn_max_per_player);
+  fprintf(f, "mob_spawn_range = %d\n", config.mob_spawn_range);
+  fprintf(f, "mob_spawn_min_distance = %d\n", config.mob_spawn_min_distance);
+  fprintf(f, "mob_spawn_interval = %d\n", config.mob_spawn_interval);
   fprintf(f, "world_seed = 0x%X\n", config.world_seed);
   fprintf(f, "rng_seed = 0x%X\n", config.rng_seed);
   fprintf(f, "\n");

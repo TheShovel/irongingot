@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <errno.h>
 #ifdef _WIN32
 #include <winsock2.h>
@@ -2004,11 +2005,11 @@ void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health) {
     // Look for type 0 (unallocated)
     if (mob_data[i].type != 0) continue;
 
-    // Assign it the input parameters
+    // Assign it the input parameters with sub-block centering
     mob_data[i].type = type;
-    mob_data[i].x = x;
-    mob_data[i].y = y;
-    mob_data[i].z = z;
+    mob_data[i].x = (double)x + 0.5;
+    mob_data[i].y = (double)y;
+    mob_data[i].z = (double)z + 0.5;
     mob_data[i].data = health & 31;
 
     // Forge a UUID from a random number and the mob's index
@@ -2024,7 +2025,7 @@ void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health) {
         player_data[j].client_fd,
         -2 - i, // Use negative IDs to avoid conflicts with player IDs
         uuid, // Use the UUID generated above
-        type, (double)x + 0.5f, y, (double)z + 0.5f,
+        type, mob_data[i].x, mob_data[i].y, mob_data[i].z,
         // Face opposite of the player, as if looking at them when spawning
         (player_data[j].yaw + 127) & 255, 0
       );
@@ -2035,6 +2036,118 @@ void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health) {
     // broadcastMobMetadata(-1, i);
 
     break;
+  }
+
+}
+
+// Count how many mobs are near a player (within configured spawn range)
+static uint8_t countMobsNearPlayer (PlayerData *player) {
+  uint8_t count = 0;
+  int range = config.mob_spawn_range;
+  for (int i = 0; i < MAX_MOBS; i ++) {
+    if (mob_data[i].type == 0) continue;
+    if ((mob_data[i].data & 31) == 0) continue; // Skip dead mobs
+    double dx = fabs(mob_data[i].x - player->x);
+    double dz = fabs(mob_data[i].z - player->z);
+    uint16_t dist = (uint16_t)(dx + dz);
+    if (dist <= (unsigned int)range) count ++;
+  }
+  return count;
+}
+
+// Spawn friendly mobs behind the player on grass/snow blocks
+static void spawnMobsAroundPlayer (PlayerData *player) {
+
+  // Passive mob types: Chicken(25), Cow(28), Pig(95), Sheep(106)
+  static const uint8_t passive_types[] = { 25, 28, 95, 106 };
+  static const uint8_t num_passive_types = 4;
+
+  int max_mobs = config.mob_spawn_max_per_player;
+  int spawn_range = config.mob_spawn_range;
+  int min_dist = config.mob_spawn_min_distance;
+
+  // Count existing mobs near this player
+  uint8_t existing = countMobsNearPlayer(player);
+  if ((int)existing >= max_mobs) return;
+
+  uint8_t slots_left = (uint8_t)(max_mobs - existing);
+
+  // Determine the direction "behind" the player using yaw.
+  // yaw is -128..127 mapping to -180..180 degrees.
+  // We compute the forward direction vector, then negate it for "behind".
+  // Instead of trigonometry, use the integer yaw-to-direction mapping
+  // that the Minecraft protocol uses for movement packets:
+  //   yaw values map to 8 directions on the XZ plane.
+  // Forward direction (where player is facing):
+  //   yaw  -128..-96  => dx= 0, dz=-1  (North, -Z)
+  //   yaw   -96..-64  => dx= 1, dz=-1  (North-East)
+  //   yaw   -64..-32  => dx= 1, dz= 0  (East, +X)
+  //   yaw   -32..  0  => dx= 1, dz= 1  (South-East)
+  //   yaw     0.. 32  => dx= 0, dz= 1  (South, +Z)
+  //   yaw    32.. 64  => dx=-1, dz= 1  (South-West)
+  //   yaw    64.. 96  => dx=-1, dz= 0  (West, -X)
+  //   yaw    96..127  => dx=-1, dz=-1  (North-West)
+  int8_t fwd_dx, fwd_dz;
+  int8_t yaw = player->yaw;
+  if (yaw < -96)      { fwd_dx =  0; fwd_dz = -1; }
+  else if (yaw < -64) { fwd_dx =  1; fwd_dz = -1; }
+  else if (yaw < -32) { fwd_dx =  1; fwd_dz =  0; }
+  else if (yaw <   0) { fwd_dx =  1; fwd_dz =  1; }
+  else if (yaw <  32) { fwd_dx =  0; fwd_dz =  1; }
+  else if (yaw <  64) { fwd_dx = -1; fwd_dz =  1; }
+  else if (yaw <  96) { fwd_dx = -1; fwd_dz =  0; }
+  else                { fwd_dx = -1; fwd_dz = -1; }
+
+  // Behind = opposite of forward
+  int8_t behind_dx = -fwd_dx;
+  int8_t behind_dz = -fwd_dz;
+
+  // Perpendicular direction for lateral offset
+  int8_t side_dx = -behind_dz;
+  int8_t side_dz = behind_dx;
+
+  // Try to spawn mobs in random positions behind the player
+  uint8_t to_spawn = (fast_rand() % slots_left) + 1; // Spawn 1 to slots_left
+  for (uint8_t s = 0; s < to_spawn; s ++) {
+
+    // Pick a random distance behind the player
+    int dist_range = spawn_range - min_dist;
+    if (dist_range <= 0) dist_range = 1;
+    uint8_t dist = (uint8_t)min_dist + (fast_rand() % dist_range);
+
+    // Random offset perpendicular to behind direction
+    int8_t side_offset = (int8_t)(fast_rand() % 11) - 5; // -5 to +5
+
+    short spawn_x = player->x + behind_dx * dist + side_dx * side_offset;
+    short spawn_z = player->z + behind_dz * dist + side_dz * side_offset;
+
+    // Verify this position is actually BEHIND the player using dot product.
+    // Vector from player to spawn point:
+    int16_t vec_x = spawn_x - player->x;
+    int16_t vec_z = spawn_z - player->z;
+    // Dot product with forward direction — if positive, it's in front:
+    int16_t dot = vec_x * fwd_dx + vec_z * fwd_dz;
+    if (dot >= 0) continue; // Spawn point is in front or perpendicular, skip
+
+    // Get the surface height at this position
+    uint8_t surface_y = getHeightAt(spawn_x, spawn_z);
+    if (surface_y == 0) continue; // Invalid height
+
+    // Check that the block at surface is grass or snow
+    uint8_t surface_block = getBlockAt(spawn_x, surface_y, spawn_z);
+    if (surface_block != B_grass_block &&
+        surface_block != B_snowy_grass_block &&
+        surface_block != B_snow_block) continue;
+
+    // Check that the two blocks above are passable (enough headroom)
+    if (!isPassableSpawnBlock(getBlockAt(spawn_x, surface_y + 1, spawn_z))) continue;
+    if (!isPassableSpawnBlock(getBlockAt(spawn_x, surface_y + 2, spawn_z))) continue;
+
+    // Pick a random passive mob type
+    uint8_t type = passive_types[fast_rand() % num_passive_types];
+
+    // Spawn at full health (20)
+    spawnMob(type, spawn_x, surface_y + 1, spawn_z, 20);
   }
 
 }
@@ -2349,156 +2462,218 @@ void handleServerTick (int64_t time_since_last_tick) {
 
     uint32_t r = fast_rand();
 
-    if (passive) {
-      if (panic) {
-        // If panicking, move randomly at up to 4 times per second
-        if (TICKS_PER_SECOND >= 4) {
-          uint32_t ticks_per_panic = (uint32_t)(TICKS_PER_SECOND / 4);
-          if (server_ticks % ticks_per_panic != 0) continue;
-        }
-        // Reset panic state after timer runs out
-        // Each panic timer tick takes one second
-        if (server_ticks % (uint32_t)TICKS_PER_SECOND == 0) {
-          mob_data[i].data -= (1 << 6);
-        }
-      } else {
-        // When not panicking, move idly once per 4 seconds on average
-        if (r % (4 * (unsigned int)TICKS_PER_SECOND) != 0) continue;
-      }
-    } else {
-      // Update hostile mobs once per second
-      if (server_ticks % (uint32_t)TICKS_PER_SECOND != 0) continue;
+    // Process panic timer (no early continue - mobs move every tick now)
+    if (passive && panic && server_ticks % (uint32_t)TICKS_PER_SECOND == 0) {
+      mob_data[i].data -= (1 << 6);
     }
 
     // Find the player closest to this mob
     PlayerData* closest_player = &player_data[0];
-    uint32_t closest_dist = 2147483647;
+    double closest_dist_double = 2147483647.0;
     for (int j = 0; j < MAX_PLAYERS; j ++) {
       if (player_data[j].client_fd == -1) continue;
-      uint16_t curr_dist = (
-        abs(mob_data[i].x - player_data[j].x) +
-        abs(mob_data[i].z - player_data[j].z)
-      );
-      if (curr_dist < closest_dist) {
-        closest_dist = curr_dist;
+      double dx = mob_data[i].x - player_data[j].x;
+      double dz = mob_data[i].z - player_data[j].z;
+      double curr_dist = dx * dx + dz * dz; // Squared distance
+      if (curr_dist < closest_dist_double) {
+        closest_dist_double = curr_dist;
         closest_player = &player_data[j];
       }
     }
 
     // Despawn mobs past a certain distance from nearest player
-    if (closest_dist > MOB_DESPAWN_DISTANCE) {
+    // Use squared distance to avoid sqrt (256^2 = 65536)
+    if (closest_dist_double > (double)MOB_DESPAWN_DISTANCE * MOB_DESPAWN_DISTANCE) {
       mob_data[i].type = 0;
       continue;
     }
 
-    short old_x = mob_data[i].x, old_z = mob_data[i].z;
-    uint8_t old_y = mob_data[i].y;
+    double old_x = mob_data[i].x, old_z = mob_data[i].z;
+    double old_y = mob_data[i].y;
 
-    short new_x = old_x, new_z = old_z;
-    uint8_t new_y = old_y, yaw = 0;
+    double new_x = old_x, new_z = old_z;
+    double new_y = old_y;
+    uint8_t yaw = mob_data[i].yaw_store;  // Keep current yaw from stored direction
+
+    // Movement increment per tick (sub-block movement for smoothness)
+    double move_amount = 0.05;  // Move 0.05 blocks per tick for smooth walking
 
     if (passive) { // Passive mob movement handling
 
-      // Move by one block on the X or Z axis
-      // Yaw is set to face in the direction of motion
-      if ((r >> 2) & 1) {
-        if ((r >> 1) & 1) { new_x += 1; yaw = 192; }
-        else { new_x -= 1; yaw = 64; }
-      } else {
-        if ((r >> 1) & 1) { new_z += 1; yaw = 0; }
-        else { new_z -= 1; yaw = 128; }
+      // Check if we need to pick a new direction or start resting
+      if (mob_data[i].move_timer <= 0) {
+        // Check if we were just moving (had non-zero velocity)
+        if (mob_data[i].move_dx != 0 || mob_data[i].move_dz != 0) {
+          // Just finished walking, start resting for 1-2 seconds
+          int rest_ticks = (int)(1.0f * TICKS_PER_SECOND) + (fast_rand() % ((int)TICKS_PER_SECOND + 1));
+          mob_data[i].move_timer = rest_ticks;
+          mob_data[i].move_dx = 0;
+          mob_data[i].move_dz = 0;
+        } else {
+          // Was resting, now pick a new direction to walk in
+          uint32_t dir_rand = fast_rand();
+
+          // Move by a fraction of a block on the X or Z axis
+          // Yaw is set to face in the direction of motion
+          if ((dir_rand >> 2) & 1) {
+            if ((dir_rand >> 1) & 1) {
+              mob_data[i].move_dx = move_amount;
+              mob_data[i].move_dz = 0;
+              mob_data[i].yaw_store = 192;
+            } else {
+              mob_data[i].move_dx = -move_amount;
+              mob_data[i].move_dz = 0;
+              mob_data[i].yaw_store = 64;
+            }
+          } else {
+            if ((dir_rand >> 1) & 1) {
+              mob_data[i].move_dx = 0;
+              mob_data[i].move_dz = move_amount;
+              mob_data[i].yaw_store = 0;
+            } else {
+              mob_data[i].move_dx = 0;
+              mob_data[i].move_dz = -move_amount;
+              mob_data[i].yaw_store = 128;
+            }
+          }
+
+          // Walk in this direction for 2-4 seconds (40-80 ticks at 20 TPS)
+          int min_ticks = (int)(2.0f * TICKS_PER_SECOND);
+          int max_ticks = (int)(4.0f * TICKS_PER_SECOND);
+          mob_data[i].move_timer = min_ticks + (fast_rand() % (max_ticks - min_ticks + 1));
+
+          // If panicking, shorter rest periods and keep moving
+          if (panic) {
+            mob_data[i].move_timer /= 2;
+          }
+        }
       }
+
+      // Continue moving in the current direction
+      new_x += mob_data[i].move_dx;
+      new_z += mob_data[i].move_dz;
+      yaw = mob_data[i].yaw_store;  // Keep consistent yaw while walking
+
+      // Decrement movement timer
+      if (mob_data[i].move_timer > 0) mob_data[i].move_timer--;
 
     } else { // Hostile mob movement handling
 
       // If we're already next to the player, hurt them and skip movement
-      if (closest_dist < 3 && abs(old_y - closest_player->y) < 2) {
+      double dist_to_player = sqrt(closest_dist_double);
+      double y_diff = fabs(old_y - closest_player->y);
+      if (dist_to_player < 3.0 && y_diff < 2.0) {
         hurtEntity(closest_player->client_fd, entity_id, D_generic, 6);
         continue;
       }
 
-      // Move towards the closest player on 8 axis
-      // The condition nesting ensures a correct yaw at 45 degree turns
-      if (closest_player->x < old_x) {
-        new_x -= 1; yaw = 64;
-        if (closest_player->z < old_z) { new_z -= 1; yaw += 32; }
-        else if (closest_player->z > old_z) { new_z += 1; yaw -= 32; }
-      }
-      else if (closest_player->x > old_x) {
-        new_x += 1; yaw = 192;
-        if (closest_player->z < old_z) { new_z -= 1; yaw -= 32; }
-        else if (closest_player->z > old_z) { new_z += 1; yaw += 32; }
-      } else {
-        if (closest_player->z < old_z) { new_z -= 1; yaw = 128; }
-        else if (closest_player->z > old_z) { new_z += 1; yaw = 0; }
+      // Move towards the closest player with persistent direction
+      double dx = closest_player->x - old_x;
+      double dz = closest_player->z - old_z;
+      double len = sqrt(dx * dx + dz * dz);
+
+      if (len > 0.001) {
+        // Normalize and scale movement for smooth pursuit
+        double move_x = (dx / len) * move_amount;
+        double move_z = (dz / len) * move_amount;
+
+        new_x += move_x;
+        new_z += move_z;
+
+        // Calculate yaw from direction
+        double angle = atan2(dz, dx) * 256.0 / (2.0 * 3.14159265358979);
+        yaw = (uint8_t)((int)(angle + 0.5) & 255);
       }
 
     }
 
+    // Get block coordinates for collision detection
+    int block_x = (int)new_x;
+    int block_y = (int)new_y;
+    int block_z = (int)new_z;
+    
     // Holds the block that the mob is moving into
-    uint8_t block = getBlockAt(new_x, new_y, new_z);
+    uint8_t block = getBlockAt(block_x, block_y, block_z);
     // Holds the block above the target block, i.e. the "head" block
-    uint8_t block_above = getBlockAt(new_x, new_y + 1, new_z);
+    uint8_t block_above = getBlockAt(block_x, block_y + 1, block_z);
 
     // Validate movement on X axis
-    if (new_x != old_x && (
-      !isPassableBlock(getBlockAt(new_x, new_y + 1, old_z)) ||
+    int old_block_x = (int)old_x;
+    int old_block_z = (int)old_z;
+
+    if (block_x != old_block_x && (
+      !isPassableBlock(getBlockAt(block_x, block_y + 1, old_block_z)) ||
       (
-        !isPassableBlock(getBlockAt(new_x, new_y, old_z)) &&
-        !isPassableBlock(getBlockAt(new_x, new_y + 2, old_z))
+        !isPassableBlock(getBlockAt(block_x, block_y, old_block_z)) &&
+        !isPassableBlock(getBlockAt(block_x, block_y + 2, old_block_z))
       )
     )) {
       new_x = old_x;
-      block = getBlockAt(old_x, new_y, new_z);
-      block_above = getBlockAt(old_x, new_y + 1, new_z);
+      block_x = old_block_x;
+      block = getBlockAt(block_x, block_y, block_z);
+      block_above = getBlockAt(block_x, block_y + 1, block_z);
+      // Reset timer when blocked so passive mobs pick a new direction
+      if (passive) mob_data[i].move_timer = 0;
     }
     // Validate movement on Z axis
-    if (new_z != old_z && (
-      !isPassableBlock(getBlockAt(old_x, new_y + 1, new_z)) ||
+    if (block_z != old_block_z && (
+      !isPassableBlock(getBlockAt(old_block_x, block_y + 1, block_z)) ||
       (
-        !isPassableBlock(getBlockAt(old_x, new_y, new_z)) &&
-        !isPassableBlock(getBlockAt(old_x, new_y + 2, new_z))
+        !isPassableBlock(getBlockAt(old_block_x, block_y, block_z)) &&
+        !isPassableBlock(getBlockAt(old_block_x, block_y + 2, block_z))
       )
     )) {
       new_z = old_z;
-      block = getBlockAt(new_x, new_y, old_z);
-      block_above = getBlockAt(new_x, new_y + 1, old_z);
+      block_z = old_block_z;
+      block = getBlockAt(block_x, block_y, block_z);
+      block_above = getBlockAt(block_x, block_y + 1, block_z);
+      // Reset timer when blocked so passive mobs pick a new direction
+      if (passive) mob_data[i].move_timer = 0;
     }
     // Validate diagonal movement
-    if (new_x != old_x && new_z != old_z && (
+    if (block_x != old_block_x && block_z != old_block_z && (
       !isPassableBlock(block_above) ||
       (
         !isPassableBlock(block) &&
-        !isPassableBlock(getBlockAt(new_x, new_y + 2, new_z))
+        !isPassableBlock(getBlockAt(block_x, block_y + 2, block_z))
       )
     )) {
       // We know that movement along just one axis is fine thanks to the
       // checks above, pick one based on proximity.
-      int dist_x = abs(old_x - closest_player->x);
-      int dist_z = abs(old_z - closest_player->z);
-      if (dist_x < dist_z) new_z = old_z;
-      else new_x = old_x;
-      block = getBlockAt(new_x, new_y, new_z);
+      double dist_x = fabs(old_x - closest_player->x);
+      double dist_z = fabs(old_z - closest_player->z);
+      if (dist_x < dist_z) {
+        new_z = old_z;
+        block_z = old_block_z;
+      } else {
+        new_x = old_x;
+        block_x = old_block_x;
+      }
+      block = getBlockAt(block_x, block_y, block_z);
+      // Reset timer when blocked so passive mobs pick a new direction
+      if (passive) mob_data[i].move_timer = 0;
     }
 
     // Check if we're supposed to climb/drop one block
     // The checks above already ensure that there's enough space to climb
-    if (!isPassableBlock(block)) new_y += 1;
-    else if (isPassableBlock(getBlockAt(new_x, new_y - 1, new_z))) new_y -= 1;
+    if (!isPassableBlock(block)) new_y += 1.0;
+    else if (isPassableBlock(getBlockAt(block_x, block_y - 1, block_z))) new_y -= 1.0;
 
     // Exit early if all movement was cancelled
-    if (new_x == mob_data[i].x && new_z == old_z && new_y == old_y) continue;
+    if (fabs(new_x - mob_data[i].x) < 0.001 && 
+        fabs(new_z - mob_data[i].z) < 0.001 && 
+        fabs(new_y - mob_data[i].y) < 0.001) continue;
 
     // Prevent collisions with other mobs
     uint8_t colliding = false;
     for (int j = 0; j < MAX_MOBS; j ++) {
       if (j == i) continue;
       if (mob_data[j].type == 0) continue;
-      if (
-        mob_data[j].x == new_x &&
-        mob_data[j].z == new_z &&
-        abs((int)mob_data[j].y - (int)new_y) < 2
-      ) {
+      if ((mob_data[j].data & 31) == 0) continue; // Skip dead mobs
+      double dx = mob_data[j].x - new_x;
+      double dz = mob_data[j].z - new_z;
+      double dy = fabs(mob_data[j].y - new_y);
+      if (dx * dx + dz * dz < 1.0 && dy < 2.0) {
         colliding = true;
         break;
       }
@@ -2515,20 +2690,32 @@ void handleServerTick (int64_t time_since_last_tick) {
     mob_data[i].y = new_y;
     mob_data[i].z = new_z;
 
-    // Vary the yaw angle to look just a little less robotic
-    yaw += ((r >> 7) & 31) - 16;
-
-    // Broadcast relevant entity movement packets
-    for (int j = 0; j < MAX_PLAYERS; j ++) {
-      if (player_data[j].client_fd == -1) continue;
-      sc_teleportEntity (
-        player_data[j].client_fd, entity_id,
-        (double)new_x + 0.5, new_y, (double)new_z + 0.5,
-        yaw * 360 / 256, 0
-      );
-      sc_setHeadRotation(player_data[j].client_fd, entity_id, yaw);
+    // Broadcast entity movement packets (only if we actually moved)
+    if (fabs(new_x - old_x) > 0.0001 || 
+        fabs(new_z - old_z) > 0.0001 || 
+        fabs(new_y - old_y) > 0.0001) {
+      for (int j = 0; j < MAX_PLAYERS; j ++) {
+        if (player_data[j].client_fd == -1) continue;
+        sc_teleportEntity (
+          player_data[j].client_fd, entity_id,
+          new_x, new_y, new_z,
+          yaw * 360 / 256, 0
+        );
+        sc_setHeadRotation(player_data[j].client_fd, entity_id, yaw);
+      }
     }
 
+  }
+
+  // Spawn friendly mobs around players at configurable interval
+  if (config.mob_spawn_enabled && config.mob_spawn_interval > 0 &&
+      server_ticks % (uint32_t)config.mob_spawn_interval == 0) {
+    for (int i = 0; i < MAX_PLAYERS; i ++) {
+      PlayerData *player = &player_data[i];
+      if (player->client_fd == -1) continue;
+      if (player->flags & 0x20) continue; // Skip players still loading
+      spawnMobsAroundPlayer(player);
+    }
   }
 
 }
