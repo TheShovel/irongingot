@@ -28,7 +28,7 @@ Runs on as low as **40MB of RAM**!!!
 
 ## Quick Start
 
-You'll need to compile the server yourself. See the **Compilation** section below for instructions.
+You can download pre-built binaries from the [Releases page](https://github.com/TheShovel/irongingot/releases), or compile the server yourself. See the **Compilation** section below for instructions.
 
 ### Configuration
 
