@@ -210,6 +210,16 @@ void handlePlayerJoin (PlayerData* player) {
 
   // Inform other clients (and the joining client) of the player's name and entity
   for (int i = 0; i < MAX_PLAYERS; i ++) {
+    if (player_data[i].client_fd == -1) continue;
+    // Find the client state for this player
+    uint8_t target_in_play = 0;
+    for (int k = 0; k < MAX_PLAYERS; k ++) {
+      if (client_states[k].client_fd == player_data[i].client_fd) {
+        target_in_play = (client_states[k].state == STATE_PLAY);
+        break;
+      }
+    }
+    if (!target_in_play) continue;  // Skip clients not yet in play state
     sc_systemChat(player_data[i].client_fd, (char *)recv_buffer, 16 + player_name_len);
     sc_playerInfoUpdateAddPlayer(player_data[i].client_fd, *player);
     if (player_data[i].client_fd != player->client_fd) {
@@ -458,6 +468,15 @@ void broadcastPlayerMetadata (PlayerData *player) {
     if (client_fd == -1) continue;
     if (client_fd == player->client_fd) continue;
     if (other_player->flags & 0x20) continue;
+    // Check client state
+    uint8_t target_in_play = 0;
+    for (int k = 0; k < MAX_PLAYERS; k ++) {
+      if (client_states[k].client_fd == client_fd) {
+        target_in_play = (client_states[k].state == STATE_PLAY);
+        break;
+      }
+    }
+    if (!target_in_play) continue;
 
     sc_setEntityMetadata(client_fd, player->client_fd, metadata, 2);
   }
@@ -499,6 +518,15 @@ void broadcastMobMetadata (int client_fd, int entity_id) {
 
       if (client_fd == -1) continue;
       if (player->flags & 0x20) continue;
+      // Check client state
+      uint8_t target_in_play = 0;
+      for (int k = 0; k < MAX_PLAYERS; k ++) {
+        if (client_states[k].client_fd == client_fd) {
+          target_in_play = (client_states[k].state == STATE_PLAY);
+          break;
+        }
+      }
+      if (!target_in_play) continue;
 
       sc_setEntityMetadata(client_fd, entity_id, metadata, length);
     }
@@ -1742,14 +1770,16 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
   // Special handling for door placement
   #ifdef ALLOW_DOORS
   if (isDoorBlock(block)) {
-    // Check if there's space above for the upper half
+    // Check if there's space above for the upper half (need 2 blocks of clearance)
     uint8_t block_above = getBlockAt(x, y + 1, z);
-    if (!isReplaceableBlock(block_above)) {
-      return;
+    uint8_t block_above_2 = getBlockAt(x, y + 2, z);
+    
+    // Need both y+1 and y+2 to be replaceable (and not doors)
+    if (!isReplaceableBlock(block_above) || isDoorBlock(block_above)) {
+      return;  // Can't place door if upper half position is blocked
     }
-    // Check that the upper half won't overwrite another door
-    if (isDoorBlock(block_above)) {
-      return;
+    if (!isReplaceableBlock(block_above_2) || isDoorBlock(block_above_2)) {
+      return;  // Can't place door if there's a block above the upper half
     }
     // Check that we're not replacing an existing door
     uint8_t existing = getBlockAt(x, y, z);
@@ -1757,7 +1787,6 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       return;
     }
     // Check that there's no door above (at y+2) - prevents placing under doors
-    uint8_t block_above_2 = getBlockAt(x, y + 2, z);
     if (isDoorBlock(block_above_2)) {
       return;  // Can't place door underneath another door
     }
@@ -1772,14 +1801,17 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       }
       // Re-check all conditions at adjusted position
       block_above = getBlockAt(x, y + 1, z);
+      block_above_2 = getBlockAt(x, y + 2, z);
       if (!isReplaceableBlock(block_above) || isDoorBlock(block_above)) {
+        return;
+      }
+      if (!isReplaceableBlock(block_above_2) || isDoorBlock(block_above_2)) {
         return;
       }
       existing = getBlockAt(x, y, z);
       if (isDoorBlock(existing)) {
         return;
       }
-      block_above_2 = getBlockAt(x, y + 2, z);
       if (isDoorBlock(block_above_2)) {
         return;
       }
@@ -2691,11 +2723,20 @@ void handleServerTick (int64_t time_since_last_tick) {
     mob_data[i].z = new_z;
 
     // Broadcast entity movement packets (only if we actually moved)
-    if (fabs(new_x - old_x) > 0.0001 || 
-        fabs(new_z - old_z) > 0.0001 || 
+    if (fabs(new_x - old_x) > 0.0001 ||
+        fabs(new_z - old_z) > 0.0001 ||
         fabs(new_y - old_y) > 0.0001) {
       for (int j = 0; j < MAX_PLAYERS; j ++) {
         if (player_data[j].client_fd == -1) continue;
+        // Find the client state for this player
+        uint8_t target_in_play = 0;
+        for (int k = 0; k < MAX_PLAYERS; k ++) {
+          if (client_states[k].client_fd == player_data[j].client_fd) {
+            target_in_play = (client_states[k].state == STATE_PLAY);
+            break;
+          }
+        }
+        if (!target_in_play) continue;
         sc_teleportEntity (
           player_data[j].client_fd, entity_id,
           new_x, new_y, new_z,

@@ -490,6 +490,15 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
             if (player_data[i].client_fd == -1) continue;
             if (player_data[i].flags & 0x20) continue;
             if (player_data[i].client_fd == client_fd) continue;
+            // Find the client state for this player
+            uint8_t target_in_play = 0;
+            for (int k = 0; k < MAX_PLAYERS; k ++) {
+              if (client_states[k].client_fd == player_data[i].client_fd) {
+                target_in_play = (client_states[k].state == STATE_PLAY);
+                break;
+              }
+            }
+            if (!target_in_play) continue;
             if (packet_id == 0x1F) {
               sc_updateEntityRotation(player_data[i].client_fd, client_fd, player->yaw, player->pitch);
             } else {
