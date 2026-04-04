@@ -337,16 +337,18 @@ static void* packet_sender_worker(void *arg) {
       break;
     }
 
-    OutPacket *pkt = state->send_head_hi;
-    uint8_t from_chunk_queue = 0;
+    // Process chunk queue (send_head_lo) first so block updates
+    // that depend on chunk data arrive in the correct order.
+    OutPacket *pkt = state->send_head_lo;
+    uint8_t from_chunk_queue = 1;
     if (pkt != NULL) {
-      state->send_head_hi = pkt->next;
-      if (state->send_head_hi == NULL) state->send_tail_hi = NULL;
-    } else {
-      pkt = state->send_head_lo;
-      from_chunk_queue = 1;
       state->send_head_lo = pkt->next;
       if (state->send_head_lo == NULL) state->send_tail_lo = NULL;
+    } else {
+      pkt = state->send_head_hi;
+      from_chunk_queue = 0;
+      state->send_head_hi = pkt->next;
+      if (state->send_head_hi == NULL) state->send_tail_hi = NULL;
     }
 
     if (state->queued_bytes >= pkt->len) state->queued_bytes -= pkt->len;
