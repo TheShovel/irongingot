@@ -8,3 +8,4 @@ include/registries.h
 *.bin
 bareiron_test
 *.o
+CHANGELOG.md
