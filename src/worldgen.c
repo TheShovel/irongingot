@@ -391,7 +391,6 @@ static uint8_t getOreSeedAt(int x, int y, int z, uint8_t biome) {
   if (y < 16) {
     if (ore_density > 0.75 && (ore_hash & 0x1F) == 0) return B_diamond_ore;
     if (ore_density > 0.70 && (ore_hash & 0x3F) == 0) return B_gold_ore;
-    if (ore_density > 0.68 && (ore_hash & 0x1F) == 0) return B_redstone_ore;
   }
   
   // Iron: mid-level (Y 16-48), very common
