@@ -46,12 +46,15 @@ uint8_t getItemStackSize (uint16_t item);
 
 #ifdef ALLOW_DOORS
 uint8_t isDoorBlock (uint8_t block);
+uint8_t isTrapdoorBlock (uint8_t block);
 uint8_t isDoorItem (uint16_t item);
 uint16_t getDoorItemFromBlock (uint8_t block);
 uint8_t getDoorBlockFromItem (uint16_t item);
 uint8_t isDoorOpen (short x, uint8_t y, short z);
 uint16_t getDoorStateId (uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge);
 void sendDoorUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge);
+uint16_t getTrapdoorStateId (uint8_t block, uint8_t open, uint8_t direction, uint8_t half);
+void sendTrapdoorUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, uint8_t open, uint8_t direction, uint8_t half);
 uint16_t getOrientedStateId (uint8_t block, uint8_t direction);
 void sendOrientedUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, uint8_t direction);
 uint16_t getStairStateId (uint8_t block, uint8_t half, uint8_t direction);

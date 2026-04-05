@@ -518,6 +518,29 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
         *count = 2;
         return;
       }
+      // Cobblestone stairs (6 cobblestone in stair pattern)
+      // Pattern 1: X.. / XX. / XXX (slots 0,3,4,6,7,8)
+      if (first_item == I_cobblestone && first_col == 0 && first_row == 0 &&
+          player->craft_items[3] == first_item &&
+          player->craft_items[4] == first_item &&
+          player->craft_items[6] == first_item &&
+          player->craft_items[7] == first_item &&
+          player->craft_items[8] == first_item) {
+        *item = I_cobblestone_stairs;
+        *count = 4;
+        return;
+      }
+      // Pattern 2: ..X / .XX / XXX (slots 2,4,5,6,7,8)
+      if (first_item == I_cobblestone && first_col == 2 && first_row == 0 &&
+          player->craft_items[4] == first_item &&
+          player->craft_items[5] == first_item &&
+          player->craft_items[6] == first_item &&
+          player->craft_items[7] == first_item &&
+          player->craft_items[8] == first_item) {
+        *item = I_cobblestone_stairs;
+        *count = 4;
+        return;
+      }
       break;
 
     case 7:

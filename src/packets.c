@@ -583,9 +583,8 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
   chunk_debug_record_enqueue_result(client_fd, _x, _z, 1);
 
   // Sending block updates for special blocks and torches.
-  // Stairs, doors, chests, and furnaces are NOT in chunk_section[] because
-  // their block state IDs don't fit in the fixed 256-entry global palette.
-  // They are sent as individual block update packets here with correct state.
+  // Doors, trapdoors, stairs, chests, and furnaces need explicit state IDs
+  // from the unified special block table, so we send precise per-block updates here.
 
   for (int i = 0; i < block_changes_count; i ++) {
     if (block_changes[i].block == 0xFF) continue;
@@ -595,6 +594,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
       !isStairBlock(block_changes[i].block)
       #ifdef ALLOW_DOORS
       && !isDoorBlock(block_changes[i].block)
+      && !isTrapdoorBlock(block_changes[i].block)
       #endif
     ) continue;
 
@@ -635,6 +635,18 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
       sendDoorUpdate(client_fd, block_changes[i].x, block_changes[i].y + 1, block_changes[i].z, block_changes[i + 1].block, 1, open, direction, hinge);
       // Skip the next two entries (upper half and state data)
       i += 2;
+      continue;
+    }
+    #endif
+
+    #ifdef ALLOW_DOORS
+    if (isTrapdoorBlock(block_changes[i].block)) {
+      uint16_t state = special_block_get_state(block_changes[i].x, block_changes[i].y, block_changes[i].z);
+      uint8_t open = trapdoor_get_open(state);
+      uint8_t half = trapdoor_get_half(state);
+      uint8_t direction = trapdoor_get_direction(state);
+
+      sendTrapdoorUpdate(client_fd, block_changes[i].x, block_changes[i].y, block_changes[i].z, block_changes[i].block, open, direction, half);
       continue;
     }
     #endif

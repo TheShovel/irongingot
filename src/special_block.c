@@ -109,7 +109,8 @@ uint8_t is_stair_block(uint8_t block) {
         block == B_dark_oak_stairs ||
         block == B_mangrove_stairs ||
         block == B_cherry_stairs ||
-        block == B_pale_oak_stairs
+        block == B_pale_oak_stairs ||
+        block == B_cobblestone_stairs
     );
 }
 
@@ -213,6 +214,9 @@ uint16_t get_furnace_state_id(uint8_t direction, uint8_t lit) {
 uint8_t door_get_open(uint16_t state)     { return (state >> 0) & 1; }
 uint8_t door_get_hinge(uint16_t state)    { return (state >> 1) & 1; }
 uint8_t door_get_direction(uint16_t state){ return (state >> 2) & 3; }
+uint8_t trapdoor_get_open(uint16_t state) { return door_get_open(state); }
+uint8_t trapdoor_get_half(uint16_t state) { return door_get_hinge(state); }
+uint8_t trapdoor_get_direction(uint16_t state) { return door_get_direction(state); }
 uint8_t stair_get_half(uint16_t state)    { return (state >> 0) & 3; }
 uint8_t stair_get_direction(uint16_t state){ return (state >> 2) & 3; }
 uint8_t oriented_get_direction(uint16_t state) { return state & 3; }
@@ -222,6 +226,9 @@ uint8_t furnace_get_lit(uint16_t state)   { return (state >> 2) & 1; }
 /* Encode helpers */
 uint16_t door_encode_state(uint8_t open, uint8_t hinge, uint8_t direction) {
     return (uint16_t)((direction << 2) | (hinge << 1) | open);
+}
+uint16_t trapdoor_encode_state(uint8_t open, uint8_t half, uint8_t direction) {
+    return door_encode_state(open, half, direction);
 }
 uint16_t stair_encode_state(uint8_t half, uint8_t direction) {
     return (uint16_t)((direction << 2) | (half & 3));

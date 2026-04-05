@@ -19,6 +19,12 @@
  *   Bit  4:     half (0=lower, 1=upper) -- derived from Y, not stored
  *   Bits 5-15:  unused
  *
+ * Trapdoors (all *_trapdoor blocks):
+ *   Bits 0:     open (0=closed, 1=open)
+ *   Bit  1:     half (0=bottom, 1=top)
+ *   Bits 2-3:   direction (0=north, 1=east, 2=south, 3=west)
+ *   Bits 4-15:  unused
+ *
  * Stairs (B_oak_stairs, B_spruce_stairs, B_birch_stairs, B_cobblestone_stairs):
  *   Bits 0-1:   half (0=bottom, 1=top)
  *   Bits 2-3:   direction (0=north, 1=east, 2=south, 3=west)
@@ -72,6 +78,9 @@ uint8_t is_oriented_block(uint8_t block);
 uint8_t door_get_open(uint16_t state);
 uint8_t door_get_hinge(uint16_t state);
 uint8_t door_get_direction(uint16_t state);
+uint8_t trapdoor_get_open(uint16_t state);
+uint8_t trapdoor_get_half(uint16_t state);
+uint8_t trapdoor_get_direction(uint16_t state);
 uint8_t stair_get_half(uint16_t state);
 uint8_t stair_get_direction(uint16_t state);
 uint8_t oriented_get_direction(uint16_t state);
@@ -80,6 +89,7 @@ uint8_t furnace_get_lit(uint16_t state);
 
 /* State encode helpers */
 uint16_t door_encode_state(uint8_t open, uint8_t hinge, uint8_t direction);
+uint16_t trapdoor_encode_state(uint8_t open, uint8_t half, uint8_t direction);
 uint16_t stair_encode_state(uint8_t half, uint8_t direction);
 uint16_t oriented_encode_state(uint8_t direction);
 uint16_t furnace_encode_state(uint8_t direction, uint8_t lit);

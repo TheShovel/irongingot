@@ -135,6 +135,9 @@ const blockWhitelist = [
   "mangrove_fence",
   "cherry_fence",
   "pale_oak_fence",
+  // Cobblestone
+  "cobblestone_slab",
+  "cobblestone_stairs",
   // Essential blocks referenced in code
   "torch",
   "dandelion",

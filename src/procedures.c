@@ -1257,6 +1257,19 @@ void sendDoorUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, 
   endPacket(client_fd);
 }
 
+// Get trapdoor state ID for network packet
+uint16_t getTrapdoorStateId (uint8_t block, uint8_t open, uint8_t direction, uint8_t half) {
+  return get_trapdoor_state_id(block, open, direction, half);
+}
+
+// Send trapdoor block update with proper state
+void sendTrapdoorUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, uint8_t open, uint8_t direction, uint8_t half) {
+  startPacket(client_fd, 0x08);
+  writeUint64(client_fd, (((int64_t)x & 0x3FFFFFF) << 38) | (((int64_t)z & 0x3FFFFFF) << 12) | (y & 0xFFF));
+  writeVarInt(client_fd, get_trapdoor_state_id(block, open, direction, half));
+  endPacket(client_fd);
+}
+
 // Get oriented block state ID for network packet
 uint16_t getOrientedStateId (uint8_t block, uint8_t direction) {
   return get_oriented_state_id(block, direction);
@@ -1753,23 +1766,20 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     // Trapdoor toggle on right-click
     else if (isTrapdoorBlock(target)) {
       uint16_t state = special_block_get_state(x, y, z);
-      uint8_t open = door_get_open(state);
-      uint8_t half = door_get_hinge(state);  // reuse: half stored in hinge position
-      uint8_t direction = door_get_direction(state);
+      uint8_t open = trapdoor_get_open(state);
+      uint8_t half = trapdoor_get_half(state);
+      uint8_t direction = trapdoor_get_direction(state);
 
       // Toggle open/closed
       open ^= 1;
-      state = door_encode_state(open, half, direction);
+      state = trapdoor_encode_state(open, half, direction);
       special_block_set_state(x, y, z, target, state);
 
       // Broadcast trapdoor update to all players
       for (int j = 0; j < MAX_PLAYERS; j++) {
         if (player_data[j].client_fd == -1) continue;
         if (player_data[j].flags & 0x20) continue;
-        startPacket(player_data[j].client_fd, 0x08);
-        writeUint64(player_data[j].client_fd, (((int64_t)x & 0x3FFFFFF) << 38) | (((int64_t)z & 0x3FFFFFF) << 12) | (y & 0xFFF));
-        writeVarInt(player_data[j].client_fd, get_trapdoor_state_id(target, open, direction, half));
-        endPacket(player_data[j].client_fd);
+        sendTrapdoorUpdate(player_data[j].client_fd, x, y, z, target, open, direction, half);
       }
       return;
     }
@@ -1973,17 +1983,14 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       if (makeBlockChange(x, y, z, block)) return;
 
       // Store trapdoor state (open=0 by default)
-      uint16_t state = door_encode_state(0, half, direction);
+      uint16_t state = trapdoor_encode_state(0, half, direction);
       special_block_set_state(x, y, z, block, state);
 
       // Broadcast trapdoor update
       for (int j = 0; j < MAX_PLAYERS; j++) {
         if (player_data[j].client_fd == -1) continue;
         if (player_data[j].flags & 0x20) continue;
-        startPacket(player_data[j].client_fd, 0x08);
-        writeUint64(player_data[j].client_fd, (((int64_t)x & 0x3FFFFFF) << 38) | (((int64_t)z & 0x3FFFFFF) << 12) | (y & 0xFFF));
-        writeVarInt(player_data[j].client_fd, get_trapdoor_state_id(block, 0, direction, half));
-        endPacket(player_data[j].client_fd);
+        sendTrapdoorUpdate(player_data[j].client_fd, x, y, z, block, 0, direction, half);
       }
 
       *count -= 1;
