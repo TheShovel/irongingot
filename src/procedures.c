@@ -1028,7 +1028,6 @@ uint8_t isColumnBlock (uint8_t block) {
     block == B_fern ||
     block == B_dead_bush ||
     block == B_bush ||
-    block == B_sand ||
     block == B_torch ||
     block == B_oak_sapling ||
     block == B_dandelion ||
