@@ -52,7 +52,12 @@
       "Bash(tar *)",
       "Bash(git tag *)",
       "Bash(unzip *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(musl-gcc *)",
+      "Bash(eof)",
+      "Bash(ldd *)",
+      "Bash(tail *)",
+      "Bash(wait *)"
     ]
   },
   "$version": 3

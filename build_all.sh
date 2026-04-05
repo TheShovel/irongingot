@@ -32,22 +32,69 @@ LIBS="-lm -lz -pthread"
 # Create build directory
 mkdir -p build
 
-# ─── Linux build ───
-echo "=== Building Linux binary ==="
+# ─── Linux build (glibc) ───
+echo "=== Building Linux binary (glibc) ==="
 gcc ${SRC_FILES[@]} $CFLAGS $INCLUDES -o build/bareiron $LIBS -pthread
 echo "Linux binary: build/bareiron"
 
-# Package Linux release
-echo "=== Packaging Linux release ==="
-LINUX_DIR="build/irongingot-v${VERSION}-linux"
-rm -rf "$LINUX_DIR"
-mkdir -p "$LINUX_DIR"
-cp build/bareiron "$LINUX_DIR/"
-cp server.conf "$LINUX_DIR/"
-cp serverIcon.png "$LINUX_DIR/"
-(cd build && zip -rq "irongingot-v${VERSION}-linux.zip" "irongingot-v${VERSION}-linux")
-rm -rf "$LINUX_DIR"
-echo "Linux release: build/irongingot-v${VERSION}-linux.zip"
+# ─── Linux build (musl) ───
+MUSL_BUILT=0
+if command -v musl-gcc &>/dev/null; then
+  echo "=== Building Linux binary (musl) ==="
+  # Bundle zlib sources to avoid glibc headers conflict
+  ZLIB_SRCS=(
+    third_party/zlib/adler32.c
+    third_party/zlib/compress.c
+    third_party/zlib/crc32.c
+    third_party/zlib/deflate.c
+    third_party/zlib/gzclose.c
+    third_party/zlib/gzlib.c
+    third_party/zlib/gzread.c
+    third_party/zlib/gzwrite.c
+    third_party/zlib/infback.c
+    third_party/zlib/inffast.c
+    third_party/zlib/inflate.c
+    third_party/zlib/inftrees.c
+    third_party/zlib/trees.c
+    third_party/zlib/uncompr.c
+    third_party/zlib/zutil.c
+  )
+  MUSL_INCLUDES="$INCLUDES -Ithird_party/zlib"
+  musl-gcc ${SRC_FILES[@]} ${ZLIB_SRCS[@]} $CFLAGS -D_GNU_SOURCE $MUSL_INCLUDES -o build/bareiron-musl -static -lpthread -lm
+  echo "Linux musl binary: build/bareiron-musl"
+  MUSL_BUILT=1
+else
+  echo "SKIP: musl-gcc not found. Install with:"
+  echo "  Debian/Ubuntu: sudo apt install musl-tools"
+  echo "  Arch:          sudo pacman -S musl"
+  echo "  Fedora:        sudo dnf install musl-gcc"
+fi
+
+# Package Linux release (glibc)
+echo "=== Packaging Linux release (glibc) ==="
+GLIBC_DIR="build/irongingot-v${VERSION}-linux-glibc"
+rm -rf "$GLIBC_DIR"
+mkdir -p "$GLIBC_DIR"
+cp build/bareiron "$GLIBC_DIR/"
+cp server.conf "$GLIBC_DIR/"
+cp serverIcon.png "$GLIBC_DIR/"
+(cd build && zip -rq "irongingot-v${VERSION}-linux-glibc.zip" "irongingot-v${VERSION}-linux-glibc")
+rm -rf "$GLIBC_DIR"
+echo "Linux glibc release: build/irongingot-v${VERSION}-linux-glibc.zip"
+
+# Package Linux release (musl)
+if [ "$MUSL_BUILT" -eq 1 ]; then
+  echo "=== Packaging Linux release (musl) ==="
+  MUSL_DIR="build/irongingot-v${VERSION}-linux-musl"
+  rm -rf "$MUSL_DIR"
+  mkdir -p "$MUSL_DIR"
+  cp build/bareiron-musl "$MUSL_DIR/"
+  cp server.conf "$MUSL_DIR/"
+  cp serverIcon.png "$MUSL_DIR/"
+  (cd build && zip -rq "irongingot-v${VERSION}-linux-musl.zip" "irongingot-v${VERSION}-linux-musl")
+  rm -rf "$MUSL_DIR"
+  echo "Linux musl release: build/irongingot-v${VERSION}-linux-musl.zip"
+fi
 
 # ─── Windows build (cross-compile with mingw) ───
 echo "=== Building Windows binary ==="

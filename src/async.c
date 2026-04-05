@@ -1,11 +1,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <unistd.h>
 
 #ifdef _WIN32
   #include <windows.h>
-#else
-  #include <sys/sysinfo.h>
 #endif
 
 #include "thread_pool.h"
@@ -198,6 +197,7 @@ int get_cpu_count(void) {
   GetSystemInfo(&sysinfo);
   return (int)sysinfo.dwNumberOfProcessors;
 #else
-  return get_nprocs();
+  long nproc = sysconf(_SC_NPROCESSORS_ONLN);
+  return (nproc > 0) ? (int)nproc : 1;
 #endif
 }

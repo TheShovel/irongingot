@@ -2,7 +2,7 @@
 
 **irongingot** is a fork of [bareiron](https://github.com/p2r3/bareiron) - a minimalist Minecraft server for low-spec hardware. This fork keeps the low memory usage and adds some much-needed features.
 
-Runs on as low as **40MB of RAM**!!!
+Runs on as low as **~7MB of RAM** !!!
 
 > [!NOTE]
 > Unlike the original bareiron, **ESP32 is not supported** in this fork.
@@ -24,6 +24,7 @@ Runs on as low as **40MB of RAM**!!!
 - **Config file** - Change settings in `server.conf` instead of recompiling
 - **Multithreaded chunk gen** - Chunk generation runs on a separate thread
 - **Infinite block changes** - Optional unlimited building with dynamic memory allocation
+- **Musl libc support** - Build with `--musl` flag for ~7MB RAM usage (vs ~30MB with glibc)
 - **Performance fixes** - Various optimizations for chunk streaming and packet handling
 
 ## Quick Start
@@ -53,16 +54,21 @@ Before compiling, you'll need to dump registry data from a vanilla Minecraft ser
 
 | Platform | Required Packages |
 |----------|-------------------|
-| **Linux** | `gcc`, `zlib1g-dev` (Debian/Ubuntu) or `zlib` (Arch) |
+| **Linux (glibc)** | `gcc`, `zlib1g-dev` (Debian/Ubuntu) or `zlib` (Arch) |
+| **Linux (musl)** | `musl-tools` (Debian/Ubuntu), `musl` (Arch), or `musl-gcc` (Fedora) |
 | **Windows (cross-compile)** | `mingw-w64` (zlib is bundled, no extra package needed) |
 | **Windows (native/MSYS2)** | `mingw-w64-x86_64-gcc`, `mingw-w64-x86_64-zlib` |
 
 ### Build Commands
 
-- **Linux + Windows (cross-compile):** `./build_all.sh` — outputs to `build/`
-- **Linux only:** `gcc` + `./build.sh`
+- **Linux + Windows (cross-compile):** `./build_all.sh` — outputs to `build/` (includes both glibc and musl binaries if musl-tools are installed)
+- **Linux (glibc):** `./build.sh` — dynamically linked, ~30MB RAM usage
+- **Linux (musl, recommended):** `./build.sh --musl` — statically linked, ~7MB RAM usage
 - **Windows (native):** MSYS2 MINGW64 shell, install `mingw-w64-x86_64-gcc`, run `./build.sh`
 - **Windows (32-bit):** MSYS2 MINGW64 shell, install `mingw-w64-cross-gcc`, run `./build.sh --9x`
+
+> [!TIP]
+> The musl build is **strongly recommended** for production use. It produces a fully static binary with ~75% lower memory footprint.
 
 ## Configuration
 
