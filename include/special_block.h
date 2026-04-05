@@ -57,6 +57,7 @@ uint8_t special_block_has_entry(short x, uint8_t y, short z);
 
 /* Block state ID computation for network packets */
 uint16_t get_door_state_id(uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge);
+uint16_t get_trapdoor_state_id(uint8_t block, uint8_t open, uint8_t direction, uint8_t half);
 uint16_t get_stair_state_id(uint8_t block, uint8_t half, uint8_t direction);
 uint16_t get_oriented_state_id(uint8_t block, uint8_t direction);
 uint16_t get_furnace_state_id(uint8_t direction, uint8_t lit);
@@ -64,6 +65,7 @@ uint16_t get_furnace_state_id(uint8_t direction, uint8_t lit);
 /* Block type queries */
 uint8_t is_door_block(uint8_t block);
 uint8_t is_stair_block(uint8_t block);
+uint8_t is_trapdoor_block(uint8_t block);
 uint8_t is_oriented_block(uint8_t block);
 
 /* State decode helpers */

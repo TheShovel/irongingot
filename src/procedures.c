@@ -1195,6 +1195,7 @@ uint8_t getItemStackSize (uint16_t item) {
  * All actual logic is in special_block.c */
 uint8_t isDoorBlock (uint8_t block) { return is_door_block(block); }
 uint8_t isStairBlock (uint8_t block) { return is_stair_block(block); }
+uint8_t isTrapdoorBlock (uint8_t block) { return is_trapdoor_block(block); }
 uint8_t isOrientedBlock (uint8_t block) { return is_oriented_block(block); }
 uint8_t isDoorItem (uint16_t item) {
   return (
@@ -1749,6 +1750,29 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       return;
     }
     #endif
+    // Trapdoor toggle on right-click
+    else if (isTrapdoorBlock(target)) {
+      uint16_t state = special_block_get_state(x, y, z);
+      uint8_t open = door_get_open(state);
+      uint8_t half = door_get_hinge(state);  // reuse: half stored in hinge position
+      uint8_t direction = door_get_direction(state);
+
+      // Toggle open/closed
+      open ^= 1;
+      state = door_encode_state(open, half, direction);
+      special_block_set_state(x, y, z, target, state);
+
+      // Broadcast trapdoor update to all players
+      for (int j = 0; j < MAX_PLAYERS; j++) {
+        if (player_data[j].client_fd == -1) continue;
+        if (player_data[j].flags & 0x20) continue;
+        startPacket(player_data[j].client_fd, 0x08);
+        writeUint64(player_data[j].client_fd, (((int64_t)x & 0x3FFFFFF) << 38) | (((int64_t)z & 0x3FFFFFF) << 12) | (y & 0xFFF));
+        writeVarInt(player_data[j].client_fd, get_trapdoor_state_id(target, open, direction, half));
+        endPacket(player_data[j].client_fd);
+      }
+      return;
+    }
   }
 
   // If the selected slot doesn't hold any items, exit
@@ -1908,6 +1932,66 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     }
   }
   #endif
+
+  // Special handling for trapdoor placement
+  if (isTrapdoorBlock(block)) {
+    // Calculate trapdoor direction based on placement face
+    uint8_t direction;
+    uint8_t half; // 0 = bottom half, 1 = top half
+
+    if (face == 0) {
+      // Clicked bottom face — place on top half
+      half = 1;
+      if (player->yaw >= -64 && player->yaw < 0) direction = 0;
+      else if (player->yaw >= 0 && player->yaw < 64) direction = 1;
+      else if (player->yaw >= 64 || player->yaw < -96) direction = 2;
+      else direction = 3;
+    } else if (face == 1) {
+      // Clicked top face — place on bottom half
+      half = 0;
+      if (player->yaw >= -64 && player->yaw < 0) direction = 0;
+      else if (player->yaw >= 0 && player->yaw < 64) direction = 1;
+      else if (player->yaw >= 64 || player->yaw < -96) direction = 2;
+      else direction = 3;
+    } else {
+      // Clicked side face — trapdoor goes on side, bottom half
+      half = 0;
+      switch (face) {
+        case 2: direction = 0; break;  // North face
+        case 3: direction = 2; break;  // South face
+        case 4: direction = 3; break;  // West face
+        case 5: direction = 1; break;  // East face
+        default: direction = 0; break;
+      }
+    }
+
+    // Check placement validity
+    if (
+      !(x == player->x && y == player->y && z == player->z) &&
+      isReplaceableBlock(getBlockAt(x, y, z))
+    ) {
+      if (makeBlockChange(x, y, z, block)) return;
+
+      // Store trapdoor state (open=0 by default)
+      uint16_t state = door_encode_state(0, half, direction);
+      special_block_set_state(x, y, z, block, state);
+
+      // Broadcast trapdoor update
+      for (int j = 0; j < MAX_PLAYERS; j++) {
+        if (player_data[j].client_fd == -1) continue;
+        if (player_data[j].flags & 0x20) continue;
+        startPacket(player_data[j].client_fd, 0x08);
+        writeUint64(player_data[j].client_fd, (((int64_t)x & 0x3FFFFFF) << 38) | (((int64_t)z & 0x3FFFFFF) << 12) | (y & 0xFFF));
+        writeVarInt(player_data[j].client_fd, get_trapdoor_state_id(block, 0, direction, half));
+        endPacket(player_data[j].client_fd);
+      }
+
+      *count -= 1;
+      if (*count == 0) *item = 0;
+      sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
+      return;
+    }
+  }
 
   // Special handling for oriented block placement (chests, furnaces)
   if (isOrientedBlock(block)) {

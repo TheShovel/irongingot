@@ -135,16 +135,6 @@ const blockWhitelist = [
   "mangrove_fence",
   "cherry_fence",
   "pale_oak_fence",
-  // Wood fence gates (all types)
-  "oak_fence_gate",
-  "spruce_fence_gate",
-  "birch_fence_gate",
-  "jungle_fence_gate",
-  "acacia_fence_gate",
-  "dark_oak_fence_gate",
-  "mangrove_fence_gate",
-  "cherry_fence_gate",
-  "pale_oak_fence_gate",
   // Essential blocks referenced in code
   "torch",
   "dandelion",
@@ -243,6 +233,9 @@ async function extractItemsAndBlocks() {
   const blocks = {},
     items = {};
 
+  // Trapdoor state lookup tables: { name: [16 state IDs] }
+  const trapdoorStateTables = {};
+
   for (const entry of sortedBlocks) {
     const defaultState = entry[1].states.find((c) => c.default);
     if (!defaultState) continue;
@@ -257,6 +250,31 @@ async function extractItemsAndBlocks() {
     if (found) continue;
     // Register the block ID
     blocks[entry[0].replace("minecraft:", "")] = defaultState.id;
+
+    // Extract trapdoor state IDs for lookup table generation
+    if (entry[0].endsWith("_trapdoor")) {
+      const name = entry[0].replace("minecraft:", "");
+      const facingOrder = ["north", "south", "west", "east"];
+      const halfOrder = ["bottom", "top"];
+      const openOrder = [false, true];
+      const trapdoorRow = [];
+      for (const f of facingOrder) {
+        for (const h of halfOrder) {
+          for (const o of openOrder) {
+            const st = entry[1].states.find(
+              (s) =>
+                s.properties.facing === f &&
+                s.properties.half === h &&
+                s.properties.open === String(o) &&
+                s.properties.waterlogged === "false" &&
+                s.properties.powered === "false",
+            );
+            trapdoorRow.push(st ? st.id : 0);
+          }
+        }
+      }
+      trapdoorStateTables[name] = trapdoorRow;
+    }
     // Include "snowy" variants of blocks as well
     if ("properties" in defaultState && "snowy" in defaultState.properties) {
       const snowyState = entry[1].states.find((c) => c.properties.snowy);
@@ -324,6 +342,7 @@ async function extractItemsAndBlocks() {
     mapping,
     mappingWithOverrides,
     blockRegistry,
+    trapdoorStateTables,
   };
 }
 
@@ -566,6 +585,21 @@ async function convert() {
     Object.values(itemsAndBlocks.palette),
   );
 
+  // Build trapdoor state table and block-to-row mapping
+  // Map palette INDEX (0-255) to row index in trapdoor_state_rows
+  const trapdoorRowMap = [];
+  for (let i = 0; i < 256; i++) trapdoorRowMap.push(0);
+  const trapdoorRows = [];
+  const paletteEntries = Object.keys(itemsAndBlocks.palette);
+  for (let paletteIdx = 0; paletteIdx < paletteEntries.length; paletteIdx++) {
+    const name = paletteEntries[paletteIdx];
+    const row = itemsAndBlocks.trapdoorStateTables[name];
+    if (row && row.length === 16) {
+      trapdoorRowMap[paletteIdx] = trapdoorRows.length;
+      trapdoorRows.push(row);
+    }
+  }
+
   const sourceCode = `\
 #include <stdint.h>
 #include "registries.h"
@@ -596,6 +630,13 @@ uint8_t I_to_B (uint16_t item) {
   }
   return 0;
 }
+
+// Trapdoor state IDs: [block_palette_index][16 states]
+// State layout: facing(n,s,w,e) × half(bottom,top) × open(false,true), non-waterlogged
+const uint8_t trapdoor_block_to_row[] = { ${trapdoorRowMap.join(", ")} };
+const uint16_t trapdoor_state_rows[${trapdoorRows.length}][16] = {
+  ${trapdoorRows.map((r) => `{ ${r.join(", ")} }`).join(",\n  ")}
+};
 `;
 
   const headerCode = `\
@@ -612,6 +653,10 @@ extern uint16_t block_palette[256]; // Block palette
 extern uint8_t network_block_palette[${networkBlockPalette.length}]; // Block palette as VarInt buffer
 extern uint16_t B_to_I[256]; // Block-to-item mapping
 uint8_t I_to_B (uint16_t item); // Item-to-block mapping
+
+// Trapdoor state lookup (generated from registry data)
+extern const uint8_t trapdoor_block_to_row[256];
+extern const uint16_t trapdoor_state_rows[][16];
 
 // Block identifiers
 ${Object.keys(itemsAndBlocks.palette)

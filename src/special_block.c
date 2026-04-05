@@ -171,6 +171,20 @@ uint16_t get_stair_state_id(uint8_t block, uint8_t half, uint8_t direction) {
     return base_id + (uint16_t)offset;
 }
 
+uint16_t get_trapdoor_state_id(uint8_t block, uint8_t open, uint8_t direction, uint8_t half) {
+    /*
+     * Use registry-generated lookup table.
+     * State layout: facing(n,s,w,e) × half(bottom,top) × open(false,true), non-waterlogged, non-powered
+     * Internal direction: 0=north, 1=east, 2=south, 3=west
+     * Table facing order: 0=north, 1=south, 2=west, 3=east
+     */
+    static const uint8_t table_facing[4] = {0, 3, 1, 2};  // internal(n,e,s,w) → table(n,s,w,e)
+    uint8_t tf = table_facing[direction];
+    uint8_t idx = tf * 4 + half * 2 + open;
+    uint8_t row = trapdoor_block_to_row[block];
+    return trapdoor_state_rows[row][idx];
+}
+
 uint16_t get_oriented_state_id(uint8_t block, uint8_t direction) {
     uint16_t base_id = block_palette[block];
     if (block == B_chest) {
