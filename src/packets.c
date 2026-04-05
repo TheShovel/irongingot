@@ -27,6 +27,34 @@
 #include "chunk_generator.h"
 #include "special_block.h"
 
+static PlayerAppearance *findPlayerAppearanceByUuid(const uint8_t *uuid) {
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (memcmp(player_data[i].uuid, uuid, 16) != 0) continue;
+    return &player_appearance[i];
+  }
+  return NULL;
+}
+
+static void writePlayerProfileProperties(int client_fd, PlayerAppearance *appearance) {
+  int property_count = (appearance && appearance->has_texture) ? 1 : 0;
+  writeVarInt(client_fd, property_count);
+  if (!property_count) return;
+
+  static const char property_name[] = "textures";
+
+  writeVarInt(client_fd, sizeof(property_name) - 1);
+  send_all(client_fd, property_name, sizeof(property_name) - 1);
+
+  writeVarInt(client_fd, appearance->texture_value_len);
+  send_all(client_fd, appearance->texture_value, appearance->texture_value_len);
+
+  writeByte(client_fd, appearance->has_signature);
+  if (!appearance->has_signature) return;
+
+  writeVarInt(client_fd, appearance->texture_signature_len);
+  send_all(client_fd, appearance->texture_signature, appearance->texture_signature_len);
+}
+
 // S->C Status Response (server list ping)
 int sc_statusResponse (int client_fd) {
 
@@ -121,12 +149,13 @@ int sc_setCompression (int client_fd, int threshold) {
 int sc_loginSuccess (int client_fd, uint8_t *uuid, char *name) {
   printf("Sending Login Success...\n\n");
 
+  PlayerAppearance *appearance = findPlayerAppearanceByUuid(uuid);
   uint8_t name_length = strlen(name);
   startPacket(client_fd, 0x02);
   send_all(client_fd, uuid, 16);
   writeVarInt(client_fd, name_length);
   send_all(client_fd, name, name_length);
-  writeVarInt(client_fd, 0);
+  writePlayerProfileProperties(client_fd, appearance);
 
   endPacket(client_fd);
 
@@ -135,6 +164,8 @@ int sc_loginSuccess (int client_fd, uint8_t *uuid, char *name) {
 
 int cs_clientInformation (int client_fd) {
   int tmp;
+  uint8_t skin_parts;
+  uint8_t main_hand;
   printf("Received Client Information:\n");
   readString(client_fd);
   if (recv_count == -1) return 1;
@@ -151,10 +182,12 @@ int cs_clientInformation (int client_fd) {
   else printf("  Chat colors: off\n");
   tmp = readByte(client_fd);
   if (recv_count == -1) return 1;
-  printf("  Skin parts: %d\n", tmp);
+  skin_parts = (uint8_t)tmp;
+  printf("  Skin parts: %d\n", skin_parts);
   tmp = readVarInt(client_fd);
   if (recv_count == -1) return 1;
-  if (tmp) printf("  Main hand: right\n");
+  main_hand = tmp ? 1 : 0;
+  if (main_hand) printf("  Main hand: right\n");
   else printf("  Main hand: left\n");
   tmp = readByte(client_fd);
   if (recv_count == -1) return 1;
@@ -167,6 +200,8 @@ int cs_clientInformation (int client_fd) {
   tmp = readVarInt(client_fd);
   if (recv_count == -1) return 1;
   printf("  Particles: %d\n\n", tmp);
+
+  updatePlayerAppearanceClientSettings(client_fd, skin_parts, main_hand);
   return 0;
 }
 
@@ -1153,19 +1188,20 @@ int cs_closeContainer (int client_fd) {
 
 // S->C Player Info Update, "Add Player" action
 int sc_playerInfoUpdateAddPlayer (int client_fd, PlayerData player) {
+  PlayerAppearance *appearance = findPlayerAppearanceByUuid(player.uuid);
 
   startPacket(client_fd, 0x3F); // Packet ID
 
   writeByte(client_fd, 0x01); // EnumSet: Add Player
-  writeByte(client_fd, 1); // Player count (1 per packet)
+  writeVarInt(client_fd, 1); // Player count (1 per packet)
 
   // Player UUID
   send_all(client_fd, player.uuid, 16);
   // Player name
-  writeByte(client_fd, strlen(player.name));
-  send_all(client_fd, player.name, strlen(player.name));
-  // Properties (don't send any)
-  writeByte(client_fd, 0);
+  int player_name_len = (int)strlen(player.name);
+  writeVarInt(client_fd, player_name_len);
+  send_all(client_fd, player.name, player_name_len);
+  writePlayerProfileProperties(client_fd, appearance);
 
   endPacket(client_fd);
 

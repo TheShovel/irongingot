@@ -10,6 +10,7 @@ typedef struct {
   int max_players;
   int compression_threshold;
   int network_timeout;
+  int mojang_api_timeout_ms;
 
   // Game settings
   int gamemode;              // 0 - survival; 1 - creative; 2 - adventure; 3 - spectator
@@ -50,6 +51,7 @@ typedef struct {
   int enable_flight;
   int enable_pickup_animation;
   int enable_cactus_damage;
+  int fetch_skins_from_mojang;
 
   // Debug flags
   int log_unknown_packets;

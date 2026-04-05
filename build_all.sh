@@ -28,13 +28,40 @@ SRC_FILES=(
 INCLUDES="-Iinclude -Isrc/cubiomes"
 CFLAGS="-O3 -ffast-math"
 LIBS="-lm -lz -pthread"
+MOJANG_SKIN_CFLAGS=""
+MOJANG_SKIN_LIBS=""
+
+detect_mojang_skin_support() {
+  if command -v curl-config >/dev/null 2>&1; then
+    local cflags libs
+    cflags="$(curl-config --cflags 2>/dev/null)"
+    libs="$(curl-config --libs 2>/dev/null)"
+    if [ -n "$libs" ]; then
+      MOJANG_SKIN_CFLAGS="-DMOJANG_SKIN_LOOKUP_AVAILABLE $cflags"
+      MOJANG_SKIN_LIBS="$libs"
+      return 0
+    fi
+  fi
+
+  if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libcurl; then
+    MOJANG_SKIN_CFLAGS="-DMOJANG_SKIN_LOOKUP_AVAILABLE $(pkg-config --cflags libcurl)"
+    MOJANG_SKIN_LIBS="$(pkg-config --libs libcurl)"
+    return 0
+  fi
+
+  return 1
+}
+
+if ! detect_mojang_skin_support; then
+  echo "SKIP: libcurl not found. Mojang skin lookup will be disabled in the glibc build."
+fi
 
 # Create build directory
 mkdir -p build
 
 # ─── Linux build (glibc) ───
 echo "=== Building Linux binary (glibc) ==="
-gcc ${SRC_FILES[@]} $CFLAGS $INCLUDES -o build/bareiron $LIBS -pthread
+gcc ${SRC_FILES[@]} $CFLAGS $MOJANG_SKIN_CFLAGS $INCLUDES -o build/bareiron $LIBS -pthread $MOJANG_SKIN_LIBS
 echo "Linux binary: build/bareiron"
 
 # ─── Linux build (musl) ───

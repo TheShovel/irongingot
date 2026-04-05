@@ -43,6 +43,7 @@
 #include "serialize.h"
 #include "chunk_generator.h"
 #include "config.h"
+#include "mojang.h"
 #include <zlib.h>
 
 #ifndef _WIN32
@@ -350,6 +351,7 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
           if (player_data[i].flags & 0x20) continue;
           sc_playerInfoUpdateAddPlayer(client_fd, player_data[i]);
           sc_spawnEntityPlayer(client_fd, player_data[i]);
+          sendPlayerMetadata(client_fd, &player_data[i]);
         }
 
         // Send information about all other entities (mobs):
@@ -666,6 +668,7 @@ int main () {
   printf("  View Distance: %d\n", config.view_distance);
   printf("  Gamemode: %d\n", config.gamemode);
   printf("  Chunk Cache Size: %d\n", config.chunk_cache_size);
+  printf("  Mojang Skin Lookup: %s\n", config.fetch_skins_from_mojang ? "on" : "off");
   printf("  MOTD: %s\n", config.motd);
   printf("\n");
 
@@ -682,6 +685,10 @@ int main () {
   // Initialize world generation
   printf("Initializing world generation...\n");
   printf("\n");
+
+  // Initialize Mojang profile/session lookups before worker threads start.
+  init_mojang_api();
+  printf("Mojang Skin Backend: %s\n\n", mojang_skin_backend_name());
 
   // Initialize global thread pool for parallel operations
   init_global_thread_pool();
@@ -732,6 +739,7 @@ int main () {
     client_states[i].queued_chunk_bytes = 0;
     client_states[i].connection_generation = 1;
     player_data[i].client_fd = -1;
+    resetPlayerAppearance(i);
   }
 
   // Start packet sender workers (asynchronous outbound network writes)
@@ -1094,6 +1102,8 @@ int main () {
   shutdown_global_thread_pool();
   // Shutdown packet sender workers
   shutdown_packet_sender_workers();
+  // Shutdown Mojang API resources
+  shutdown_mojang_api();
 
   close(server_fd);
  

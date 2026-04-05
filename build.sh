@@ -25,6 +25,29 @@ esac
 # Default compiler
 compiler="gcc"
 musl=0
+mojang_skin_cflags=""
+mojang_skin_libs=""
+
+detect_mojang_skin_support() {
+  if command -v curl-config >/dev/null 2>&1; then
+    local cflags libs
+    cflags="$(curl-config --cflags 2>/dev/null)"
+    libs="$(curl-config --libs 2>/dev/null)"
+    if [ -n "$libs" ]; then
+      mojang_skin_cflags="-DMOJANG_SKIN_LOOKUP_AVAILABLE $cflags"
+      mojang_skin_libs="$libs"
+      return 0
+    fi
+  fi
+
+  if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libcurl; then
+    mojang_skin_cflags="-DMOJANG_SKIN_LOOKUP_AVAILABLE $(pkg-config --cflags libcurl)"
+    mojang_skin_libs="$(pkg-config --libs libcurl)"
+    return 0
+  fi
+
+  return 1
+}
 
 # Handle arguments
 for arg in "$@"; do
@@ -53,6 +76,12 @@ for arg in "$@"; do
   esac
 done
 
+if [ "$musl" -eq 0 ] && [[ "$OSTYPE" != msys* && "$OSTYPE" != cygwin* && "$OSTYPE" != win32* ]]; then
+  if ! detect_mojang_skin_support; then
+    echo "Warning: libcurl not found; Mojang skin lookup will be disabled in this build."
+  fi
+fi
+
 rm -f "bareiron$exe"
 
 # Source files
@@ -64,7 +93,7 @@ ZLIB_INCLUDE="-Ithird_party/zlib"
 if [ "$musl" -eq 1 ]; then
   eval $compiler $SRC_LIST $ZLIB_SRCS -O3 -ffast-math -D_GNU_SOURCE -Iinclude -Isrc/cubiomes $ZLIB_INCLUDE -o "bareiron$exe" $windows_linker -lm -static -lpthread
 else
-  eval $compiler $SRC_LIST -O3 -ffast-math -Iinclude -Isrc/cubiomes -o "bareiron$exe" $windows_linker -lm -lz -pthread
+  eval $compiler $SRC_LIST -O3 -ffast-math $mojang_skin_cflags -Iinclude -Isrc/cubiomes -o "bareiron$exe" $windows_linker -lm -lz -pthread $mojang_skin_libs
 fi
 
 # Only run if not cross-compiling and not musl build

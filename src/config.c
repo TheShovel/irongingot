@@ -35,6 +35,7 @@ void init_config_defaults(void) {
   config.max_players = 16;
   config.compression_threshold = 256;
   config.network_timeout = 15000000;
+  config.mojang_api_timeout_ms = 3000;
 
   // Game settings
   config.gamemode = 0;  // survival
@@ -75,6 +76,7 @@ void init_config_defaults(void) {
   config.enable_flight = 0;
   config.enable_pickup_animation = 1;
   config.enable_cactus_damage = 1;
+  config.fetch_skins_from_mojang = 1;
 
   // Debug flags
   config.log_unknown_packets = 0;
@@ -140,6 +142,10 @@ int load_config(const char *filename) {
       config.compression_threshold = atoi(value);
     } else if (strcmp(key, "network_timeout") == 0) {
       config.network_timeout = atoi(value);
+    } else if (strcmp(key, "mojang_api_timeout_ms") == 0) {
+      config.mojang_api_timeout_ms = atoi(value);
+      if (config.mojang_api_timeout_ms < 250) config.mojang_api_timeout_ms = 250;
+      if (config.mojang_api_timeout_ms > 30000) config.mojang_api_timeout_ms = 30000;
     } else if (strcmp(key, "gamemode") == 0) {
       config.gamemode = atoi(value);
       if (config.gamemode < 0) config.gamemode = 0;
@@ -208,6 +214,8 @@ int load_config(const char *filename) {
       config.enable_pickup_animation = parse_bool(value);
     } else if (strcmp(key, "enable_cactus_damage") == 0) {
       config.enable_cactus_damage = parse_bool(value);
+    } else if (strcmp(key, "fetch_skins_from_mojang") == 0) {
+      config.fetch_skins_from_mojang = parse_bool(value);
     } else if (strcmp(key, "log_unknown_packets") == 0) {
       config.log_unknown_packets = parse_bool(value);
     } else if (strcmp(key, "log_length_discrepancy") == 0) {
@@ -251,6 +259,7 @@ int save_config(const char *filename) {
   fprintf(f, "max_players = %d\n", config.max_players);
   fprintf(f, "compression_threshold = %d\n", config.compression_threshold);
   fprintf(f, "network_timeout = %d\n", config.network_timeout);
+  fprintf(f, "mojang_api_timeout_ms = %d\n", config.mojang_api_timeout_ms);
   fprintf(f, "\n");
 
   fprintf(f, "# ============================================\n");
@@ -304,6 +313,7 @@ int save_config(const char *filename) {
   fprintf(f, "enable_flight = %s\n", config.enable_flight ? "true" : "false");
   fprintf(f, "enable_pickup_animation = %s\n", config.enable_pickup_animation ? "true" : "false");
   fprintf(f, "enable_cactus_damage = %s\n", config.enable_cactus_damage ? "true" : "false");
+  fprintf(f, "fetch_skins_from_mojang = %s\n", config.fetch_skins_from_mojang ? "true" : "false");
   fprintf(f, "\n");
 
   fprintf(f, "# ============================================\n");

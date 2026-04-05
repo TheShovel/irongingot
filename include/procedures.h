@@ -14,6 +14,9 @@ void setCompressionThreshold (int client_fd, int threshold);
 int getCompressionThreshold (int client_fd);
 
 void resetPlayerData (PlayerData *player);
+void resetPlayerAppearance (int player_index);
+void loadPlayerAppearance (int player_index, const uint8_t *uuid, const char *name);
+void updatePlayerAppearanceClientSettings (int client_fd, uint8_t skin_parts, uint8_t main_hand);
 int reservePlayerData (int client_fd, uint8_t *uuid, char* name);
 int getPlayerData (int client_fd, PlayerData **output);
 PlayerData *getPlayerByName (int start_offset, int end_offset, uint8_t *buffer);
@@ -23,6 +26,7 @@ void disconnectClient (int *client_fd, int cause);
 int givePlayerItem (PlayerData *player, uint16_t item, uint8_t count);
 void spawnPlayer (PlayerData *player);
 
+void sendPlayerMetadata (int client_fd, PlayerData *player);
 void broadcastPlayerMetadata (PlayerData *player);
 void broadcastMobMetadata (int client_fd, int entity_id);
 

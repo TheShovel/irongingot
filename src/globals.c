@@ -71,6 +71,7 @@ int block_changes_count = 0;
 
 PlayerData player_data[MAX_PLAYERS];
 int player_data_count = 0;
+PlayerAppearance player_appearance[MAX_PLAYERS];
 
 MobData mob_data[MAX_MOBS];
 

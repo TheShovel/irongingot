@@ -54,7 +54,7 @@ Before compiling, you'll need to dump registry data from a vanilla Minecraft ser
 
 | Platform | Required Packages |
 |----------|-------------------|
-| **Linux (glibc)** | `gcc`, `zlib1g-dev` (Debian/Ubuntu) or `zlib` (Arch) |
+| **Linux (glibc)** | `gcc`, `zlib1g-dev`, `libcurl4-openssl-dev` (Debian/Ubuntu) or `zlib`, `curl` (Arch) |
 | **Linux (musl)** | `musl-tools` (Debian/Ubuntu), `musl` (Arch), or `musl-gcc` (Fedora) |
 | **Windows (cross-compile)** | `mingw-w64` (zlib is bundled, no extra package needed) |
 | **Windows (native/MSYS2)** | `mingw-w64-x86_64-gcc`, `mingw-w64-x86_64-zlib` |
@@ -77,6 +77,23 @@ Most settings are in `server.conf`. Key options:
 - **Performance:** `chunk_cache_size`, `tick_interval`, `broadcast_all_movement`
 - **Features:** `allow_chests`, `do_fluid_flow`, `enable_flight`, `allow_doors`
 - **World:** `view_distance`, `world_seed`, `infinite_block_changes`
+
+## Skin Support
+
+The server now fetches the signed `textures` property from Mojang on login using the player's UUID first and their username as fallback. This gives vanilla clients the account's real skin data automatically.
+
+- glibc builds use the built-in `libcurl` backend when available
+- musl builds fall back to the external `curl` command at runtime, so the host system still needs a working `curl` executable in `PATH`
+
+- `fetch_skins_from_mojang = true`: enable Mojang skin lookup
+- `mojang_api_timeout_ms = 3000`: total request timeout for Mojang profile/session lookups
+
+The local `skins/` directory still works as a fallback:
+
+- `skins/<uuid-without-dashes>.texture` or `skins/<playername>.texture`: base64 `textures` property value
+- `skins/<uuid-without-dashes>.signature` or `skins/<playername>.signature`: optional signature for that value
+
+If Mojang lookup fails and no local skin files exist, clients fall back to the default skin for that UUID.
 
 ## Non-Volatile Storage
 

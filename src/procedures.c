@@ -3,6 +3,7 @@
 #include <string.h>
 #include <math.h>
 #include <errno.h>
+#include <ctype.h>
 #ifdef _WIN32
 #include <winsock2.h>
 #endif
@@ -16,12 +17,83 @@
 #include "structures.h"
 #include "serialize.h"
 #include "chunk_generator.h"
+#include "mojang.h"
 #include "procedures.h"
 #include "special_block.h"
 #include "thread_pool.h"
 
 // Forward declaration for parallel player updates
 static void handlePlayerUpdatesParallel(int64_t time_since_last_tick, ThreadPool* pool);
+
+static int getPlayerIndexByPointer(PlayerData *player) {
+  if (!player) return -1;
+  if (player < player_data || player >= player_data + MAX_PLAYERS) return -1;
+  return (int)(player - player_data);
+}
+
+static uint8_t isSafeSkinName(const char *name) {
+  if (!name || !name[0]) return false;
+  for (int i = 0; name[i] != '\0'; i++) {
+    if (!(isalnum((unsigned char)name[i]) || name[i] == '_')) return false;
+  }
+  return true;
+}
+
+static void uuidToHex(const uint8_t *uuid, char *out) {
+  static const char hex[] = "0123456789abcdef";
+  for (int i = 0; i < 16; i++) {
+    out[i * 2] = hex[(uuid[i] >> 4) & 0x0F];
+    out[i * 2 + 1] = hex[uuid[i] & 0x0F];
+  }
+  out[32] = '\0';
+}
+
+static int readTokenFile(const char *path, char *out, size_t capacity) {
+  FILE *file = fopen(path, "rb");
+  if (!file) return -1;
+
+  size_t len = 0;
+  int ch;
+  while ((ch = fgetc(file)) != EOF) {
+    if (isspace((unsigned char)ch)) continue;
+    if (len + 1 >= capacity) {
+      fclose(file);
+      if (capacity > 0) out[0] = '\0';
+      return -2;
+    }
+    out[len++] = (char)ch;
+  }
+
+  fclose(file);
+  out[len] = '\0';
+  return (int)len;
+}
+
+static uint8_t loadAppearanceFilesForBase(PlayerAppearance *appearance, const char *base_name) {
+  char path[128];
+  int len;
+
+  snprintf(path, sizeof(path), "skins/%s.texture", base_name);
+  len = readTokenFile(path, appearance->texture_value, sizeof(appearance->texture_value));
+  if (len <= 0) {
+    if (len == -2) printf("Skin: %s is too large, ignoring\n", path);
+    return false;
+  }
+
+  appearance->texture_value_len = (uint16_t)len;
+  appearance->has_texture = true;
+
+  snprintf(path, sizeof(path), "skins/%s.signature", base_name);
+  len = readTokenFile(path, appearance->texture_signature, sizeof(appearance->texture_signature));
+  if (len > 0) {
+    appearance->texture_signature_len = (uint16_t)len;
+    appearance->has_signature = true;
+  } else if (len == -2) {
+    printf("Skin: %s is too large, ignoring signature\n", path);
+  }
+
+  return true;
+}
 
 void setClientState (int client_fd, int new_state) {
   // Look for a client state with a matching file descriptor
@@ -94,6 +166,54 @@ void resetPlayerData (PlayerData *player) {
   player->flags &= ~0x80;
 }
 
+void resetPlayerAppearance (int player_index) {
+  if (player_index < 0 || player_index >= MAX_PLAYERS) return;
+
+  PlayerAppearance *appearance = &player_appearance[player_index];
+  appearance->texture_value[0] = '\0';
+  appearance->texture_signature[0] = '\0';
+  appearance->texture_value_len = 0;
+  appearance->texture_signature_len = 0;
+  appearance->has_texture = false;
+  appearance->has_signature = false;
+  appearance->skin_parts = 0x7F;
+  appearance->main_hand = 1;
+}
+
+void loadPlayerAppearance (int player_index, const uint8_t *uuid, const char *name) {
+  if (player_index < 0 || player_index >= MAX_PLAYERS) return;
+
+  resetPlayerAppearance(player_index);
+
+  PlayerAppearance *appearance = &player_appearance[player_index];
+  if (fetchMojangPlayerAppearance(uuid, name, appearance)) {
+    printf("Skin: loaded texture for %s from Mojang\n", name);
+    return;
+  }
+
+  char uuid_hex[33];
+  uuidToHex(uuid, uuid_hex);
+
+  if (loadAppearanceFilesForBase(appearance, uuid_hex)) {
+    printf("Skin: loaded texture for %s from skins/%s.*\n", name, uuid_hex);
+    return;
+  }
+
+  if (!isSafeSkinName(name)) return;
+  if (loadAppearanceFilesForBase(appearance, name)) {
+    printf("Skin: loaded texture for %s from skins/%s.*\n", name, name);
+  }
+}
+
+void updatePlayerAppearanceClientSettings (int client_fd, uint8_t skin_parts, uint8_t main_hand) {
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (player_data[i].client_fd != client_fd) continue;
+    player_appearance[i].skin_parts = skin_parts;
+    player_appearance[i].main_hand = main_hand ? 1 : 0;
+    return;
+  }
+}
+
 // Assigns the given data to a player_data entry
 int reservePlayerData (int client_fd, uint8_t *uuid, char *name) {
 
@@ -111,6 +231,7 @@ int reservePlayerData (int client_fd, uint8_t *uuid, char *name) {
         player_data[i].visited_x[j] = 32767;
         player_data[i].visited_z[j] = 32767;
       }
+      loadPlayerAppearance(i, uuid, name);
       return 0;
     }
     // Search for unallocated player slots
@@ -130,6 +251,7 @@ int reservePlayerData (int client_fd, uint8_t *uuid, char *name) {
       memcpy(player_data[i].uuid, uuid, 16);
       memcpy(player_data[i].name, name, 16);
       resetPlayerData(&player_data[i]);
+      loadPlayerAppearance(i, uuid, name);
       player_data_count ++;
       return 0;
     }
@@ -222,6 +344,7 @@ void handlePlayerJoin (PlayerData* player) {
     if (!target_in_play) continue;  // Skip clients not yet in play state
     sc_systemChat(player_data[i].client_fd, (char *)recv_buffer, 16 + player_name_len);
     sc_playerInfoUpdateAddPlayer(player_data[i].client_fd, *player);
+    sendPlayerMetadata(player_data[i].client_fd, player);
     if (player_data[i].client_fd != player->client_fd) {
       sc_spawnEntityPlayer(player_data[i].client_fd, *player);
     }
@@ -436,10 +559,13 @@ void spawnPlayer (PlayerData *player) {
 
 }
 
-// Broadcasts a player's entity metadata (sneak/sprint state) to other players
-void broadcastPlayerMetadata (PlayerData *player) {
+void sendPlayerMetadata (int client_fd, PlayerData *player) {
+  int player_index = getPlayerIndexByPointer(player);
+  if (client_fd == -1 || player_index == -1) return;
+
   uint8_t sneaking = (player->flags & 0x04) != 0;
   uint8_t sprinting = (player->flags & 0x08) != 0;
+  PlayerAppearance *appearance = &player_appearance[player_index];
 
   uint8_t entity_bit_mask = 0;
   if (sneaking) entity_bit_mask |= 0x02;
@@ -458,8 +584,24 @@ void broadcastPlayerMetadata (PlayerData *player) {
       6,        // Index (Pose),
       21,       // Type (Pose),
       { pose }, // Value (Standing)
+    },
+    {
+      17,                        // Displayed skin parts
+      0,                         // Type (Byte)
+      { appearance->skin_parts },
+    },
+    {
+      18,                       // Main hand
+      0,                        // Type (Byte)
+      { appearance->main_hand },
     }
   };
+
+  sc_setEntityMetadata(client_fd, player->client_fd, metadata, 4);
+}
+
+// Broadcasts a player's entity metadata (sneak/sprint state) to other players
+void broadcastPlayerMetadata (PlayerData *player) {
 
   for (int i = 0; i < MAX_PLAYERS; i ++) {
     PlayerData* other_player = &player_data[i];
@@ -478,7 +620,7 @@ void broadcastPlayerMetadata (PlayerData *player) {
     }
     if (!target_in_play) continue;
 
-    sc_setEntityMetadata(client_fd, player->client_fd, metadata, 2);
+    sendPlayerMetadata(client_fd, player);
   }
 }
 

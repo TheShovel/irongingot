@@ -316,6 +316,20 @@ typedef struct {
   uint8_t flags;
 } PlayerData;
 
+#define PLAYER_TEXTURE_VALUE_MAX 4096
+#define PLAYER_TEXTURE_SIGNATURE_MAX 2048
+
+typedef struct {
+  char texture_value[PLAYER_TEXTURE_VALUE_MAX];
+  char texture_signature[PLAYER_TEXTURE_SIGNATURE_MAX];
+  uint16_t texture_value_len;
+  uint16_t texture_signature_len;
+  uint8_t has_texture;
+  uint8_t has_signature;
+  uint8_t skin_parts;
+  uint8_t main_hand;
+} PlayerAppearance;
+
 typedef struct {
   uint8_t type;
   double x;  // Floating-point position for smooth movement
@@ -371,6 +385,7 @@ extern int block_changes_count;
 
 extern PlayerData player_data[MAX_PLAYERS];
 extern int player_data_count;
+extern PlayerAppearance player_appearance[MAX_PLAYERS];
 
 extern MobData mob_data[MAX_MOBS];
 
