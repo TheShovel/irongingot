@@ -1694,7 +1694,19 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     #ifdef ALLOW_DOORS
     else if (isDoorBlock(target)) {
       // Use the unified special block system to toggle the door
-      uint16_t state = special_block_get_state(x, y, z);
+      // Door state is always stored at the lower half position
+      short door_x = x;
+      uint8_t door_y = y;
+      short door_z = z;
+      
+      // Check if this is the upper half by looking for a door at y-1
+      uint8_t block_below = getBlockChange(x, y - 1, z);
+      if (isDoorBlock(block_below)) {
+        // This is the upper half, use lower half's position for state
+        door_y = y - 1;
+      }
+      
+      uint16_t state = special_block_get_state(door_x, door_y, door_z);
       uint8_t open = door_get_open(state);
       uint8_t hinge = door_get_hinge(state);
       uint8_t direction = door_get_direction(state);
@@ -1702,16 +1714,16 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       // Toggle open/closed
       open ^= 1;
       state = door_encode_state(open, hinge, direction);
-      special_block_set_state(x, y, z, target, state);
+      special_block_set_state(door_x, door_y, door_z, target, state);
 
       // Broadcast door update to all players
       for (int j = 0; j < MAX_PLAYERS; j++) {
         if (player_data[j].client_fd == -1) continue;
         if (player_data[j].flags & 0x20) continue;
-        sendDoorUpdate(player_data[j].client_fd, x, y, z, target, 0, open, direction, hinge);
-        uint8_t above = getBlockChange(x, y + 1, z);
+        sendDoorUpdate(player_data[j].client_fd, door_x, door_y, door_z, target, 0, open, direction, hinge);
+        uint8_t above = getBlockChange(door_x, door_y + 1, door_z);
         if (isDoorBlock(above)) {
-          sendDoorUpdate(player_data[j].client_fd, x, y + 1, z, above, 1, open, direction, hinge);
+          sendDoorUpdate(player_data[j].client_fd, door_x, door_y + 1, door_z, above, 1, open, direction, hinge);
         }
       }
       return;
