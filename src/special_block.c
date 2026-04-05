@@ -95,9 +95,7 @@ uint8_t is_door_block(uint8_t block) {
         block == B_cherry_door ||
         block == B_dark_oak_door ||
         block == B_pale_oak_door ||
-        block == B_mangrove_door ||
-        block == B_bamboo_door ||
-        block == B_iron_door
+        block == B_mangrove_door
     );
 }
 
@@ -107,7 +105,25 @@ uint8_t is_stair_block(uint8_t block) {
         block == B_spruce_stairs ||
         block == B_birch_stairs ||
         block == B_jungle_stairs ||
-        block == B_acacia_stairs
+        block == B_acacia_stairs ||
+        block == B_dark_oak_stairs ||
+        block == B_mangrove_stairs ||
+        block == B_cherry_stairs ||
+        block == B_pale_oak_stairs
+    );
+}
+
+uint8_t is_trapdoor_block(uint8_t block) {
+    return (
+        block == B_oak_trapdoor ||
+        block == B_spruce_trapdoor ||
+        block == B_birch_trapdoor ||
+        block == B_jungle_trapdoor ||
+        block == B_acacia_trapdoor ||
+        block == B_cherry_trapdoor ||
+        block == B_dark_oak_trapdoor ||
+        block == B_pale_oak_trapdoor ||
+        block == B_mangrove_trapdoor
     );
 }
 

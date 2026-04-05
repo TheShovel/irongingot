@@ -1206,9 +1206,7 @@ uint8_t isDoorItem (uint16_t item) {
     item == I_cherry_door ||
     item == I_dark_oak_door ||
     item == I_pale_oak_door ||
-    item == I_mangrove_door ||
-    item == I_bamboo_door ||
-    item == I_iron_door
+    item == I_mangrove_door
   );
 }
 uint16_t getDoorItemFromBlock (uint8_t block) {
@@ -1222,8 +1220,6 @@ uint16_t getDoorItemFromBlock (uint8_t block) {
     case B_dark_oak_door: return I_dark_oak_door;
     case B_pale_oak_door: return I_pale_oak_door;
     case B_mangrove_door: return I_mangrove_door;
-    case B_bamboo_door: return I_bamboo_door;
-    case B_iron_door: return I_iron_door;
     default: return 0;
   }
 }
@@ -1238,8 +1234,6 @@ uint8_t getDoorBlockFromItem (uint16_t item) {
     case I_dark_oak_door: return B_dark_oak_door;
     case I_pale_oak_door: return B_pale_oak_door;
     case I_mangrove_door: return B_mangrove_door;
-    case I_bamboo_door: return B_bamboo_door;
-    case I_iron_door: return B_iron_door;
     default: return 0;
   }
 }

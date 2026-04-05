@@ -82,6 +82,56 @@ uint16_t getDoorFromPlank(uint16_t plank) {
   }
 }
 
+// Helper function to get trapdoor item from plank item
+uint16_t getTrapdoorFromPlank(uint16_t plank) {
+  switch (plank) {
+    case I_oak_planks: return I_oak_trapdoor;
+    case I_spruce_planks: return I_spruce_trapdoor;
+    case I_birch_planks: return I_birch_trapdoor;
+    case I_jungle_planks: return I_jungle_trapdoor;
+    case I_acacia_planks: return I_acacia_trapdoor;
+    case I_cherry_planks: return I_cherry_trapdoor;
+    case I_dark_oak_planks: return I_dark_oak_trapdoor;
+    case I_pale_oak_planks: return I_pale_oak_trapdoor;
+    case I_mangrove_planks: return I_mangrove_trapdoor;
+    default: return I_oak_trapdoor;
+  }
+}
+
+// Helper function to get fence item from plank item
+uint16_t getFenceFromPlank(uint16_t plank) {
+  switch (plank) {
+    case I_oak_planks: return I_oak_fence;
+    case I_spruce_planks: return I_spruce_fence;
+    case I_birch_planks: return I_birch_fence;
+    case I_jungle_planks: return I_jungle_fence;
+    case I_acacia_planks: return I_acacia_fence;
+    case I_cherry_planks: return I_cherry_fence;
+    case I_dark_oak_planks: return I_dark_oak_fence;
+    case I_pale_oak_planks: return I_pale_oak_fence;
+    case I_mangrove_planks: return I_mangrove_fence;
+    case I_bamboo_planks: return I_bamboo_fence;
+    default: return I_oak_fence;
+  }
+}
+
+// Helper function to get fence gate item from plank item
+uint16_t getFenceGateFromPlank(uint16_t plank) {
+  switch (plank) {
+    case I_oak_planks: return I_oak_fence_gate;
+    case I_spruce_planks: return I_spruce_fence_gate;
+    case I_birch_planks: return I_birch_fence_gate;
+    case I_jungle_planks: return I_jungle_fence_gate;
+    case I_acacia_planks: return I_acacia_fence_gate;
+    case I_cherry_planks: return I_cherry_fence_gate;
+    case I_dark_oak_planks: return I_dark_oak_fence_gate;
+    case I_pale_oak_planks: return I_pale_oak_fence_gate;
+    case I_mangrove_planks: return I_mangrove_fence_gate;
+    case I_bamboo_planks: return I_bamboo_fence_gate;
+    default: return I_oak_fence_gate;
+  }
+}
+
 // Helper function to get chest item from plank item
 uint16_t getChestFromPlank(uint16_t plank) {
   (void)plank;
@@ -456,6 +506,47 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
           player->craft_items[8] == first_item) {
         *item = getStairFromPlank(first_item);
         *count = 4;
+        return;
+      }
+      // Fence recipe (4 planks + 2 sticks)
+      // Pattern: plank-stick-plank / plank-stick-plank
+      // Slots: 0,2,3,5=planks, 1,4=sticks (6 items, rows 0-1 filled)
+      if (
+        first_col == 0 && first_row == 0 &&
+        isPlankItem(first_item) &&
+        player->craft_items[2] == first_item &&
+        player->craft_items[3] == first_item &&
+        player->craft_items[5] == first_item &&
+        player->craft_items[1] == I_stick &&
+        player->craft_items[4] == I_stick
+      ) {
+        *item = getFenceFromPlank(first_item);
+        *count = 3;
+        return;
+      }
+      // Fence gate: stick-plank-stick / stick-plank-stick (6 items)
+      // first item is stick at slot 0
+      if (
+        first_item == I_stick &&
+        isPlankItem(player->craft_items[1]) &&
+        player->craft_items[2] == I_stick &&
+        player->craft_items[3] == I_stick &&
+        player->craft_items[4] == player->craft_items[1] &&
+        player->craft_items[5] == I_stick
+      ) {
+        *item = getFenceGateFromPlank(player->craft_items[1]);
+        *count = 1;
+        return;
+      }
+      // Trapdoor recipe (6 planks, 3×2 pattern — full first 2 rows)
+      if (isPlankItem(first_item) && first_col == 0 && first_row == 0 &&
+          player->craft_items[1] == first_item &&
+          player->craft_items[2] == first_item &&
+          player->craft_items[3] == first_item &&
+          player->craft_items[4] == first_item &&
+          player->craft_items[5] == first_item) {
+        *item = getTrapdoorFromPlank(first_item);
+        *count = 2;
         return;
       }
       break;

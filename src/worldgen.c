@@ -191,6 +191,71 @@ uint8_t biomeNameMatches(uint8_t biome_id, const char* name, uint8_t name_len) {
   return 0;
 }
 
+// Returns a bitmask of which biome name components match the given query
+// This allows fast pre-filtering before doing expensive biome lookups
+// Each bit corresponds to a biome keyword: plains, desert, forest, taiga, swamp,
+// jungle, snowy, birch, dark, savanna, badlands, meadow, windswept, flower, eroded, sunflower, slopes
+uint32_t getBiomeKeywordMask(uint8_t biome_id) {
+  switch (biome_id) {
+    case W_plains:            return 1u << 0;  // plains
+    case W_desert:            return 1u << 1;  // desert
+    case W_windswept_hills:   return 1u << 12; // windswept
+    case W_forest:            return 1u << 2;  // forest
+    case W_taiga:             return 1u << 3;  // taiga
+    case W_swamp:             return 1u << 4;  // swamp
+    case W_snowy_plains:      return (1u << 5) | (1u << 0);  // snowy, plains
+    case W_jungle:            return 1u << 6;  // jungle
+    case W_birch_forest:      return (1u << 7) | (1u << 2);  // birch, forest
+    case W_dark_forest:       return (1u << 8) | (1u << 2);  // dark, forest
+    case W_snowy_taiga:       return (1u << 5) | (1u << 3);  // snowy, taiga
+    case W_savanna:           return 1u << 9;  // savanna
+    case W_badlands:          return 1u << 10; // badlands
+    case W_meadow:            return 1u << 11; // meadow
+    case W_windswept_forest:  return (1u << 12) | (1u << 2); // windswept, forest
+    case W_windswept_savanna: return (1u << 12) | (1u << 9); // windswept, savanna
+    case W_snowy_slopes:      return (1u << 5) | (1u << 14); // snowy, slopes
+    case W_sunflower_plains:  return (1u << 13) | (1u << 0); // sunflower, plains
+    case W_flower_forest:     return (1u << 15) | (1u << 2); // flower, forest
+    case W_eroded_badlands:   return (1u << 16) | (1u << 10); // eroded, badlands
+    default: return 0;
+  }
+}
+
+// Returns a keyword mask for a search query string
+uint32_t getQueryKeywordMask(const char* name, uint8_t name_len) {
+  char query[32];
+  if (name_len > 31) name_len = 31;
+  for (uint8_t i = 0; i < name_len; i++) {
+    char c = name[i];
+    if (c == ' ') c = '_';
+    if (c >= 'A' && c <= 'Z') c += 32;
+    query[i] = c;
+  }
+  query[name_len] = '\0';
+
+  uint32_t mask = 0;
+  // Check for each keyword in the query
+  if (strstr(query, "plains"))    mask |= 1u << 0;
+  if (strstr(query, "desert"))    mask |= 1u << 1;
+  if (strstr(query, "forest"))    mask |= 1u << 2;
+  if (strstr(query, "taiga"))     mask |= 1u << 3;
+  if (strstr(query, "swamp"))     mask |= 1u << 4;
+  if (strstr(query, "snowy"))     mask |= 1u << 5;
+  if (strstr(query, "jungle"))    mask |= 1u << 6;
+  if (strstr(query, "birch"))     mask |= 1u << 7;
+  if (strstr(query, "dark"))      mask |= 1u << 8;
+  if (strstr(query, "savanna"))   mask |= 1u << 9;
+  if (strstr(query, "badlands"))  mask |= 1u << 10;
+  if (strstr(query, "meadow"))    mask |= 1u << 11;
+  if (strstr(query, "windswept")) mask |= 1u << 12;
+  if (strstr(query, "sunflower")) mask |= 1u << 13;
+  if (strstr(query, "slopes"))    mask |= 1u << 14;
+  if (strstr(query, "flower"))    mask |= 1u << 15;
+  if (strstr(query, "eroded"))    mask |= 1u << 16;
+  if (strstr(query, "hills"))     mask |= 1u << 17;
+  return mask;
+}
+
 // Gets biome at arbitrary block coordinates (not chunk coordinates)
 // Returns the server biome ID (W_* constant)
 uint8_t getBiomeAtBlockCoords(int x, int z) {

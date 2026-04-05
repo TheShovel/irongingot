@@ -1604,17 +1604,17 @@ int cs_chat (int client_fd) {
 
   // !findbiome <name> [radius] - Find nearest biome
   if (!strncmp((char *)recv_buffer, "!findbiome", 10)) {
-    int ci = 11;
+    int ci = 10;
     // Skip spaces
     while (recv_buffer[ci] == ' ' && ci < 224) ci++;
     int name_start = ci;
     while (recv_buffer[ci] != ' ' && recv_buffer[ci] != '\0' && ci < 224) ci++;
     if (ci <= name_start) {
-      sc_systemChat(client_fd, "§7Usage: !findbiome <name> [radius]\n§7Biomes: plains, desert, forest, taiga, jungle, swamp, snowy_plains, birch_forest, dark_forest, savanna, badlands, meadow, etc.", 182);
+      sc_systemChat(client_fd, "§7Usage: !findbiome <name> [radius]\n§7Examples: !findbiome desert, !findbiome jungle, !findbiome snowy_plains\n§7Biomes: plains, desert, forest, taiga, jungle, swamp, snowy_plains, birch_forest, dark_forest, savanna, badlands, meadow, etc.", 237);
       goto cleanup;
     }
     int name_len = ci - name_start;
-    int radius = 5000; // Default search radius (blocks)
+    int radius = 2000; // Default search radius (blocks)
     // Parse optional radius
     if (recv_buffer[ci] == ' ') {
       while (recv_buffer[ci] == ' ' && ci < 224) ci++;
@@ -1625,88 +1625,86 @@ int cs_chat (int client_fd) {
         memcpy(rad_buf, recv_buffer + rad_start, ci - rad_start);
         rad_buf[ci - rad_start] = '\0';
         radius = atoi(rad_buf);
-        if (radius <= 0) radius = 5000;
+        if (radius <= 0) radius = 2000;
         if (radius > 30000) radius = 30000; // Cap to avoid short overflow
       }
     }
-    // Search for nearest biome using expanding square rings (chunk-based for speed)
+    // Search for nearest biome using expanding chunk rings
     int px = player->x;
     int pz = player->z;
     int found_x = -1, found_z = -1;
     uint8_t found_biome = 0;
+    int player_cx = px >> 4;
+    int player_cz = pz >> 4;
     int radius_chunks = radius / 16;
-    if (radius_chunks > 3125) radius_chunks = 3125; // Cap at 50000 blocks
     if (radius_chunks < 1) radius_chunks = 1;
+    // Send search start message
+    char search_msg[128];
+    int smsg_len = snprintf(search_msg, sizeof(search_msg), "§7Searching for biome within %d blocks...", radius);
+    sc_systemChat(client_fd, search_msg, (uint16_t)smsg_len);
     // Search in expanding chunk rings
     for (int ring = 0; ring <= radius_chunks; ring++) {
       if (ring == 0) {
-        // Check current chunk
-        int cx = px >> 4;
-        int cz = pz >> 4;
-        uint8_t biome = getChunkBiome(cx, cz);
+        uint8_t biome = getChunkBiome(player_cx, player_cz);
         if (biomeNameMatches(biome, (char *)recv_buffer + name_start, (uint8_t)name_len)) {
-          found_x = cx * 16 + 8;
-          found_z = cz * 16 + 8;
+          found_x = player_cx * 16 + 8;
+          found_z = player_cz * 16 + 8;
           found_biome = biome;
           break;
         }
       } else {
-        // Search the ring (ring of chunks around center)
         int cx, cz;
-        // Top edge: z = -ring, x from -ring to ring
+        // Top edge: z = -ring
         for (cx = -ring; cx <= ring; cx++) {
-          int check_cx = (px >> 4) + cx;
-          int check_cz = (pz >> 4) - ring;
+          int check_cx = player_cx + cx;
+          int check_cz = player_cz - ring;
           uint8_t biome = getChunkBiome(check_cx, check_cz);
           if (biomeNameMatches(biome, (char *)recv_buffer + name_start, (uint8_t)name_len)) {
             found_x = check_cx * 16 + 8;
             found_z = check_cz * 16 + 8;
             found_biome = biome;
-            break;
+            goto found;
           }
         }
-        if (found_x != -1) break;
-        // Bottom edge: z = ring, x from -ring to ring
+        // Bottom edge: z = +ring
         for (cx = -ring; cx <= ring; cx++) {
-          int check_cx = (px >> 4) + cx;
-          int check_cz = (pz >> 4) + ring;
+          int check_cx = player_cx + cx;
+          int check_cz = player_cz + ring;
           uint8_t biome = getChunkBiome(check_cx, check_cz);
           if (biomeNameMatches(biome, (char *)recv_buffer + name_start, (uint8_t)name_len)) {
             found_x = check_cx * 16 + 8;
             found_z = check_cz * 16 + 8;
             found_biome = biome;
-            break;
+            goto found;
           }
         }
-        if (found_x != -1) break;
-        // Left edge: x = -ring, z from -ring+1 to ring-1
+        // Left edge: x = -ring
         for (cz = -ring + 1; cz < ring; cz++) {
-          int check_cx = (px >> 4) - ring;
-          int check_cz = (pz >> 4) + cz;
+          int check_cx = player_cx - ring;
+          int check_cz = player_cz + cz;
           uint8_t biome = getChunkBiome(check_cx, check_cz);
           if (biomeNameMatches(biome, (char *)recv_buffer + name_start, (uint8_t)name_len)) {
             found_x = check_cx * 16 + 8;
             found_z = check_cz * 16 + 8;
             found_biome = biome;
-            break;
+            goto found;
           }
         }
-        if (found_x != -1) break;
-        // Right edge: x = ring, z from -ring+1 to ring-1
+        // Right edge: x = +ring
         for (cz = -ring + 1; cz < ring; cz++) {
-          int check_cx = (px >> 4) + ring;
-          int check_cz = (pz >> 4) + cz;
+          int check_cx = player_cx + ring;
+          int check_cz = player_cz + cz;
           uint8_t biome = getChunkBiome(check_cx, check_cz);
           if (biomeNameMatches(biome, (char *)recv_buffer + name_start, (uint8_t)name_len)) {
             found_x = check_cx * 16 + 8;
             found_z = check_cz * 16 + 8;
             found_biome = biome;
-            break;
+            goto found;
           }
         }
-        if (found_x != -1) break;
       }
     }
+    found:
     if (found_x != -1) {
       // Get surface height at found location
       uint8_t found_y = getHeightAt(found_x, found_z);

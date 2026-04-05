@@ -33,6 +33,8 @@ uint8_t getTerrainAt (int x, int y, int z, ChunkAnchor anchor);
 uint8_t getBlockAt (int x, int y, int z);
 const char* getBiomeName(uint8_t biome_id);
 uint8_t biomeNameMatches(uint8_t biome_id, const char* name, uint8_t name_len);
+uint32_t getBiomeKeywordMask(uint8_t biome_id);
+uint32_t getQueryKeywordMask(const char* name, uint8_t name_len);
 uint8_t getBiomeAtBlockCoords(int x, int z);
 
 extern WORLDGEN_THREAD_LOCAL uint8_t chunk_section[4096];
