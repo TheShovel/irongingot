@@ -997,8 +997,6 @@ uint8_t isInstantlyMined (PlayerData *player, uint8_t block) {
     block == B_bush ||
     block == B_fern ||
     block == B_short_grass ||
-    block == B_torch ||
-    block == B_lily_pad ||
     block == B_oak_sapling ||
     block == B_dandelion ||
     block == B_torchflower ||
@@ -1697,14 +1695,14 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       short door_x = x;
       uint8_t door_y = y;
       short door_z = z;
-      
+
       // Check if this is the upper half by looking for a door at y-1
       uint8_t block_below = getBlockChange(x, y - 1, z);
       if (isDoorBlock(block_below)) {
         // This is the upper half, use lower half's position for state
         door_y = y - 1;
       }
-      
+
       uint16_t state = special_block_get_state(door_x, door_y, door_z);
       uint8_t open = door_get_open(state);
       uint8_t hinge = door_get_hinge(state);
@@ -1784,7 +1782,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     // Check if there's space above for the upper half (need 2 blocks of clearance)
     uint8_t block_above = getBlockAt(x, y + 1, z);
     uint8_t block_above_2 = getBlockAt(x, y + 2, z);
-    
+
     // Need both y+1 and y+2 to be replaceable (and not doors)
     if (!isReplaceableBlock(block_above) || isDoorBlock(block_above)) {
       return;  // Can't place door if upper half position is blocked
@@ -2634,7 +2632,7 @@ void handleServerTick (int64_t time_since_last_tick) {
     int block_x = (int)new_x;
     int block_y = (int)new_y;
     int block_z = (int)new_z;
-    
+
     // Holds the block that the mob is moving into
     uint8_t block = getBlockAt(block_x, block_y, block_z);
     // Holds the block above the target block, i.e. the "head" block
@@ -2703,8 +2701,8 @@ void handleServerTick (int64_t time_since_last_tick) {
     else if (isPassableBlock(getBlockAt(block_x, block_y - 1, block_z))) new_y -= 1.0;
 
     // Exit early if all movement was cancelled
-    if (fabs(new_x - mob_data[i].x) < 0.001 && 
-        fabs(new_z - mob_data[i].z) < 0.001 && 
+    if (fabs(new_x - mob_data[i].x) < 0.001 &&
+        fabs(new_z - mob_data[i].z) < 0.001 &&
         fabs(new_y - mob_data[i].y) < 0.001) continue;
 
     // Prevent collisions with other mobs
