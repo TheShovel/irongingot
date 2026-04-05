@@ -55,6 +55,18 @@ static void writePlayerProfileProperties(int client_fd, PlayerAppearance *appear
   send_all(client_fd, appearance->texture_signature, appearance->texture_signature_len);
 }
 
+static void writeItemSlot(int client_fd, uint8_t count, uint16_t item) {
+  if (count == 0 || item == 0) {
+    writeVarInt(client_fd, 0);
+    return;
+  }
+
+  writeVarInt(client_fd, count);
+  writeVarInt(client_fd, item);
+  writeVarInt(client_fd, 0);
+  writeVarInt(client_fd, 0);
+}
+
 // S->C Status Response (server list ping)
 int sc_statusResponse (int client_fd) {
 
@@ -909,6 +921,7 @@ int cs_clickContainer (int client_fd) {
   if (getPlayerData(client_fd, &player)) return 1;
 
   uint8_t apply_changes = true;
+  uint8_t equipment_dirty = false;
   // prevent dropping items
   if (mode == 4 && clicked_slot != -999) {
     // when using drop button, re-sync the respective slot
@@ -967,6 +980,11 @@ int cs_clickContainer (int client_fd) {
       if (slot != 255 && apply_changes) {
         *p_item = 0;
         *p_count = 0;
+        if (
+          slot == player->hotbar ||
+          slot == 40 ||
+          (slot >= 36 && slot <= 39)
+        ) equipment_dirty = true;
         #ifdef ALLOW_CHESTS
         if (window_id == 2 && slot > 40) {
           broadcastChestUpdate(client_fd, storage_ptr, 0, 0, slot - 41);
@@ -986,6 +1004,11 @@ int cs_clickContainer (int client_fd) {
     if (count > 0 && apply_changes) {
       *p_item = item;
       *p_count = count;
+      if (
+        slot == player->hotbar ||
+        slot == 40 ||
+        (slot >= 36 && slot <= 39)
+      ) equipment_dirty = true;
       #ifdef ALLOW_CHESTS
       if (window_id == 2 && slot > 40) {
         broadcastChestUpdate(client_fd, storage_ptr, item, count, slot - 41);
@@ -1017,6 +1040,8 @@ int cs_clickContainer (int client_fd) {
     player->flagval_16 = 0;
     player->flagval_8 = 0;
   }
+
+  if (apply_changes && equipment_dirty) broadcastPlayerEquipment(player);
 
   return 0;
 
@@ -1140,6 +1165,7 @@ int cs_setHeldItem (int client_fd) {
   if (slot >= 9) return 1;
 
   player->hotbar = slot;
+  broadcastPlayerEquipment(player);
 
   return 0;
 }
@@ -1257,6 +1283,50 @@ int sc_setEntityMetadata (int client_fd, int id, EntityData *metadata, size_t le
   }
 
   writeByte(client_fd, 0xFF); // End
+
+  endPacket(client_fd);
+
+  return 0;
+}
+
+// S->C Set Equipment
+int sc_setEquipment (int client_fd, int entity_id, PlayerData *player) {
+  static const uint8_t equipment_slot_ids[] = {
+    0, // main hand
+    1, // off hand
+    2, // boots
+    3, // leggings
+    4, // chestplate
+    5  // helmet
+  };
+  static const uint8_t inventory_slots[] = {
+    0,  // selected hotbar slot, resolved below
+    40,
+    36,
+    37,
+    38,
+    39
+  };
+
+  if (player == NULL) return 1;
+
+  startPacket(client_fd, 0x5F);
+
+  writeVarInt(client_fd, entity_id);
+
+  for (size_t i = 0; i < sizeof(equipment_slot_ids); i++) {
+    uint8_t equipment_slot = equipment_slot_ids[i];
+    uint8_t inventory_slot = inventory_slots[i];
+    if (i == 0) inventory_slot = player->hotbar;
+    if (i + 1 < sizeof(equipment_slot_ids)) equipment_slot |= 0x80;
+
+    writeByte(client_fd, equipment_slot);
+    writeItemSlot(
+      client_fd,
+      player->inventory_count[inventory_slot],
+      player->inventory_items[inventory_slot]
+    );
+  }
 
   endPacket(client_fd);
 

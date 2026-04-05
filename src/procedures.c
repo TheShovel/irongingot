@@ -347,6 +347,7 @@ void handlePlayerJoin (PlayerData* player) {
     sendPlayerMetadata(player_data[i].client_fd, player);
     if (player_data[i].client_fd != player->client_fd) {
       sc_spawnEntityPlayer(player_data[i].client_fd, *player);
+      sendPlayerEquipment(player_data[i].client_fd, player);
     }
   }
 
@@ -476,6 +477,7 @@ int givePlayerItem (PlayerData *player, uint16_t item, uint8_t count) {
   player->inventory_items[slot] = item;
   player->inventory_count[slot] += count;
   sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, slot), player->inventory_count[slot], item);
+  if (slot == player->hotbar) broadcastPlayerEquipment(player);
 
   return 0;
 
@@ -600,6 +602,11 @@ void sendPlayerMetadata (int client_fd, PlayerData *player) {
   sc_setEntityMetadata(client_fd, player->client_fd, metadata, 4);
 }
 
+void sendPlayerEquipment (int client_fd, PlayerData *player) {
+  if (client_fd == -1 || player == NULL) return;
+  sc_setEquipment(client_fd, player->client_fd, player);
+}
+
 // Broadcasts a player's entity metadata (sneak/sprint state) to other players
 void broadcastPlayerMetadata (PlayerData *player) {
 
@@ -621,6 +628,29 @@ void broadcastPlayerMetadata (PlayerData *player) {
     if (!target_in_play) continue;
 
     sendPlayerMetadata(client_fd, player);
+  }
+}
+
+void broadcastPlayerEquipment (PlayerData *player) {
+
+  for (int i = 0; i < MAX_PLAYERS; i ++) {
+    PlayerData* other_player = &player_data[i];
+    int client_fd = other_player->client_fd;
+
+    if (client_fd == -1) continue;
+    if (client_fd == player->client_fd) continue;
+    if (other_player->flags & 0x20) continue;
+    // Check client state
+    uint8_t target_in_play = 0;
+    for (int k = 0; k < MAX_PLAYERS; k ++) {
+      if (client_states[k].client_fd == client_fd) {
+        target_in_play = (client_states[k].state == STATE_PLAY);
+        break;
+      }
+    }
+    if (!target_in_play) continue;
+
+    sendPlayerEquipment(client_fd, player);
   }
 }
 
@@ -1571,6 +1601,7 @@ uint8_t handlePlayerEating (PlayerData *player, uint8_t just_check) {
     serverSlotToClientSlot(0, player->hotbar),
     *held_count, *held_item
   );
+  broadcastPlayerEquipment(player);
 
   return true;
 }
@@ -1830,6 +1861,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
         if (fast_rand() < compost_chance) {
           givePlayerItem(player, I_bone_meal, 1);
         }
+        broadcastPlayerEquipment(player);
         return;
       }
     }
@@ -1946,6 +1978,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
         // Bone meal has a 25% chance of growing a tree from a sapling
         if ((fast_rand() & 3) == 0) placeTreeStructure(x, y, z);
       }
+      broadcastPlayerEquipment(player);
     }
   } else if (handlePlayerEating(player, true)) {
     // Reset eating timer and set eating flag
@@ -1958,13 +1991,15 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     // Swap to held piece of armor
     uint8_t slot = getArmorItemSlot(*item);
     uint16_t prev_item = player->inventory_items[slot];
+    uint8_t prev_count = player->inventory_count[slot];
     player->inventory_items[slot] = *item;
     player->inventory_count[slot] = 1;
     player->inventory_items[player->hotbar] = prev_item;
-    player->inventory_count[player->hotbar] = 1;
+    player->inventory_count[player->hotbar] = prev_count;
     // Update client inventory
     sc_setContainerSlot(player->client_fd, -2, serverSlotToClientSlot(0, slot), 1, *item);
-    sc_setContainerSlot(player->client_fd, -2, serverSlotToClientSlot(0, player->hotbar), 1, prev_item);
+    sc_setContainerSlot(player->client_fd, -2, serverSlotToClientSlot(0, player->hotbar), prev_count, prev_item);
+    broadcastPlayerEquipment(player);
     return;
   }
 
@@ -2080,6 +2115,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
 
       // Sync hotbar contents to player
       sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
+      broadcastPlayerEquipment(player);
       return;
     }
   }
@@ -2138,6 +2174,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       *count -= 1;
       if (*count == 0) *item = 0;
       sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
+      broadcastPlayerEquipment(player);
       return;
     }
   }
@@ -2192,6 +2229,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       *count -= 1;
       if (*count == 0) *item = 0;
       sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
+      broadcastPlayerEquipment(player);
       return;
     }
     return;
@@ -2249,6 +2287,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       *count -= 1;
       if (*count == 0) *item = 0;
       sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
+      broadcastPlayerEquipment(player);
       return;
     }
     return;
@@ -2293,6 +2332,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
 
   // Sync hotbar contents to player
   sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
+  broadcastPlayerEquipment(player);
 
 }
 
@@ -2443,8 +2483,8 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
     // Pick a random passive mob type
     uint8_t type = passive_types[fast_rand() % num_passive_types];
 
-    // Spawn at full health (20)
-    spawnMob(type, spawn_x, surface_y + 1, spawn_z, 20);
+    // Spawn mobs with 10 HP.
+    spawnMob(type, spawn_x, surface_y + 1, spawn_z, 10);
   }
 
 }
@@ -3165,6 +3205,7 @@ static void sendPlayerUpdatePackets(int64_t time_since_last_tick) {
         player->inventory_count[player->hotbar],
         player->inventory_items[player->hotbar]
       );
+      broadcastPlayerEquipment(player);
       player->flags &= ~0x10;
       player->flagval_16 = 0;
     }

@@ -352,6 +352,7 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
           sc_playerInfoUpdateAddPlayer(client_fd, player_data[i]);
           sc_spawnEntityPlayer(client_fd, player_data[i]);
           sendPlayerMetadata(client_fd, &player_data[i]);
+          sendPlayerEquipment(client_fd, &player_data[i]);
         }
 
         // Send information about all other entities (mobs):
