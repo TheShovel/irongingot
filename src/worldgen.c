@@ -131,6 +131,121 @@ uint8_t getChunkBiomeRaw (short x, short z) {
   }
 }
 
+// Returns a human-readable biome name from server biome ID (W_* constants)
+const char* getBiomeName(uint8_t biome_id) {
+  switch (biome_id) {
+    case W_plains: return "Plains";
+    case W_desert: return "Desert";
+    case W_windswept_hills: return "Windswept Hills";
+    case W_forest: return "Forest";
+    case W_taiga: return "Taiga";
+    case W_swamp: return "Swamp";
+    case W_snowy_plains: return "Snowy Plains";
+    case W_jungle: return "Jungle";
+    case W_birch_forest: return "Birch Forest";
+    case W_dark_forest: return "Dark Forest";
+    case W_snowy_taiga: return "Snowy Taiga";
+    case W_savanna: return "Savanna";
+    case W_badlands: return "Badlands";
+    case W_meadow: return "Meadow";
+    case W_windswept_forest: return "Windswept Forest";
+    case W_windswept_savanna: return "Windswept Savanna";
+    case W_snowy_slopes: return "Snowy Slopes";
+    case W_sunflower_plains: return "Sunflower Plains";
+    case W_flower_forest: return "Flower Forest";
+    case W_eroded_badlands: return "Eroded Badlands";
+    default: return "Unknown";
+  }
+}
+
+// Returns true if the biome ID matches the given name (case-insensitive substring match)
+// Handles underscores and spaces interchangeably (e.g. "dark_forest" matches "Dark Forest")
+uint8_t biomeNameMatches(uint8_t biome_id, const char* name, uint8_t name_len) {
+  const char* biome_name = getBiomeName(biome_id);
+  // Normalize: convert biome_name to lowercase, replacing spaces with underscores
+  char normalized[32];
+  uint8_t j = 0;
+  for (uint8_t i = 0; biome_name[i] != '\0' && j < 31; i++) {
+    char c = biome_name[i];
+    if (c == ' ') c = '_';
+    if (c >= 'A' && c <= 'Z') c += 32;
+    normalized[j++] = c;
+  }
+  normalized[j] = '\0';
+  // Normalize the search query too
+  char query[32];
+  if (name_len > 31) name_len = 31;
+  for (uint8_t i = 0; i < name_len; i++) {
+    char c = name[i];
+    if (c == ' ') c = '_';
+    if (c >= 'A' && c <= 'Z') c += 32;
+    query[i] = c;
+  }
+  query[name_len] = '\0';
+  // Substring search: check if query appears anywhere in normalized biome name
+  for (uint8_t i = 0; normalized[i] != '\0'; i++) {
+    uint8_t k;
+    for (k = 0; query[k] != '\0' && normalized[i + k] == query[k]; k++);
+    if (query[k] == '\0') return 1; // Found match
+  }
+  return 0;
+}
+
+// Gets biome at arbitrary block coordinates (not chunk coordinates)
+// Returns the server biome ID (W_* constant)
+uint8_t getBiomeAtBlockCoords(int x, int z) {
+  init_worldgen();
+
+  int biomeID;
+  float height;
+  if (mapApproxHeight(&height, &biomeID, &g, &surface_noise_biome, x >> 2, z >> 2, 1, 1) == 0) {
+    biomeID = getBiomeAt(&g, 1, x, 64, z);
+  }
+
+  // Same remapping as getChunkBiomeRaw
+  switch (biomeID) {
+    case ocean: return W_plains;
+    case plains: return W_plains;
+    case sunflower_plains: return W_sunflower_plains;
+    case desert: return W_desert;
+    case desert_lakes: return W_desert;
+    case windswept_hills: return W_windswept_hills;
+    case forest: return W_forest;
+    case flower_forest: return W_flower_forest;
+    case taiga: return W_taiga;
+    case taiga_mountains: return W_windswept_hills;
+    case swamp: return W_swamp;
+    case swamp_hills: return W_swamp;
+    case river: return W_plains;
+    case frozen_ocean: return W_snowy_plains;
+    case frozen_river: return W_snowy_plains;
+    case ice_spikes: return W_snowy_plains;
+    case beach: return W_plains;
+    case desertHills: return W_desert;
+    case forestHills: return W_forest;
+    case taigaHills: return W_taiga;
+    case jungle: return W_jungle;
+    case modified_jungle: return W_jungle;
+    case deep_ocean: return W_plains;
+    case birch_forest: return W_birch_forest;
+    case tall_birch_forest: return W_birch_forest;
+    case dark_forest: return W_dark_forest;
+    case snowy_taiga: return W_snowy_taiga;
+    case savanna: return W_savanna;
+    case shattered_savanna: return W_savanna;
+    case badlands: return W_badlands;
+    case eroded_badlands: return W_eroded_badlands;
+    case mangrove_swamp: return W_swamp;
+    case meadow: return W_meadow;
+    default:
+      if (isSnowy(biomeID)) return W_snowy_plains;
+      if (isDeepOcean(biomeID)) return W_plains;
+      if (isOceanic(biomeID)) return W_plains;
+      if (isMesa(biomeID)) return W_badlands;
+      return W_plains;
+  }
+}
+
 void init_worldgen() {
     if (gen_initialized) return;
     pthread_mutex_lock(&worldgen_init_mutex);
@@ -798,27 +913,41 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
           if (y >= feature.y && y < feature.y + trunk_height) return B_jungle_log;
         }
 
-        // Get distance from tree center
-        uint8_t cx = base_x + 1;
-        uint8_t cz = base_z + 1;
-        uint8_t dx = x > cx ? x - cx : cx - x;
-        uint8_t dz = z > cz ? z - cz : cz - z;
-        uint8_t dist = (dx > dz ? dx : dz);
+        // Get Manhattan distance from tree center (use feature position as center
+        // to keep canopy within minichunk bounds)
+        int cx = feature.x;
+        int cz = feature.z;
+        int dx = x > cx ? x - cx : cx - x;
+        int dz = z > cz ? z - cz : cz - z;
+        int dist = dx + dz;
 
-        // Large jungle leaf canopy - wide and flat, moved down by 1 block
-        uint8_t canopy_base = feature.y + trunk_height - 3;
-        uint8_t canopy_top = feature.y + trunk_height + 1;
+        // Large jungle leaf canopy - tall, wide, organic shape (Manhattan distance)
+        int trunk_top = feature.y + trunk_height;
+        int leaf_base = trunk_top - 5;
+        int leaf_top = trunk_top + 4;
 
-        // Main canopy layers
-        if (y >= canopy_base && y <= canopy_top) {
-          if (dist <= 3) {
-            if (y == canopy_base && dist == 3) break;
+        // Main canopy: tall layered structure with bulging middle
+        if (y >= leaf_base && y <= leaf_top) {
+          int layer = y - leaf_base;
+          int total_layers = leaf_top - leaf_base + 1; // 10 layers
+          // Taper at bottom and top, bulge in middle; max radius 3
+          // to stay within minichunk bounds (center +/- 3 fits in 0-7)
+          int max_radius;
+          if (layer <= 1) max_radius = 2;
+          else if (layer <= 7) max_radius = 3;
+          else max_radius = 2;
+
+          if (dist <= max_radius) {
+            // Cut corners on outer layers for rounder shape
+            if ((y == leaf_base || y == leaf_top) && dist == max_radius) {
+              if (dx == max_radius || dz == max_radius) break;
+            }
             return B_jungle_leaves;
           }
         }
-        // Upper canopy
-        if (y == canopy_top + 1 && dist <= 2) return B_jungle_leaves;
-        if (y == canopy_top + 2 && dist <= 1) return B_jungle_leaves;
+        // Dome on top
+        if (y == leaf_top + 1 && dist <= 2) return B_jungle_leaves;
+        if (y == leaf_top + 2 && dist <= 1) return B_jungle_leaves;
       }
 
       jungle_vegetation:
@@ -935,19 +1064,21 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
           if (y >= feature.y && y < feature.y + trunk_height) return B_dark_oak_log;
         }
 
-        // Get distance from tree center
-        uint8_t cx = base_x + 1;
-        uint8_t cz = base_z + 1;
-        uint8_t dx = x > cx ? x - cx : cx - x;
-        uint8_t dz = z > cz ? z - cz : cz - z;
-        uint8_t dist = dx + dz;
+        // Get Manhattan distance from tree center (use feature position as center
+        // to keep canopy within minichunk bounds)
+        int cx = feature.x;
+        int cz = feature.z;
+        int dx = x > cx ? x - cx : cx - x;
+        int dz = z > cz ? z - cz : cz - z;
+        int dist = dx + dz;
 
-        // Large dark oak canopy - dome shape, moved down by 1 block
-        uint8_t canopy_base = feature.y + trunk_height - 1;
+        // Dark oak canopy - dome shape (Manhattan distance)
+        int canopy_base = feature.y + trunk_height - 1;
         if (y >= canopy_base && y <= canopy_base + 3) {
           int layer = y - canopy_base;
-          int max_dist = 3 - layer;
-          if (dist <= max_dist + 1 && dist > 0) {
+          // Taper from radius 3 at bottom to 1 at top
+          int max_radius = (layer == 0) ? 3 : (layer == 1) ? 2 : 1;
+          if (dist <= max_radius && dist > 0) {
             return B_dark_oak_leaves;
           }
         }
@@ -1527,9 +1658,11 @@ ChunkFeature getFeatureFromAnchor (ChunkAnchor anchor) {
   //  firstly, it ensures that trees don't cross chunk boundaries;
   //  secondly, it reduces overall feature count. This is favorable
   //  everywhere except for swamps, which are otherwise very boring.
+  //  Margin of 4 ensures 3-block-radius canopies (including 2x2 trees)
+  //  stay within the 8-block minichunk (positions 0-7).
   if (anchor.biome != W_swamp) {
-    if (feature.x < 3 || feature.x > CHUNK_SIZE - 3) skip_feature = true;
-    else if (feature.z < 3 || feature.z > CHUNK_SIZE - 3) skip_feature = true;
+    if (feature.x < 3 || feature.x > CHUNK_SIZE - 4) skip_feature = true;
+    else if (feature.z < 3 || feature.z > CHUNK_SIZE - 4) skip_feature = true;
   }
 
   if (skip_feature) {

@@ -90,6 +90,13 @@ uint8_t is_door_block(uint8_t block) {
         block == B_oak_door ||
         block == B_spruce_door ||
         block == B_birch_door ||
+        block == B_jungle_door ||
+        block == B_acacia_door ||
+        block == B_cherry_door ||
+        block == B_dark_oak_door ||
+        block == B_pale_oak_door ||
+        block == B_mangrove_door ||
+        block == B_bamboo_door ||
         block == B_iron_door
     );
 }
@@ -99,7 +106,8 @@ uint8_t is_stair_block(uint8_t block) {
         block == B_oak_stairs ||
         block == B_spruce_stairs ||
         block == B_birch_stairs ||
-        block == B_cobblestone_stairs
+        block == B_jungle_stairs ||
+        block == B_acacia_stairs
     );
 }
 

@@ -33,6 +33,15 @@ uint16_t getSlabFromPlank(uint16_t plank) {
     case I_oak_planks: return I_oak_slab;
     case I_spruce_planks: return I_spruce_slab;
     case I_birch_planks: return I_birch_slab;
+    case I_jungle_planks: return I_jungle_slab;
+    case I_acacia_planks: return I_acacia_slab;
+    case I_cherry_planks: return I_cherry_slab;
+    case I_dark_oak_planks: return I_dark_oak_slab;
+    case I_pale_oak_planks: return I_pale_oak_slab;
+    case I_mangrove_planks: return I_mangrove_slab;
+    case I_bamboo_planks: return I_bamboo_slab;
+    case I_crimson_planks: return I_crimson_slab;
+    case I_warped_planks: return I_warped_slab;
     default: return I_oak_slab;  // Fallback for unavailable types
   }
 }
@@ -43,6 +52,15 @@ uint16_t getStairFromPlank(uint16_t plank) {
     case I_oak_planks: return I_oak_stairs;
     case I_spruce_planks: return I_spruce_stairs;
     case I_birch_planks: return I_birch_stairs;
+    case I_jungle_planks: return I_jungle_stairs;
+    case I_acacia_planks: return I_acacia_stairs;
+    case I_cherry_planks: return I_cherry_stairs;
+    case I_dark_oak_planks: return I_dark_oak_stairs;
+    case I_pale_oak_planks: return I_pale_oak_stairs;
+    case I_mangrove_planks: return I_mangrove_stairs;
+    case I_bamboo_planks: return I_bamboo_stairs;
+    case I_crimson_planks: return I_crimson_stairs;
+    case I_warped_planks: return I_warped_stairs;
     default: return I_oak_stairs;  // Fallback for unavailable types
   }
 }
