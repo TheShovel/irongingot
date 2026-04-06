@@ -91,7 +91,8 @@
       "Bash(entries *)",
       "Bash(4)",
       "Bash(2)",
-      "Bash(entries.append)"
+      "Bash(entries.append)",
+      "Bash(make)"
     ]
   },
   "$version": 3

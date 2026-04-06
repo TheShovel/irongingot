@@ -1131,6 +1131,13 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
   return 1;
 }
 
+// Forward declarations for breakConnectedLeaves
+static void breakConnectedLeaves(short x, uint8_t y, short z, uint8_t leaf_type, PlayerData *player, int *broken_count);
+static void breakFloatingLeaves(short bx, uint8_t by, short bz, uint8_t leaf_type, PlayerData *player, int *broken_count);
+void playPickupAnimation(PlayerData *player, uint16_t item, double x, double y, double z);
+int givePlayerItem(PlayerData *player, uint16_t item, uint8_t count);
+uint16_t getMiningResult(uint16_t held_item, uint8_t block);
+
 uint8_t isLeafBlock (uint8_t block) {
   return (
     block == B_oak_leaves ||
@@ -1143,6 +1150,105 @@ uint8_t isLeafBlock (uint8_t block) {
     block == B_mangrove_leaves ||
     block == B_pale_oak_leaves
   );
+}
+
+// Recursively break connected leaf blocks of the same type (cap at 6 total)
+static void breakConnectedLeaves (short x, uint8_t y, short z, uint8_t leaf_type, PlayerData *player, int *broken_count) {
+  if (*broken_count >= 6) return;
+
+  // Check all 6 adjacent blocks
+  short dx[6] = {1, -1, 0, 0, 0, 0};
+  short dz[6] = {0, 0, 1, -1, 0, 0};
+  int dy[6] = {0, 0, 0, 0, 1, -1};
+
+  for (int i = 0; i < 6; i++) {
+    if (*broken_count >= 6) break;
+
+    short nx = x + dx[i];
+    uint8_t ny = y + dy[i];
+    short nz = z + dz[i];
+
+    uint8_t adj = getBlockAt(nx, ny, nz);
+    if (adj == leaf_type) {
+      makeBlockChange(nx, ny, nz, 0);
+      (*broken_count)++;
+      // Drop item from breaking this leaf
+      uint16_t held_item = player->inventory_items[player->hotbar];
+      uint16_t drop = getMiningResult(held_item, leaf_type);
+      if (drop) {
+        #ifdef ENABLE_PICKUP_ANIMATION
+        playPickupAnimation(player, drop, nx, ny, nz);
+        #endif
+        givePlayerItem(player, drop, 1);
+      }
+      // Recurse into this leaf's neighbors
+      breakConnectedLeaves(nx, ny, nz, leaf_type, player, broken_count);
+    }
+  }
+}
+
+// Check if a block is any kind of log
+static uint8_t isLogBlock(uint8_t block) {
+  return (
+    block == B_oak_log ||
+    block == B_spruce_log ||
+    block == B_birch_log ||
+    block == B_jungle_log ||
+    block == B_acacia_log ||
+    block == B_dark_oak_log ||
+    block == B_cherry_log ||
+    block == B_mangrove_log ||
+    block == B_pale_oak_log
+  );
+}
+
+// Break floating leaf blocks within a 2-block radius that have no log support
+static void breakFloatingLeaves (short bx, uint8_t by, short bz, uint8_t leaf_type, PlayerData *player, int *broken_count) {
+  // Scan a 5x5x5 area centered on the broken block (radius 2)
+  for (short dx = -2; dx <= 2; dx++) {
+    for (short dz = -2; dz <= 2; dz++) {
+      for (int dy = -2; dy <= 2; dy++) {
+        if (*broken_count >= 6) return;
+
+        short nx = bx + dx;
+        uint8_t ny = by + dy;
+        short nz = bz + dz;
+
+        // Skip the block that was already broken
+        if (dx == 0 && dy == 0 && dz == 0) continue;
+
+        uint8_t adj = getBlockAt(nx, ny, nz);
+        if (adj != leaf_type) continue;
+
+        // Check if this leaf has a log within 2 blocks
+        uint8_t has_support = 0;
+        for (short lx = -2; lx <= 2 && !has_support; lx++) {
+          for (short lz = -2; lz <= 2 && !has_support; lz++) {
+            for (int ly = -2; ly <= 2 && !has_support; ly++) {
+              if (lx == 0 && ly == 0 && lz == 0) continue;
+              if (isLogBlock(getBlockAt(nx + lx, ny + ly, nz + lz))) {
+                has_support = 1;
+              }
+            }
+          }
+        }
+
+        // Break the leaf if it has no log support
+        if (!has_support) {
+          makeBlockChange(nx, ny, nz, 0);
+          (*broken_count)++;
+          uint16_t held_item = player->inventory_items[player->hotbar];
+          uint16_t drop = getMiningResult(held_item, leaf_type);
+          if (drop) {
+            #ifdef ENABLE_PICKUP_ANIMATION
+            playPickupAnimation(player, drop, nx, ny, nz);
+            #endif
+            givePlayerItem(player, drop, 1);
+          }
+        }
+      }
+    }
+  }
 }
 
 uint8_t isSaplingBlock (uint8_t block) {
@@ -1234,7 +1340,7 @@ uint16_t getMiningResult (uint16_t held_item, uint8_t block) {
     uint32_t r = fast_rand();
 
     if (held_item == I_shears) return leaf_item;
-    if (leafDropsApple(block) && r < 21474836) return I_apple; // 0.5%
+    if (leafDropsApple(block) && r < 214748364) return I_apple; // 5%
     if (r < 85899345) return I_stick; // 2%
     if (sapling_item != 0 && r < 214748364) return sapling_item; // 5%
     return 0;
@@ -1959,6 +2065,13 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
     givePlayerItem(player, item, 1);
   }
 
+  // Cascade-break connected leaves and floating leaves (cap at 6 additional broken)
+  if (isLeafBlock(block)) {
+    int broken_count = 0;
+    breakConnectedLeaves(x, y, z, block, player, &broken_count);
+    breakFloatingLeaves(x, y, z, block, player, &broken_count);
+  }
+
   // Update nearby fluids
   uint8_t block_above = getBlockAt(x, y + 1, z);
   #ifdef DO_FLUID_FLOW
@@ -2459,6 +2572,17 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
   ) {
     // Apply server-side block change
     if (makeBlockChange(x, y, z, block)) return;
+    // Instant tree growth for saplings
+    if (isSaplingBlock(block)) {
+      uint8_t target_below = getBlockAt(x, y - 1, z);
+      if (
+        target_below == B_dirt ||
+        target_below == B_grass_block ||
+        target_below == B_mud
+      ) {
+        placeSaplingStructure(x, y, z, block);
+      }
+    }
     // Decrease item amount in selected slot
     *count -= 1;
     // Clear item id in slot if amount is zero
