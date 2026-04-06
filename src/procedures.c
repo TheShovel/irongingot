@@ -2683,9 +2683,6 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
     PlayerData *player;
     if (getPlayerData(attacker_id, &player)) return;
 
-    // Check if attack cooldown flag is set
-    if (player->flags & 0x01) return;
-
     // Scale damage based on held item
     uint16_t held_item = player->inventory_items[player->hotbar];
     if (held_item == I_wooden_sword) damage *= 4;
@@ -2694,10 +2691,6 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
     else if (held_item == I_iron_sword) damage *= 6;
     else if (held_item == I_diamond_sword) damage *= 7;
     else if (held_item == I_netherite_sword) damage *= 8;
-
-    // Enable attack cooldown
-    player->flags |= 0x01;
-    player->flagval_8 = 0;
 
   }
 
@@ -3234,16 +3227,6 @@ static void updatePlayerStateTask(void* arg) {
     player->flagval_16++;
     free(task);
     return;
-  }
-
-  // Reset player attack cooldown
-  if (player->flags & 0x01) {
-    if (player->flagval_8 >= (uint8_t)(0.6f * TICKS_PER_SECOND)) {
-      player->flags &= ~0x01;
-      player->flagval_8 = 0;
-    } else {
-      player->flagval_8++;
-    }
   }
 
   // Handle eating animation timer (no packet - will be sent in main thread)
