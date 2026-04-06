@@ -2544,6 +2544,10 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
   static const uint8_t passive_types[] = { 25, 28, 95, 106 };
   static const uint8_t num_passive_types = 4;
 
+  // Hostile mob types: Zombie(145) - spawns only at night
+  static const uint8_t hostile_types[] = { 145 };
+  static const uint8_t num_hostile_types = 1;
+
   int max_mobs = config.mob_spawn_max_per_player;
   int spawn_range = config.mob_spawn_range;
   int min_dist = config.mob_spawn_min_distance;
@@ -2553,6 +2557,9 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
   if ((int)existing >= max_mobs) return;
 
   uint8_t slots_left = (uint8_t)(max_mobs - existing);
+
+  // Determine if it's night (world_time >= 12000)
+  uint8_t is_night = (world_time >= 12000);
 
   // Determine the direction "behind" the player using yaw.
   // yaw is -128..127 mapping to -180..180 degrees.
@@ -2630,6 +2637,45 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
 
     // Spawn mobs with 10 HP.
     spawnMob(type, spawn_x, surface_y + 1, spawn_z, 10);
+  }
+
+  // Spawn hostile mobs (zombies) only at night
+  if (is_night && num_hostile_types > 0) {
+    uint8_t hostile_to_spawn = (fast_rand() % slots_left) + 1;
+    if (hostile_to_spawn > slots_left / 2) hostile_to_spawn = slots_left / 2;
+    if (hostile_to_spawn < 1) hostile_to_spawn = 1;
+
+    for (uint8_t s = 0; s < hostile_to_spawn; s ++) {
+      int dist_range = spawn_range - min_dist;
+      if (dist_range <= 0) dist_range = 1;
+      uint8_t dist = (uint8_t)min_dist + (fast_rand() % dist_range);
+
+      int8_t side_offset = (int8_t)(fast_rand() % 11) - 5;
+
+      short spawn_x = player->x + behind_dx * dist + side_dx * side_offset;
+      short spawn_z = player->z + behind_dz * dist + side_dz * side_offset;
+
+      int16_t vec_x = spawn_x - player->x;
+      int16_t vec_z = spawn_z - player->z;
+      int16_t dot = vec_x * fwd_dx + vec_z * fwd_dz;
+      if (dot >= 0) continue;
+
+      uint8_t surface_y = getHeightAt(spawn_x, spawn_z);
+      if (surface_y == 0) continue;
+
+      uint8_t surface_block = getBlockAt(spawn_x, surface_y, spawn_z);
+      if (surface_block != B_grass_block &&
+          surface_block != B_snowy_grass_block &&
+          surface_block != B_snow_block) continue;
+
+      if (!isPassableSpawnBlock(getBlockAt(spawn_x, surface_y + 1, spawn_z))) continue;
+      if (!isPassableSpawnBlock(getBlockAt(spawn_x, surface_y + 2, spawn_z))) continue;
+
+      uint8_t type = hostile_types[fast_rand() % num_hostile_types];
+
+      // Zombies spawn with 20 HP
+      spawnMob(type, spawn_x, surface_y + 1, spawn_z, 20);
+    }
   }
 
 }
@@ -3034,13 +3080,23 @@ void handleServerTick (int64_t time_since_last_tick) {
 
     } else { // Hostile mob movement handling
 
+      // Zombies move 2x faster and have attack cooldown
+      double zombie_move = (mob_data[i].type == 145) ? move_amount * 2.0 : move_amount;
+
       // If we're already next to the player, hurt them and skip movement
       double dist_to_player = sqrt(closest_dist_double);
       double y_diff = fabs(old_y - closest_player->y);
       if (dist_to_player < 3.0 && y_diff < 2.0) {
-        hurtEntity(closest_player->client_fd, entity_id, D_generic, 6);
+        // Attack cooldown check - zombies can't attack more than once per second
+        if (mob_data[i].move_timer <= 0) {
+          hurtEntity(closest_player->client_fd, entity_id, D_generic, 6);
+          mob_data[i].move_timer = 20; // 1 second cooldown (20 ticks)
+        }
         continue;
       }
+
+      // Decrement attack cooldown timer
+      if (mob_data[i].move_timer > 0) mob_data[i].move_timer--;
 
       // Move towards the closest player with persistent direction
       double dx = closest_player->x - old_x;
@@ -3049,15 +3105,15 @@ void handleServerTick (int64_t time_since_last_tick) {
 
       if (len > 0.001) {
         // Normalize and scale movement for smooth pursuit
-        double move_x = (dx / len) * move_amount;
-        double move_z = (dz / len) * move_amount;
+        double move_x = (dx / len) * zombie_move;
+        double move_z = (dz / len) * zombie_move;
 
         new_x += move_x;
         new_z += move_z;
 
         // Calculate yaw from direction
         double angle = atan2(dz, dx) * 256.0 / (2.0 * 3.14159265358979);
-        yaw = (uint8_t)((int)(angle + 0.5) & 255);
+        yaw = (uint8_t)(((int)(angle + 0.5) - 53) & 255);
       }
 
     }

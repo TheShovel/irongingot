@@ -1622,6 +1622,7 @@ int cs_chat (int client_fd) {
     "  !msg <player> <message> - Send a private message\n"
     "  !biome [x z] - Show biome at current or given coordinates\n"
     "  !tp <x> <y> <z> - Teleport to coordinates\n"
+    "  !timeset <ticks> - Set world time (0=day, 12000=night)\n"
     "  !findbiome <name> [radius] - Find and teleport to nearest biome\n"
     "  !find biome <name> [radius] - Alias for !findbiome\n"
     "  !help - Show this help message";
@@ -1733,6 +1734,37 @@ int cs_chat (int client_fd) {
     char response[128];
     int resp_len = snprintf(response, sizeof(response), "§7Teleported to §f%d, %d, %d", tx, ty, tz);
     sc_systemChat(client_fd, response, (uint16_t)resp_len);
+    goto cleanup;
+  }
+
+  // !timeset <ticks> - Set the world time (0-23999, 12000=night, 0=day)
+  if (!strncmp((char *)recv_buffer, "!timeset", 8)) {
+    if (message_len < 10) {
+      sc_systemChat(client_fd, "§7Usage: !timeset <ticks>", 28);
+      goto cleanup;
+    }
+    int ci = 9;
+    while (recv_buffer[ci] == ' ' && ci < 224) ci++;
+    int ci_start = ci;
+    while (recv_buffer[ci] != ' ' && recv_buffer[ci] != '\0' && ci < 224) ci++;
+    if (ci <= ci_start) {
+      sc_systemChat(client_fd, "§7Usage: !timeset <ticks>", 28);
+      goto cleanup;
+    }
+    char time_buf[16];
+    memcpy(time_buf, recv_buffer + ci_start, ci - ci_start);
+    time_buf[ci - ci_start] = '\0';
+    int new_time = atoi(time_buf);
+    new_time = new_time % 24000;
+    world_time = new_time;
+    char response[64];
+    int resp_len = snprintf(response, sizeof(response), "§7World time set to §f%d", new_time);
+    sc_systemChat(client_fd, response, (uint16_t)resp_len);
+    for (int i = 0; i < MAX_PLAYERS; i++) {
+      if (player_data[i].client_fd == -1) continue;
+      if (player_data[i].flags & 0x20) continue;
+      sc_updateTime(player_data[i].client_fd, world_time);
+    }
     goto cleanup;
   }
 
