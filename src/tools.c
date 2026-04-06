@@ -982,6 +982,10 @@ void discard_all (int client_fd, size_t remaining, uint8_t require_first) {
 ssize_t writeByte (int client_fd, uint8_t byte) {
   return send_all(client_fd, &byte, 1);
 }
+ssize_t writeInt16 (int client_fd, int16_t num) {
+  uint16_t be = htons((uint16_t)num);
+  return send_all(client_fd, &be, sizeof(be));
+}
 ssize_t writeUint16 (int client_fd, uint16_t num) {
   uint16_t be = htons(num);
   return send_all(client_fd, &be, sizeof(be));

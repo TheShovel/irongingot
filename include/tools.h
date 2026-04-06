@@ -36,6 +36,7 @@ void discard_all (int client_fd, size_t remaining, uint8_t require_first);
 
 
 ssize_t writeByte (int client_fd, uint8_t byte);
+ssize_t writeInt16 (int client_fd, int16_t num);
 ssize_t writeUint16 (int client_fd, uint16_t num);
 ssize_t writeUint32 (int client_fd, uint32_t num);
 ssize_t writeUint64 (int client_fd, uint64_t num);

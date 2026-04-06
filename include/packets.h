@@ -59,6 +59,7 @@ int sc_teleportEntity (int client_fd, int id, double x, double y, double z, floa
 int sc_setHeadRotation (int client_fd, int id, uint8_t yaw);
 int sc_updateEntityRotation (int client_fd, int id, uint8_t yaw, uint8_t pitch);
 int sc_damageEvent (int client_fd, int id, int type);
+int sc_setEntityVelocity (int client_fd, int id, int16_t vx, int16_t vy, int16_t vz);
 int sc_setHealth (int client_fd, uint8_t health, uint8_t food, uint16_t saturation);
 int sc_respawn (int client_fd);
 int sc_systemChat (int client_fd, char* message, uint16_t len);

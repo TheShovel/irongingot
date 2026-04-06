@@ -2645,8 +2645,10 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
     if (hostile_to_spawn > slots_left / 2) hostile_to_spawn = slots_left / 2;
     if (hostile_to_spawn < 1) hostile_to_spawn = 1;
 
+    int hostile_range = 2; // Zombies spawn within 2 blocks
+
     for (uint8_t s = 0; s < hostile_to_spawn; s ++) {
-      int dist_range = spawn_range - min_dist;
+      int dist_range = hostile_range - min_dist;
       if (dist_range <= 0) dist_range = 1;
       uint8_t dist = (uint8_t)min_dist + (fast_rand() % dist_range);
 
@@ -2674,7 +2676,7 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
       uint8_t type = hostile_types[fast_rand() % num_hostile_types];
 
       // Zombies spawn with 20 HP
-      spawnMob(type, spawn_x, surface_y + 1, spawn_z, 20);
+      spawnMob(type, spawn_x, surface_y + 1, spawn_z, 10);
     }
   }
 
@@ -2820,6 +2822,20 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
 
     // Set the mob's panic timer
     mob->data |= (3 << 6);
+
+    // Push zombies back 2 blocks when hit by a player
+    if (attacker_id > 0 && mob->type == 145) {
+      PlayerData *attacker;
+      if (!getPlayerData(attacker_id, &attacker)) {
+        double dx = mob->x - attacker->x;
+        double dz = mob->z - attacker->z;
+        double len = sqrt(dx * dx + dz * dz);
+        if (len > 0.001) {
+          mob->x += (dx / len) * 2.0;
+          mob->z += (dz / len) * 2.0;
+        }
+      }
+    }
 
     // Process health change on the server
     if (mob_health <= damage) {
@@ -3083,20 +3099,30 @@ void handleServerTick (int64_t time_since_last_tick) {
       // Zombies move 2x faster and have attack cooldown
       double zombie_move = (mob_data[i].type == 145) ? move_amount * 2.0 : move_amount;
 
-      // If we're already next to the player, hurt them and skip movement
       double dist_to_player = sqrt(closest_dist_double);
       double y_diff = fabs(old_y - closest_player->y);
+
+      // Vision range - zombies can see and chase up to 16 blocks
+      int zombie_vision_range = 16;
+      // Attack range - zombies attack when within 2 blocks
+      int zombie_attack_range = 2;
+
+      // If we're within attack range, hurt the player
       if (dist_to_player < 3.0 && y_diff < 2.0) {
         // Attack cooldown check - zombies can't attack more than once per second
         if (mob_data[i].move_timer <= 0) {
-          hurtEntity(closest_player->client_fd, entity_id, D_generic, 6);
+          hurtEntity(closest_player->client_fd, entity_id, D_generic, 1);
           mob_data[i].move_timer = 20; // 1 second cooldown (20 ticks)
         }
-        continue;
       }
 
       // Decrement attack cooldown timer
       if (mob_data[i].move_timer > 0) mob_data[i].move_timer--;
+
+      // Only move towards player if within vision range
+      if (dist_to_player > zombie_vision_range) {
+        continue;
+      }
 
       // Move towards the closest player with persistent direction
       double dx = closest_player->x - old_x;
@@ -3113,7 +3139,7 @@ void handleServerTick (int64_t time_since_last_tick) {
 
         // Calculate yaw from direction
         double angle = atan2(dz, dx) * 256.0 / (2.0 * 3.14159265358979);
-        yaw = (uint8_t)(((int)(angle + 0.5) - 53) & 255);
+        yaw = (uint8_t)(((int)(angle + 0.5) - 75) & 255);
       }
 
     }

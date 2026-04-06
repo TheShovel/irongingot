@@ -1286,6 +1286,20 @@ int sc_spawnEntity (
   return 0;
 }
 
+// S->C Set Entity Velocity
+int sc_setEntityVelocity (int client_fd, int id, int16_t vx, int16_t vy, int16_t vz) {
+  startPacket(client_fd, 0x1C);
+
+  writeVarInt(client_fd, id); // Entity ID
+  writeInt16(client_fd, vx);
+  writeInt16(client_fd, vy);
+  writeInt16(client_fd, vz);
+
+  endPacket(client_fd);
+
+  return 0;
+}
+
 // S->C Set Entity Metadata
 int sc_setEntityMetadata (int client_fd, int id, EntityData *metadata, size_t length) {
   startPacket(client_fd, 0x5C);
