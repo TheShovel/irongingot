@@ -6,26 +6,25 @@
 /*
  * Unified special block state system.
  *
- * Instead of the old multi-entry BlockChange hack, every special block
- * stores its state in a compact hash table keyed by block position.
- * The state is a single uint16_t that encodes all relevant properties.
+ * Every special block stores its state in a compact hash table keyed by the
+ * full block position. The state is a single uint16_t that encodes all
+ * relevant properties.
  *
  * State encoding per block type:
  *
- * Doors (B_oak_door, B_spruce_door, B_birch_door, B_iron_door):
+ * Doors (all supported wooden doors):
  *   Bits 0:     open (0=closed, 1=open)
  *   Bit  1:     hinge (0=left, 1=right)
  *   Bits 2-3:   direction (0=north, 1=east, 2=south, 3=west)
- *   Bit  4:     half (0=lower, 1=upper) -- derived from Y, not stored
- *   Bits 5-15:  unused
+ *   Bits 4-15:  unused
  *
- * Trapdoors (all *_trapdoor blocks):
+ * Trapdoors (all supported wooden trapdoors):
  *   Bits 0:     open (0=closed, 1=open)
  *   Bit  1:     half (0=bottom, 1=top)
  *   Bits 2-3:   direction (0=north, 1=east, 2=south, 3=west)
  *   Bits 4-15:  unused
  *
- * Stairs (B_oak_stairs, B_spruce_stairs, B_birch_stairs, B_cobblestone_stairs):
+ * Stairs (all supported stairs):
  *   Bits 0-1:   half (0=bottom, 1=top)
  *   Bits 2-3:   direction (0=north, 1=east, 2=south, 3=west)
  *   Bits 4-15:  unused
@@ -37,19 +36,21 @@
  *
  * Chests (B_chest):
  *   Bits 0-1:   direction (0=north, 1=east, 2=south, 3=west)
- *   Bits 2-15:  unused  (inventory stored separately)
+ *   Bits 2-15:  unused
  */
 
 /* Maximum number of special block state entries we track. */
 #define MAX_SPECIAL_BLOCKS 8192
 
-/* Position key packed into a single 32-bit value for hashing. */
 typedef struct {
-    int32_t key;       /* packed (x << 16) | (z & 0xFFFF), y in upper bits */
-    uint16_t state;    /* encoded state bits */
-    uint8_t block;     /* block type for validation */
-    uint8_t occupied;  /* 1 if slot is in use */
+    int16_t x;
+    int16_t z;
+    uint16_t state;
+    uint8_t y;
+    uint8_t block;
 } SpecialBlockEntry;
+
+#define SPECIAL_BLOCK_EMPTY 0xFF
 
 extern SpecialBlockEntry special_blocks[MAX_SPECIAL_BLOCKS];
 extern int special_blocks_count;

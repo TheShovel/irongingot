@@ -48,6 +48,7 @@ typedef struct {
   int scale_movement_updates;
   int do_fluid_flow;
   int allow_chests;
+  int allow_doors;
   int enable_flight;
   int enable_pickup_animation;
   int enable_cactus_damage;

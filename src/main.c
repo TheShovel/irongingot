@@ -696,14 +696,20 @@ int main () {
 
   // Initialize block changes
   #ifdef INFINITE_BLOCK_CHANGES
-    // Start with a minimal capacity, will grow as needed
-    block_changes_capacity = 10;
+    if (config.infinite_block_changes) {
+      // Start small and grow on demand.
+      block_changes_capacity = 10;
+      printf("Block changes: dynamic (initial capacity: %d)\n", block_changes_capacity);
+    } else {
+      // Use the dynamic storage backend in fixed-capacity mode.
+      block_changes_capacity = config.max_block_changes > 0 ? config.max_block_changes : MAX_BLOCK_CHANGES;
+      printf("Block changes: fixed (%d)\n", block_changes_capacity);
+    }
     block_changes = (BlockChange *)malloc(block_changes_capacity * sizeof(BlockChange));
     if (!block_changes) {
       perror("Failed to allocate memory for block changes");
       exit(EXIT_FAILURE);
     }
-    printf("Block changes: dynamic (initial capacity: %d)\n", block_changes_capacity);
   #else
     printf("Block changes: fixed (%d)\n", MAX_BLOCK_CHANGES);
   #endif
@@ -951,7 +957,7 @@ int main () {
           if (i >= block_changes_count) block_changes_count = i + 1;
         }
         rebuildBlockChangeIndexes();
-        writeBlockChangesToDisk(0, block_changes_count);
+        writeBlockChangesToDisk(0, block_changes_count - 1);
         writePlayerDataToDisk();
         disconnectClient(&clients[client_index], 7);
         break;

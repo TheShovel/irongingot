@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <string.h>
 #include "globals.h"
 
 #ifdef SYNC_WORLD_TO_DISK
@@ -18,6 +19,90 @@
 #include "special_block.h"
 
 int64_t last_disk_sync_time = 0;
+
+typedef struct {
+  int32_t key;
+  uint16_t state;
+  uint8_t block;
+  uint8_t occupied;
+} LegacySpecialBlockEntry;
+
+static inline uint32_t legacy_pack_special_key(short x, uint8_t y, short z) {
+  return ((uint32_t)(uint16_t)x << 16) | ((uint32_t)y << 8) | (uint16_t)z;
+}
+
+static uint8_t isSpecialStateBlock(uint8_t block) {
+  return (
+    is_door_block(block) ||
+    is_trapdoor_block(block) ||
+    is_stair_block(block) ||
+    is_oriented_block(block)
+  );
+}
+
+static uint8_t looksLikeCurrentSpecialBlockTable(const SpecialBlockEntry *entries, int sb_count) {
+  int occupied = 0;
+
+  for (int i = 0; i < MAX_SPECIAL_BLOCKS; i++) {
+    if (entries[i].block == SPECIAL_BLOCK_EMPTY) continue;
+    if (!isSpecialStateBlock(entries[i].block)) return 0;
+    occupied++;
+  }
+
+  return occupied == sb_count;
+}
+
+static int recoverLegacySpecialBlockTable(const LegacySpecialBlockEntry *entries) {
+  int recovered = 0;
+  int ambiguous = 0;
+
+  for (int i = 0; i < MAX_SPECIAL_BLOCKS; i++) {
+    if (!entries[i].occupied) continue;
+    if (!isSpecialStateBlock(entries[i].block)) continue;
+
+    int matches = 0;
+    short match_x = 0;
+    uint8_t match_y = 0;
+    short match_z = 0;
+
+    for (int j = 0; j < block_changes_count; j++) {
+      if (block_changes[j].block == 0xFF) continue;
+
+      uint8_t candidate_block = block_changes[j].block;
+      uint8_t skip = 0;
+
+      if (candidate_block == B_chest) skip = 14;
+      else if (is_door_block(candidate_block)) skip = 2;
+      else if (is_stair_block(candidate_block) || candidate_block == B_furnace) skip = 1;
+
+      if (
+        candidate_block == entries[i].block &&
+        legacy_pack_special_key(block_changes[j].x, block_changes[j].y, block_changes[j].z) == (uint32_t)entries[i].key
+      ) {
+        matches++;
+        match_x = block_changes[j].x;
+        match_y = block_changes[j].y;
+        match_z = block_changes[j].z;
+        if (matches > 1) break;
+      }
+
+      j += skip;
+    }
+
+    if (matches == 1) {
+      special_block_set_state(match_x, match_y, match_z, entries[i].block, entries[i].state);
+      recovered++;
+    } else if (matches > 1) {
+      ambiguous++;
+    }
+  }
+
+  if (ambiguous > 0) {
+    fprintf(stderr, "[LOAD] Skipped %d ambiguous legacy special block entries\n", ambiguous);
+  }
+
+  return recovered;
+}
 
 // Restores world data from disk, or writes world file if it doesn't exist
 int initSerializer () {
@@ -162,14 +247,27 @@ int initSerializer () {
     fprintf(stderr, "[LOAD] Read sb_count: read=%zd, value=%d\n", read, sb_count);
     if (read == 1 && sb_count > 0 && sb_count <= MAX_SPECIAL_BLOCKS) {
       size_t expected = sizeof(SpecialBlockEntry) * MAX_SPECIAL_BLOCKS;
+      void *raw_special_blocks = malloc(expected);
+
       fprintf(stderr, "[LOAD] Reading %zd bytes of special block data\n", expected);
-      read = fread(special_blocks, 1, expected, file);
-      fprintf(stderr, "[LOAD] Read %zd of %zd bytes\n", read, expected);
-      if (read == expected) {
-        special_blocks_count = sb_count;
-        fprintf(stderr, "[LOAD] Successfully loaded %d special block entries\n", special_blocks_count);
+      if (!raw_special_blocks) {
+        fprintf(stderr, "[LOAD] ERROR: failed to allocate temporary special block buffer\n");
       } else {
-        fprintf(stderr, "[LOAD] ERROR: short read of special block data\n");
+        read = fread(raw_special_blocks, 1, expected, file);
+        fprintf(stderr, "[LOAD] Read %zd of %zd bytes\n", read, expected);
+        if (read == expected) {
+          if (looksLikeCurrentSpecialBlockTable((SpecialBlockEntry *)raw_special_blocks, sb_count)) {
+            memcpy(special_blocks, raw_special_blocks, expected);
+            special_blocks_count = sb_count;
+            fprintf(stderr, "[LOAD] Successfully loaded %d special block entries\n", special_blocks_count);
+          } else {
+            int recovered = recoverLegacySpecialBlockTable((LegacySpecialBlockEntry *)raw_special_blocks);
+            fprintf(stderr, "[LOAD] Recovered %d entries from legacy special block table\n", recovered);
+          }
+        } else {
+          fprintf(stderr, "[LOAD] ERROR: short read of special block data\n");
+        }
+        free(raw_special_blocks);
       }
     } else {
       fprintf(stderr, "[LOAD] No special block table found (read=%zd, sb_count=%d)\n", read, sb_count);
@@ -335,6 +433,7 @@ int initSerializer () {
 
 // Writes a range of block change entries to disk
 void writeBlockChangesToDisk (int from, int to) {
+  if (from > to) return;
 
   // Try to open the file in rw (without overwriting)
   FILE *file = fopen(FILE_PATH, "r+b");
@@ -345,7 +444,13 @@ void writeBlockChangesToDisk (int from, int to) {
 
   for (int i = from; i <= to; i ++) {
     // Seek to relevant offset in file
-    if (fseek(file, i * sizeof(BlockChange), SEEK_SET) != 0) {
+    long offset =
+      #ifdef INFINITE_BLOCK_CHANGES
+        sizeof(int) + (long)i * sizeof(BlockChange);
+      #else
+        (long)i * sizeof(BlockChange);
+      #endif
+    if (fseek(file, offset, SEEK_SET) != 0) {
       fclose(file);
       perror("Failed to seek in \"world.bin\". Block updates have been dropped.");
       return;
@@ -431,7 +536,7 @@ void writeDataToDiskOnInterval () {
   // Write full player data and block changes buffers
   writePlayerDataToDisk();
   #ifdef DISK_SYNC_BLOCKS_ON_INTERVAL
-  writeBlockChangesToDisk(0, block_changes_count);
+  writeBlockChangesToDisk(0, block_changes_count - 1);
   #endif
 
 }

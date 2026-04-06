@@ -73,6 +73,7 @@ void init_config_defaults(void) {
   config.scale_movement_updates = 1;
   config.do_fluid_flow = 1;
   config.allow_chests = 1;
+  config.allow_doors = 1;
   config.enable_flight = 0;
   config.enable_pickup_animation = 1;
   config.enable_cactus_damage = 1;
@@ -208,6 +209,8 @@ int load_config(const char *filename) {
       config.do_fluid_flow = parse_bool(value);
     } else if (strcmp(key, "allow_chests") == 0) {
       config.allow_chests = parse_bool(value);
+    } else if (strcmp(key, "allow_doors") == 0) {
+      config.allow_doors = parse_bool(value);
     } else if (strcmp(key, "enable_flight") == 0) {
       config.enable_flight = parse_bool(value);
     } else if (strcmp(key, "enable_pickup_animation") == 0) {
@@ -310,6 +313,7 @@ int save_config(const char *filename) {
   fprintf(f, "scale_movement_updates = %s\n", config.scale_movement_updates ? "true" : "false");
   fprintf(f, "do_fluid_flow = %s\n", config.do_fluid_flow ? "true" : "false");
   fprintf(f, "allow_chests = %s\n", config.allow_chests ? "true" : "false");
+  fprintf(f, "allow_doors = %s\n", config.allow_doors ? "true" : "false");
   fprintf(f, "enable_flight = %s\n", config.enable_flight ? "true" : "false");
   fprintf(f, "enable_pickup_animation = %s\n", config.enable_pickup_animation ? "true" : "false");
   fprintf(f, "enable_cactus_damage = %s\n", config.enable_cactus_damage ? "true" : "false");

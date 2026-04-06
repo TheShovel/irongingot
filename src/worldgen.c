@@ -1856,40 +1856,47 @@ uint8_t buildChunkSection (int cx, int cy, int cz) {
     return chunk_anchors[0].biome;
   }
 
+  int block_changes_snapshot_count = 0;
+  BlockChange *block_changes_snapshot = copyBlockChangesSnapshot(&block_changes_snapshot_count);
+  if (block_changes_snapshot_count <= 0 || block_changes_snapshot == NULL) {
+    return chunk_anchors[0].biome;
+  }
+
   // Apply block changes on top of terrain
   // Special blocks (stairs, doors, chests, furnaces) are SKIPPED here because
   // their state IDs don't fit in the uint8_t chunk_section[] / fixed 256-entry
   // global palette. They are sent via individual block update packets after the
   // chunk bulk (see sc_chunkDataAndUpdateLight).
-  for (int i = 0; i < block_changes_count; i ++) {
-    if (block_changes[i].block == 0xFF) continue;
+  for (int i = 0; i < block_changes_snapshot_count; i ++) {
+    if (block_changes_snapshot[i].block == 0xFF) continue;
     // Skip special blocks — they use block updates, not chunk data
-    if (is_stair_block(block_changes[i].block) || is_oriented_block(block_changes[i].block)) {
-      if (block_changes[i].block == B_chest) i += 14;
-      else if (is_stair_block(block_changes[i].block) || block_changes[i].block == B_furnace) i += 1;
+    if (is_stair_block(block_changes_snapshot[i].block) || is_oriented_block(block_changes_snapshot[i].block)) {
+      if (block_changes_snapshot[i].block == B_chest) i += 14;
+      else if (is_stair_block(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_furnace) i += 1;
       continue;
     }
     #ifdef ALLOW_DOORS
-    if (is_door_block(block_changes[i].block)) {
+    if (is_door_block(block_changes_snapshot[i].block)) {
       // Still write the raw door block ID into chunk_section so the client
       // sees *something*. The correct state comes via block update packets.
     } else
     #endif
     // Check if block is within this chunk section
     if (
-      block_changes[i].x >= cx && block_changes[i].x < cx + 16 &&
-      block_changes[i].y >= cy && block_changes[i].y < cy + 16 &&
-      block_changes[i].z >= cz && block_changes[i].z < cz + 16
+      block_changes_snapshot[i].x >= cx && block_changes_snapshot[i].x < cx + 16 &&
+      block_changes_snapshot[i].y >= cy && block_changes_snapshot[i].y < cy + 16 &&
+      block_changes_snapshot[i].z >= cz && block_changes_snapshot[i].z < cz + 16
     ) {
-      int dx = block_changes[i].x - cx;
-      int dy = block_changes[i].y - cy;
-      int dz = block_changes[i].z - cz;
+      int dx = block_changes_snapshot[i].x - cx;
+      int dy = block_changes_snapshot[i].y - cy;
+      int dz = block_changes_snapshot[i].z - cz;
       unsigned address = (unsigned)(dx + (dz << 4) + (dy << 8));
       unsigned index = (address & ~7u) | (7u - (address & 7u));
-      chunk_section[index] = block_changes[i].block;
+      chunk_section[index] = block_changes_snapshot[i].block;
     }
   }
 
+  freeBlockChangesSnapshot(block_changes_snapshot);
   return chunk_anchors[0].biome;
 
 }

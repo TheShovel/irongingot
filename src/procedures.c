@@ -21,6 +21,7 @@
 #include "procedures.h"
 #include "special_block.h"
 #include "thread_pool.h"
+#include "config.h"
 
 // Forward declaration for parallel player updates
 static void handlePlayerUpdatesParallel(int64_t time_since_last_tick, ThreadPool* pool);
@@ -729,6 +730,7 @@ typedef struct {
 
 static ModifiedChunkEntry modified_chunk_table[MODIFIED_CHUNK_TABLE_SIZE];
 static uint8_t modified_chunk_table_initialized = 0;
+static pthread_mutex_t block_changes_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static inline uint32_t coord_hash(int x, int z) {
   uint32_t h = (uint32_t)x * 374761393u + (uint32_t)z * 668265263u;
@@ -813,6 +815,36 @@ void rebuildBlockChangeIndexes (void) {
   }
 
   invalidate_block_lookup_cache();
+}
+
+BlockChange *copyBlockChangesSnapshot (int *count) {
+  if (count == NULL) return NULL;
+
+  pthread_mutex_lock(&block_changes_mutex);
+  *count = block_changes_count;
+
+  if (*count <= 0) {
+    pthread_mutex_unlock(&block_changes_mutex);
+    *count = 0;
+    return NULL;
+  }
+
+  BlockChange *snapshot = (BlockChange *)malloc((size_t)(*count) * sizeof(BlockChange));
+  if (snapshot != NULL) {
+    memcpy(snapshot, block_changes, (size_t)(*count) * sizeof(BlockChange));
+  }
+  pthread_mutex_unlock(&block_changes_mutex);
+
+  if (snapshot == NULL) {
+    fprintf(stderr, "ERROR: Failed to allocate block change snapshot\n");
+    *count = 0;
+  }
+
+  return snapshot;
+}
+
+void freeBlockChangesSnapshot (BlockChange *snapshot) {
+  free(snapshot);
 }
 
 static inline void notify_block_change_mutation(short x, short z) {
@@ -919,11 +951,8 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
   anchor.biome = getChunkBiome(anchor.x, anchor.z);
 
   uint8_t is_base_block = block == getTerrainAt(x, y, z, anchor);
-
-  // In the block_changes array, 0xFF indicates a missing/restored entry.
-  // We track the position of the first such "gap" for when the operation
-  // isn't replacing an existing block change.
-  int first_gap = block_changes_count;
+  int write_from = -1;
+  int write_to = -1;
 
   // Helper macro to clear old special block entries at a position
   #define CLEAR_OLD_SPECIAL_ENTRIES(idx) \
@@ -937,6 +966,13 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
         if ((idx) + 1 < block_changes_count) block_changes[(idx) + 1].block = 0xFF; \
       } \
     } while (0)
+
+  pthread_mutex_lock(&block_changes_mutex);
+
+  // In the block_changes array, 0xFF indicates a missing/restored entry.
+  // We track the position of the first such "gap" for when the operation
+  // isn't replacing an existing block change.
+  int first_gap = block_changes_count;
 
   // Prioritize replacing entries with matching coordinates
   // This prevents having conflicting entries for one set of coordinates
@@ -969,8 +1005,11 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
           special_block_set_state(x, y, z, block, oriented_encode_state(0));
         }
       }
+      write_from = i;
+      write_to = i;
+      pthread_mutex_unlock(&block_changes_mutex);
       #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
-      writeBlockChangesToDisk(i, i);
+      writeBlockChangesToDisk(write_from, write_to);
       #endif
       notify_block_change_mutation(x, z);
       return 0;
@@ -984,7 +1023,10 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
   }
 
   // Don't create a new entry if it contains the base terrain block
-  if (is_base_block) return 0;
+  if (is_base_block) {
+    pthread_mutex_unlock(&block_changes_mutex);
+    return 0;
+  }
 
   // Determine how many block_changes entries this block needs
   int slots_needed = 1;
@@ -999,9 +1041,17 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
   for (int i = first_gap; i <= block_changes_count + slots_needed; i ++) {
     #ifdef INFINITE_BLOCK_CHANGES
     if (i >= block_changes_capacity - slots_needed) {
+      if (!config.infinite_block_changes) break;
       int new_capacity = block_changes_capacity * 2;
+      if (new_capacity <= block_changes_capacity) {
+        new_capacity = block_changes_capacity + slots_needed + 1;
+      }
       BlockChange *new_block_changes = (BlockChange *)realloc(block_changes, new_capacity * sizeof(BlockChange));
-      if (!new_block_changes) { failBlockChange(x, y, z, block); return 1; }
+      if (!new_block_changes) {
+        pthread_mutex_unlock(&block_changes_mutex);
+        failBlockChange(x, y, z, block);
+        return 1;
+      }
       block_changes = new_block_changes;
       for (int j = block_changes_capacity; j < new_capacity; j ++) block_changes[j].block = 0xFF;
       printf("Block changes expanded: %d -> %d\n", block_changes_capacity, new_capacity);
@@ -1064,32 +1114,133 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
     }
 
     if (i >= block_changes_count) block_changes_count = i + 1;
+    write_from = base;
+    write_to = base + slots_needed - 1;
+    pthread_mutex_unlock(&block_changes_mutex);
     #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
-    writeBlockChangesToDisk(base, base + slots_needed - 1);
+    writeBlockChangesToDisk(write_from, write_to);
     #endif
     notify_block_change_mutation(x, z);
     return 0;
   }
 
-  // If we're here, no changes were made
+  pthread_mutex_unlock(&block_changes_mutex);
+
+// If we're here, no changes were made
   failBlockChange(x, y, z, block);
   return 1;
+}
+
+uint8_t isLeafBlock (uint8_t block) {
+  return (
+    block == B_oak_leaves ||
+    block == B_spruce_leaves ||
+    block == B_birch_leaves ||
+    block == B_jungle_leaves ||
+    block == B_acacia_leaves ||
+    block == B_dark_oak_leaves ||
+    block == B_cherry_leaves ||
+    block == B_mangrove_leaves ||
+    block == B_pale_oak_leaves
+  );
+}
+
+uint8_t isSaplingBlock (uint8_t block) {
+  return (
+    block == B_oak_sapling ||
+    block == B_spruce_sapling ||
+    block == B_birch_sapling ||
+    block == B_jungle_sapling ||
+    block == B_acacia_sapling ||
+    block == B_cherry_sapling ||
+    block == B_dark_oak_sapling ||
+    block == B_pale_oak_sapling ||
+    block == B_mangrove_propagule
+  );
+}
+
+static uint16_t getLeafItemFromBlock(uint8_t block) {
+  switch (block) {
+    case B_oak_leaves: return I_oak_leaves;
+    case B_spruce_leaves: return I_spruce_leaves;
+    case B_birch_leaves: return I_birch_leaves;
+    case B_jungle_leaves: return I_jungle_leaves;
+    case B_acacia_leaves: return I_acacia_leaves;
+    case B_dark_oak_leaves: return I_dark_oak_leaves;
+    case B_cherry_leaves: return I_cherry_leaves;
+    case B_mangrove_leaves: return I_mangrove_leaves;
+    case B_pale_oak_leaves: return I_pale_oak_leaves;
+    default: return 0;
+  }
+}
+
+static uint16_t getSaplingItemFromLeafBlock(uint8_t block) {
+  switch (block) {
+    case B_oak_leaves: return I_oak_sapling;
+    case B_spruce_leaves: return I_spruce_sapling;
+    case B_birch_leaves: return I_birch_sapling;
+    case B_jungle_leaves: return I_jungle_sapling;
+    case B_acacia_leaves: return I_acacia_sapling;
+    case B_dark_oak_leaves: return I_dark_oak_sapling;
+    case B_cherry_leaves: return I_cherry_sapling;
+    case B_mangrove_leaves: return I_mangrove_propagule;
+    case B_pale_oak_leaves: return I_pale_oak_sapling;
+    default: return 0;
+  }
+}
+
+static uint8_t leafDropsApple(uint8_t block) {
+  return (
+    block == B_oak_leaves ||
+    block == B_dark_oak_leaves ||
+    block == B_pale_oak_leaves
+  );
+}
+
+static uint8_t isLeafItem(uint16_t item) {
+  return (
+    item == I_oak_leaves ||
+    item == I_spruce_leaves ||
+    item == I_birch_leaves ||
+    item == I_jungle_leaves ||
+    item == I_acacia_leaves ||
+    item == I_dark_oak_leaves ||
+    item == I_cherry_leaves ||
+    item == I_mangrove_leaves ||
+    item == I_pale_oak_leaves
+  );
+}
+
+static uint8_t isSaplingItem(uint16_t item) {
+  return (
+    item == I_oak_sapling ||
+    item == I_spruce_sapling ||
+    item == I_birch_sapling ||
+    item == I_jungle_sapling ||
+    item == I_acacia_sapling ||
+    item == I_cherry_sapling ||
+    item == I_dark_oak_sapling ||
+    item == I_pale_oak_sapling ||
+    item == I_mangrove_propagule
+  );
 }
 
 // Returns the result of mining a block, taking into account the block type and tools
 // Probability numbers obtained with this formula: N = floor(P * (2 ^ 32))
 uint16_t getMiningResult (uint16_t held_item, uint8_t block) {
+  if (isLeafBlock(block)) {
+    uint16_t leaf_item = getLeafItemFromBlock(block);
+    uint16_t sapling_item = getSaplingItemFromLeafBlock(block);
+    uint32_t r = fast_rand();
+
+    if (held_item == I_shears) return leaf_item;
+    if (leafDropsApple(block) && r < 21474836) return I_apple; // 0.5%
+    if (r < 85899345) return I_stick; // 2%
+    if (sapling_item != 0 && r < 214748364) return sapling_item; // 5%
+    return 0;
+  }
 
   switch (block) {
-
-    case B_oak_leaves:
-      if (held_item == I_shears) return I_oak_leaves;
-      uint32_t r = fast_rand();
-      if (r < 21474836) return I_apple; // 0.5%
-      if (r < 85899345) return I_stick; // 2%
-      if (r < 214748364) return I_oak_sapling; // 5%
-      return 0;
-      break;
 
     case B_stone:
     case B_cobblestone:
@@ -1161,7 +1312,7 @@ uint8_t isInstantlyMined (PlayerData *player, uint8_t block) {
     held_item == I_golden_shovel
   );
 
-  if (block == B_oak_leaves)
+  if (isLeafBlock(block))
     return held_item == I_shears;
 
   return (
@@ -1171,7 +1322,7 @@ uint8_t isInstantlyMined (PlayerData *player, uint8_t block) {
     block == B_short_grass ||
     block == B_short_dry_grass ||
     block == B_tall_dry_grass ||
-    block == B_oak_sapling ||
+    isSaplingBlock(block) ||
     block == B_dandelion ||
     block == B_torchflower ||
     block == B_poppy ||
@@ -1203,7 +1354,7 @@ uint8_t isColumnBlock (uint8_t block) {
     block == B_dead_bush ||
     block == B_bush ||
     block == B_torch ||
-    block == B_oak_sapling ||
+    isSaplingBlock(block) ||
     block == B_dandelion ||
     block == B_torchflower ||
     block == B_poppy ||
@@ -1238,6 +1389,7 @@ uint8_t isPassableBlock (uint8_t block) {
     block == B_dead_bush ||
     block == B_bush ||
     block == B_torch ||
+    isSaplingBlock(block) ||
     block == B_dandelion ||
     block == B_torchflower ||
     block == B_poppy ||
@@ -1292,10 +1444,10 @@ uint32_t isCompostItem (uint16_t item) {
   // P = 2^32 / (7 / compost_chance)
 
   if ( // Compost chance: 30%
-    item == I_oak_leaves ||
+    isLeafItem(item) ||
     item == I_short_grass ||
     item == I_wheat_seeds ||
-    item == I_oak_sapling ||
+    isSaplingItem(item) ||
     item == I_moss_carpet
   ) return 184070026;
 
@@ -1810,11 +1962,13 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
   // Update nearby fluids
   uint8_t block_above = getBlockAt(x, y + 1, z);
   #ifdef DO_FLUID_FLOW
+  if (config.do_fluid_flow) {
     checkFluidUpdate(x, y + 1, z, block_above);
     checkFluidUpdate(x - 1, y, z, getBlockAt(x - 1, y, z));
     checkFluidUpdate(x + 1, y, z, getBlockAt(x + 1, y, z));
     checkFluidUpdate(x, y, z - 1, getBlockAt(x, y, z - 1));
     checkFluidUpdate(x, y, z + 1, getBlockAt(x, y, z + 1));
+  }
   #endif
 
   // Check if any blocks above this should break, and if so,
@@ -1866,7 +2020,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       }
     }
     #ifdef ALLOW_CHESTS
-    else if (target == B_chest) {
+    else if (target == B_chest && config.allow_chests) {
       // Get a pointer to the entry following this chest in block_changes
       uint8_t *storage_ptr = NULL;
       for (int i = 0; i < block_changes_count; i ++) {
@@ -1900,7 +2054,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     }
     #endif
     #ifdef ALLOW_DOORS
-    else if (isDoorBlock(target)) {
+    else if (config.allow_doors && isDoorBlock(target)) {
       // Use the unified special block system to toggle the door
       // Door state is always stored at the lower half position
       short door_x = x;
@@ -1923,13 +2077,18 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       open ^= 1;
       state = door_encode_state(open, hinge, direction);
       special_block_set_state(door_x, door_y, door_z, target, state);
+      
+      // Also update upper half's state in the special block table
+      uint8_t above = getBlockChange(door_x, door_y + 1, door_z);
+      if (isDoorBlock(above)) {
+        special_block_set_state(door_x, door_y + 1, door_z, above, state);
+      }
 
       // Broadcast door update to all players
       for (int j = 0; j < MAX_PLAYERS; j++) {
         if (player_data[j].client_fd == -1) continue;
         if (player_data[j].flags & 0x20) continue;
         sendDoorUpdate(player_data[j].client_fd, door_x, door_y, door_z, target, 0, open, direction, hinge);
-        uint8_t above = getBlockChange(door_x, door_y + 1, door_z);
         if (isDoorBlock(above)) {
           sendDoorUpdate(player_data[j].client_fd, door_x, door_y + 1, door_z, above, 1, open, direction, hinge);
         }
@@ -1938,7 +2097,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     }
     #endif
     // Trapdoor toggle on right-click
-    else if (isTrapdoorBlock(target)) {
+    else if (config.allow_doors && isTrapdoorBlock(target)) {
       uint16_t state = special_block_get_state(x, y, z);
       uint8_t open = trapdoor_get_open(state);
       uint8_t half = trapdoor_get_half(state);
@@ -1965,7 +2124,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
   // Check special item handling
   if (*item == I_bone_meal) {
     uint8_t target_below = getBlockAt(x, y - 1, z);
-    if (target == B_oak_sapling) {
+    if (isSaplingBlock(target)) {
       // Consume the bone meal (yes, even before checks)
       // Wasting bone meal on misplanted saplings is vanilla behavior
       if ((*count -= 1) == 0) *item = 0;
@@ -1976,7 +2135,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
         target_below == B_mud
       ) {
         // Bone meal has a 25% chance of growing a tree from a sapling
-        if ((fast_rand() & 3) == 0) placeTreeStructure(x, y, z);
+        if ((fast_rand() & 3) == 0) placeSaplingStructure(x, y, z, target);
       }
       broadcastPlayerEquipment(player);
     }
@@ -2013,52 +2172,24 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
   // Special handling for door placement
   #ifdef ALLOW_DOORS
   if (isDoorBlock(block)) {
-    // Check if there's space above for the upper half (need 2 blocks of clearance)
-    uint8_t block_above = getBlockAt(x, y + 1, z);
-    uint8_t block_above_2 = getBlockAt(x, y + 2, z);
+    if (!config.allow_doors) return;
+    switch (face) {
+      case 0: y -= 1; break;
+      case 1: y += 1; break;
+      case 2: z -= 1; break;
+      case 3: z += 1; break;
+      case 4: x -= 1; break;
+      case 5: x += 1; break;
+      default: break;
+    }
 
-    // Need both y+1 and y+2 to be replaceable (and not doors)
-    if (!isReplaceableBlock(block_above) || isDoorBlock(block_above)) {
-      return;  // Can't place door if upper half position is blocked
-    }
-    if (!isReplaceableBlock(block_above_2) || isDoorBlock(block_above_2)) {
-      return;  // Can't place door if there's a block above the upper half
-    }
-    // Check that we're not replacing an existing door
     uint8_t existing = getBlockAt(x, y, z);
-    if (isDoorBlock(existing)) {
-      return;
-    }
-    // Check that there's no door above (at y+2) - prevents placing under doors
-    if (isDoorBlock(block_above_2)) {
-      return;  // Can't place door underneath another door
-    }
-    // Doors need a solid block below
+    uint8_t block_above = getBlockAt(x, y + 1, z);
     uint8_t block_below = getBlockAt(x, y - 1, z);
-    if (isReplaceableBlock(block_below) && block_below != block) {
-      // Adjust placement position
-      y -= 1;
-      block_below = getBlockAt(x, y - 1, z);
-      if (isReplaceableBlock(block_below)) {
-        return;  // Can't place door in mid-air
-      }
-      // Re-check all conditions at adjusted position
-      block_above = getBlockAt(x, y + 1, z);
-      block_above_2 = getBlockAt(x, y + 2, z);
-      if (!isReplaceableBlock(block_above) || isDoorBlock(block_above)) {
-        return;
-      }
-      if (!isReplaceableBlock(block_above_2) || isDoorBlock(block_above_2)) {
-        return;
-      }
-      existing = getBlockAt(x, y, z);
-      if (isDoorBlock(existing)) {
-        return;
-      }
-      if (isDoorBlock(block_above_2)) {
-        return;
-      }
-    }
+
+    if (!isReplaceableBlock(existing) || isDoorBlock(existing)) return;
+    if (!isReplaceableBlock(block_above) || isDoorBlock(block_above)) return;
+    if (isReplaceableBlock(block_below)) return;
 
     // Calculate door direction based on placement context
     // Direction: 0=north, 1=east, 2=south, 3=west
@@ -2067,11 +2198,11 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
 
     if (face == 0 || face == 1) {
       // Clicked on bottom or top face - use player facing
-      // Player yaw: -128 to 127, where 0 is South, -64 is East, 64 is West, 128/-128 is North
-      if (player->yaw >= -64 && player->yaw < 0) direction = 0;      // Facing North
-      else if (player->yaw >= 0 && player->yaw < 64) direction = 1;  // Facing East
-      else if (player->yaw >= 64 || player->yaw < -96) direction = 2; // Facing South
-      else direction = 3;                                             // Facing West
+      // Player yaw: -128 to 127, where 0 is South, 64 is West, -64 is East, 128/-128 is North
+      if (player->yaw >= -32 && player->yaw < 32) direction = 0;      // Facing South (centered around 0)
+      else if (player->yaw >= 32 && player->yaw < 96) direction = 1;  // Facing West (centered around 64)
+      else if (player->yaw >= 96 || player->yaw < -96) direction = 2; // Facing North (centered around 128/-128)
+      else direction = 3;                                             // Facing East (centered around -64)
     } else {
       // Clicked on side face - door faces perpendicular to the face
       // Face: 2=north(-z), 3=south(+z), 4=west(-x), 5=east(+x)
@@ -2123,6 +2254,17 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
 
   // Special handling for trapdoor placement
   if (isTrapdoorBlock(block)) {
+    if (!config.allow_doors) return;
+    switch (face) {
+      case 0: y -= 1; break;
+      case 1: y += 1; break;
+      case 2: z -= 1; break;
+      case 3: z += 1; break;
+      case 4: x -= 1; break;
+      case 5: x += 1; break;
+      default: break;
+    }
+
     // Calculate trapdoor direction based on placement face
     uint8_t direction;
     uint8_t half; // 0 = bottom half, 1 = top half
@@ -2130,16 +2272,16 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     if (face == 0) {
       // Clicked bottom face — place on top half
       half = 1;
-      if (player->yaw >= -64 && player->yaw < 0) direction = 0;
-      else if (player->yaw >= 0 && player->yaw < 64) direction = 1;
-      else if (player->yaw >= 64 || player->yaw < -96) direction = 2;
+      if (player->yaw >= -32 && player->yaw < 32) direction = 0;
+      else if (player->yaw >= 32 && player->yaw < 96) direction = 1;
+      else if (player->yaw >= 96 || player->yaw < -96) direction = 2;
       else direction = 3;
     } else if (face == 1) {
       // Clicked top face — place on bottom half
       half = 0;
-      if (player->yaw >= -64 && player->yaw < 0) direction = 0;
-      else if (player->yaw >= 0 && player->yaw < 64) direction = 1;
-      else if (player->yaw >= 64 || player->yaw < -96) direction = 2;
+      if (player->yaw >= -32 && player->yaw < 32) direction = 0;
+      else if (player->yaw >= 32 && player->yaw < 96) direction = 1;
+      else if (player->yaw >= 96 || player->yaw < -96) direction = 2;
       else direction = 3;
     } else {
       // Clicked side face — trapdoor goes on side, bottom half
@@ -2181,6 +2323,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
 
   // Special handling for oriented block placement (chests, furnaces)
   if (isOrientedBlock(block)) {
+    if (block == B_chest && !config.allow_chests) return;
     // Determine placement position
     switch (face) {
       case 0: y -= 1; break;
@@ -2322,11 +2465,13 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     if (*count == 0) *item = 0;
     // Calculate fluid flow
     #ifdef DO_FLUID_FLOW
+    if (config.do_fluid_flow) {
       checkFluidUpdate(x, y + 1, z, getBlockAt(x, y + 1, z));
       checkFluidUpdate(x - 1, y, z, getBlockAt(x - 1, y, z));
       checkFluidUpdate(x + 1, y, z, getBlockAt(x + 1, y, z));
       checkFluidUpdate(x, y, z - 1, getBlockAt(x, y, z - 1));
       checkFluidUpdate(x, y, z + 1, getBlockAt(x, y, z + 1));
+    }
     #endif
   }
 

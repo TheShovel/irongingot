@@ -5,6 +5,12 @@
 #include "registries.h"
 #include "tools.h"
 #include "crafting.h"
+#include "config.h"
+
+static uint16_t getSupportedBlockCraft(uint16_t item) {
+  if (item == 0 || I_to_B(item) == 0) return 0;
+  return item;
+}
 
 // Helper function to check if an item is any type of plank
 uint8_t isPlankItem(uint16_t item) {
@@ -29,90 +35,100 @@ uint8_t isPlankItem(uint16_t item) {
 
 // Helper function to get slab item from plank item
 uint16_t getSlabFromPlank(uint16_t plank) {
+  uint16_t result = 0;
   switch (plank) {
-    case I_oak_planks: return I_oak_slab;
-    case I_spruce_planks: return I_spruce_slab;
-    case I_birch_planks: return I_birch_slab;
-    case I_jungle_planks: return I_jungle_slab;
-    case I_acacia_planks: return I_acacia_slab;
-    case I_cherry_planks: return I_cherry_slab;
-    case I_dark_oak_planks: return I_dark_oak_slab;
-    case I_pale_oak_planks: return I_pale_oak_slab;
-    case I_mangrove_planks: return I_mangrove_slab;
-    case I_bamboo_planks: return I_bamboo_slab;
-    case I_crimson_planks: return I_crimson_slab;
-    case I_warped_planks: return I_warped_slab;
-    default: return I_oak_slab;  // Fallback for unavailable types
+    case I_oak_planks: result = I_oak_slab; break;
+    case I_spruce_planks: result = I_spruce_slab; break;
+    case I_birch_planks: result = I_birch_slab; break;
+    case I_jungle_planks: result = I_jungle_slab; break;
+    case I_acacia_planks: result = I_acacia_slab; break;
+    case I_cherry_planks: result = I_cherry_slab; break;
+    case I_dark_oak_planks: result = I_dark_oak_slab; break;
+    case I_pale_oak_planks: result = I_pale_oak_slab; break;
+    case I_mangrove_planks: result = I_mangrove_slab; break;
+    case I_bamboo_planks: result = I_bamboo_slab; break;
+    case I_crimson_planks: result = I_crimson_slab; break;
+    case I_warped_planks: result = I_warped_slab; break;
+    default: return 0;
   }
+  return getSupportedBlockCraft(result);
 }
 
 // Helper function to get stair item from plank item
 uint16_t getStairFromPlank(uint16_t plank) {
+  uint16_t result = 0;
   switch (plank) {
-    case I_oak_planks: return I_oak_stairs;
-    case I_spruce_planks: return I_spruce_stairs;
-    case I_birch_planks: return I_birch_stairs;
-    case I_jungle_planks: return I_jungle_stairs;
-    case I_acacia_planks: return I_acacia_stairs;
-    case I_cherry_planks: return I_cherry_stairs;
-    case I_dark_oak_planks: return I_dark_oak_stairs;
-    case I_pale_oak_planks: return I_pale_oak_stairs;
-    case I_mangrove_planks: return I_mangrove_stairs;
-    case I_bamboo_planks: return I_bamboo_stairs;
-    case I_crimson_planks: return I_crimson_stairs;
-    case I_warped_planks: return I_warped_stairs;
-    default: return I_oak_stairs;  // Fallback for unavailable types
+    case I_oak_planks: result = I_oak_stairs; break;
+    case I_spruce_planks: result = I_spruce_stairs; break;
+    case I_birch_planks: result = I_birch_stairs; break;
+    case I_jungle_planks: result = I_jungle_stairs; break;
+    case I_acacia_planks: result = I_acacia_stairs; break;
+    case I_cherry_planks: result = I_cherry_stairs; break;
+    case I_dark_oak_planks: result = I_dark_oak_stairs; break;
+    case I_pale_oak_planks: result = I_pale_oak_stairs; break;
+    case I_mangrove_planks: result = I_mangrove_stairs; break;
+    case I_bamboo_planks: result = I_bamboo_stairs; break;
+    case I_crimson_planks: result = I_crimson_stairs; break;
+    case I_warped_planks: result = I_warped_stairs; break;
+    default: return 0;
   }
+  return getSupportedBlockCraft(result);
 }
 
 // Helper function to get door item from plank item
 uint16_t getDoorFromPlank(uint16_t plank) {
+  uint16_t result = 0;
   switch (plank) {
-    case I_oak_planks: return I_oak_door;
-    case I_spruce_planks: return I_spruce_door;
-    case I_birch_planks: return I_birch_door;
-    case I_jungle_planks: return I_jungle_door;
-    case I_acacia_planks: return I_acacia_door;
-    case I_cherry_planks: return I_cherry_door;
-    case I_dark_oak_planks: return I_dark_oak_door;
-    case I_pale_oak_planks: return I_pale_oak_door;
-    case I_mangrove_planks: return I_mangrove_door;
-    case I_bamboo_planks: return I_bamboo_door;
-    default: return I_oak_door;
+    case I_oak_planks: result = I_oak_door; break;
+    case I_spruce_planks: result = I_spruce_door; break;
+    case I_birch_planks: result = I_birch_door; break;
+    case I_jungle_planks: result = I_jungle_door; break;
+    case I_acacia_planks: result = I_acacia_door; break;
+    case I_cherry_planks: result = I_cherry_door; break;
+    case I_dark_oak_planks: result = I_dark_oak_door; break;
+    case I_pale_oak_planks: result = I_pale_oak_door; break;
+    case I_mangrove_planks: result = I_mangrove_door; break;
+    case I_bamboo_planks: result = I_bamboo_door; break;
+    default: return 0;
   }
+  return getSupportedBlockCraft(result);
 }
 
 // Helper function to get trapdoor item from plank item
 uint16_t getTrapdoorFromPlank(uint16_t plank) {
+  uint16_t result = 0;
   switch (plank) {
-    case I_oak_planks: return I_oak_trapdoor;
-    case I_spruce_planks: return I_spruce_trapdoor;
-    case I_birch_planks: return I_birch_trapdoor;
-    case I_jungle_planks: return I_jungle_trapdoor;
-    case I_acacia_planks: return I_acacia_trapdoor;
-    case I_cherry_planks: return I_cherry_trapdoor;
-    case I_dark_oak_planks: return I_dark_oak_trapdoor;
-    case I_pale_oak_planks: return I_pale_oak_trapdoor;
-    case I_mangrove_planks: return I_mangrove_trapdoor;
-    default: return I_oak_trapdoor;
+    case I_oak_planks: result = I_oak_trapdoor; break;
+    case I_spruce_planks: result = I_spruce_trapdoor; break;
+    case I_birch_planks: result = I_birch_trapdoor; break;
+    case I_jungle_planks: result = I_jungle_trapdoor; break;
+    case I_acacia_planks: result = I_acacia_trapdoor; break;
+    case I_cherry_planks: result = I_cherry_trapdoor; break;
+    case I_dark_oak_planks: result = I_dark_oak_trapdoor; break;
+    case I_pale_oak_planks: result = I_pale_oak_trapdoor; break;
+    case I_mangrove_planks: result = I_mangrove_trapdoor; break;
+    default: return 0;
   }
+  return getSupportedBlockCraft(result);
 }
 
 // Helper function to get fence item from plank item
 uint16_t getFenceFromPlank(uint16_t plank) {
+  uint16_t result = 0;
   switch (plank) {
-    case I_oak_planks: return I_oak_fence;
-    case I_spruce_planks: return I_spruce_fence;
-    case I_birch_planks: return I_birch_fence;
-    case I_jungle_planks: return I_jungle_fence;
-    case I_acacia_planks: return I_acacia_fence;
-    case I_cherry_planks: return I_cherry_fence;
-    case I_dark_oak_planks: return I_dark_oak_fence;
-    case I_pale_oak_planks: return I_pale_oak_fence;
-    case I_mangrove_planks: return I_mangrove_fence;
-    case I_bamboo_planks: return I_bamboo_fence;
-    default: return I_oak_fence;
+    case I_oak_planks: result = I_oak_fence; break;
+    case I_spruce_planks: result = I_spruce_fence; break;
+    case I_birch_planks: result = I_birch_fence; break;
+    case I_jungle_planks: result = I_jungle_fence; break;
+    case I_acacia_planks: result = I_acacia_fence; break;
+    case I_cherry_planks: result = I_cherry_fence; break;
+    case I_dark_oak_planks: result = I_dark_oak_fence; break;
+    case I_pale_oak_planks: result = I_pale_oak_fence; break;
+    case I_mangrove_planks: result = I_mangrove_fence; break;
+    case I_bamboo_planks: result = I_bamboo_fence; break;
+    default: return 0;
   }
+  return getSupportedBlockCraft(result);
 }
 
 // Helper function to get chest item from plank item
@@ -226,9 +242,12 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
       if (isPlankItem(first_item) && first_col == 0 &&
           player->craft_items[first + 1] == first_item &&
           player->craft_items[first + 2] == first_item) {
-        *item = getSlabFromPlank(first_item);
-        *count = 6;
-        return;
+        uint16_t result = getSlabFromPlank(first_item);
+        if (result != 0) {
+          *item = result;
+          *count = 6;
+          return;
+        }
       }
       // Shovel recipes for any planks
       if (isPlankItem(first_item) &&
@@ -458,15 +477,19 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
 
     case 6:
       // Door recipes (2x3 pattern of planks) - all plank types
-      if (isPlankItem(first_item) && first_col == 0 && first_row == 0 &&
+      if (config.allow_doors &&
+          isPlankItem(first_item) && first_col == 0 && first_row == 0 &&
           player->craft_items[1] == first_item &&
           player->craft_items[3] == first_item &&
           player->craft_items[4] == first_item &&
           player->craft_items[6] == first_item &&
           player->craft_items[7] == first_item) {
-        *item = getDoorFromPlank(first_item);
-        *count = 3;
-        return;
+        uint16_t result = getDoorFromPlank(first_item);
+        if (result != 0) {
+          *item = result;
+          *count = 3;
+          return;
+        }
       }
       // Stair recipes (6 planks in stair pattern) - all plank types
       // Pattern 1: X.. / XX. / XXX (slots 0,3,4,6,7,8)
@@ -476,9 +499,12 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
           player->craft_items[6] == first_item &&
           player->craft_items[7] == first_item &&
           player->craft_items[8] == first_item) {
-        *item = getStairFromPlank(first_item);
-        *count = 4;
-        return;
+        uint16_t result = getStairFromPlank(first_item);
+        if (result != 0) {
+          *item = result;
+          *count = 4;
+          return;
+        }
       }
       // Pattern 2: ..X / .XX / XXX (slots 2,4,5,6,7,8)
       if (isPlankItem(first_item) && first_col == 2 && first_row == 0 &&
@@ -487,9 +513,12 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
           player->craft_items[6] == first_item &&
           player->craft_items[7] == first_item &&
           player->craft_items[8] == first_item) {
-        *item = getStairFromPlank(first_item);
-        *count = 4;
-        return;
+        uint16_t result = getStairFromPlank(first_item);
+        if (result != 0) {
+          *item = result;
+          *count = 4;
+          return;
+        }
       }
       // Fence recipe (4 planks + 2 sticks)
       // Pattern: plank-stick-plank / plank-stick-plank
@@ -503,20 +532,27 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
         player->craft_items[1] == I_stick &&
         player->craft_items[4] == I_stick
       ) {
-        *item = getFenceFromPlank(first_item);
-        *count = 3;
-        return;
+        uint16_t result = getFenceFromPlank(first_item);
+        if (result != 0) {
+          *item = result;
+          *count = 3;
+          return;
+        }
       }
       // Trapdoor recipe (6 planks, 3×2 pattern — full first 2 rows)
-      if (isPlankItem(first_item) && first_col == 0 && first_row == 0 &&
+      if (config.allow_doors &&
+          isPlankItem(first_item) && first_col == 0 && first_row == 0 &&
           player->craft_items[1] == first_item &&
           player->craft_items[2] == first_item &&
           player->craft_items[3] == first_item &&
           player->craft_items[4] == first_item &&
           player->craft_items[5] == first_item) {
-        *item = getTrapdoorFromPlank(first_item);
-        *count = 2;
-        return;
+        uint16_t result = getTrapdoorFromPlank(first_item);
+        if (result != 0) {
+          *item = result;
+          *count = 2;
+          return;
+        }
       }
       // Cobblestone stairs (6 cobblestone in stair pattern)
       // Pattern 1: X.. / XX. / XXX (slots 0,3,4,6,7,8)
@@ -580,7 +616,7 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
             case I_cobblestone: *item = I_furnace; *count = 1; return;
             #ifdef ALLOW_CHESTS
             default:
-              if (isPlankItem(first_item)) {
+              if (config.allow_chests && isPlankItem(first_item)) {
                 *item = getChestFromPlank(first_item);
                 *count = 1;
                 return;

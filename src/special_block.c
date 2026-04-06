@@ -5,82 +5,140 @@
 
 SpecialBlockEntry special_blocks[MAX_SPECIAL_BLOCKS];
 int special_blocks_count = 0;
+static pthread_mutex_t special_block_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* ── Hash table internals ─────────────────────────────────────────── */
 
-static inline uint32_t pack_key(short x, uint8_t y, short z) {
-    return ((uint32_t)(uint16_t)x << 16) | ((uint32_t)y << 8) | (uint16_t)z;
+static inline uint8_t entry_is_empty(const SpecialBlockEntry *entry) {
+    return entry->block == SPECIAL_BLOCK_EMPTY;
 }
 
-static inline uint32_t entry_hash(uint32_t key) {
-    uint32_t h = key * 0x9E3779B9u;
-    return h ^ (h >> 16);
+static inline void clear_entry(SpecialBlockEntry *entry) {
+    entry->x = 0;
+    entry->z = 0;
+    entry->state = 0;
+    entry->y = 0;
+    entry->block = SPECIAL_BLOCK_EMPTY;
 }
 
-static int find_entry(short x, uint8_t y, short z) {
-    uint32_t key = pack_key(x, y, z);
+static inline uint32_t entry_hash(short x, uint8_t y, short z) {
+    uint32_t h = (uint16_t)x;
+    h ^= ((uint32_t)(uint16_t)z << 1) | ((uint32_t)y << 17);
+    h *= 0x9E3779B9u;
+    h ^= h >> 16;
+    return h;
+}
+
+static inline uint8_t entry_matches(const SpecialBlockEntry *entry, short x, uint8_t y, short z) {
+    return (
+        entry->x == x &&
+        entry->y == y &&
+        entry->z == z
+    );
+}
+
+static int find_entry_locked(short x, uint8_t y, short z) {
     uint32_t mask = MAX_SPECIAL_BLOCKS - 1;
-    uint32_t base = entry_hash(key) & mask;
+    uint32_t base = entry_hash(x, y, z) & mask;
 
     for (uint32_t probe = 0; probe < MAX_SPECIAL_BLOCKS; probe++) {
         uint32_t idx = (base + probe) & mask;
-        if (!special_blocks[idx].occupied) return -1;
-        if (special_blocks[idx].key == (int32_t)key) return (int)idx;
+        if (entry_is_empty(&special_blocks[idx])) return -1;
+        if (entry_matches(&special_blocks[idx], x, y, z)) return (int)idx;
     }
     return -1;
 }
 
-static int insert_entry(short x, uint8_t y, short z) {
-    uint32_t key = pack_key(x, y, z);
+static int insert_entry_locked(short x, uint8_t y, short z) {
     uint32_t mask = MAX_SPECIAL_BLOCKS - 1;
-    uint32_t base = entry_hash(key) & mask;
+    uint32_t base = entry_hash(x, y, z) & mask;
 
     for (uint32_t probe = 0; probe < MAX_SPECIAL_BLOCKS; probe++) {
         uint32_t idx = (base + probe) & mask;
-        if (!special_blocks[idx].occupied) {
-            special_blocks[idx].key = (int32_t)key;
-            special_blocks[idx].occupied = 1;
+        if (entry_is_empty(&special_blocks[idx])) {
+            special_blocks[idx].x = x;
+            special_blocks[idx].y = y;
+            special_blocks[idx].z = z;
+            special_blocks[idx].state = 0;
             special_blocks_count++;
             return (int)idx;
         }
-        if (special_blocks[idx].key == (int32_t)key) return (int)idx;
+        if (entry_matches(&special_blocks[idx], x, y, z)) return (int)idx;
     }
     return -1;  /* table full */
+}
+
+static void reinsert_entry_locked(SpecialBlockEntry entry) {
+    int idx = insert_entry_locked(entry.x, entry.y, entry.z);
+    if (idx < 0) return;
+    special_blocks[idx] = entry;
 }
 
 /* ── Public API ───────────────────────────────────────────────────── */
 
 void special_block_init(void) {
-    memset(special_blocks, 0, sizeof(special_blocks));
+    pthread_mutex_lock(&special_block_mutex);
+    for (int i = 0; i < MAX_SPECIAL_BLOCKS; i++) {
+        clear_entry(&special_blocks[i]);
+    }
     special_blocks_count = 0;
+    pthread_mutex_unlock(&special_block_mutex);
 }
 
 uint16_t special_block_get_state(short x, uint8_t y, short z) {
-    int idx = find_entry(x, y, z);
-    if (idx < 0) return 0;
-    return special_blocks[idx].state;
+    pthread_mutex_lock(&special_block_mutex);
+    int idx = find_entry_locked(x, y, z);
+    if (idx < 0) {
+        pthread_mutex_unlock(&special_block_mutex);
+        return 0;
+    }
+    uint16_t state = special_blocks[idx].state;
+    pthread_mutex_unlock(&special_block_mutex);
+    return state;
 }
 
 void special_block_set_state(short x, uint8_t y, short z, uint8_t block, uint16_t state) {
-    int idx = insert_entry(x, y, z);
-    if (idx < 0) return;
+    pthread_mutex_lock(&special_block_mutex);
+    int idx = insert_entry_locked(x, y, z);
+    if (idx < 0) {
+        pthread_mutex_unlock(&special_block_mutex);
+        return;
+    }
     special_blocks[idx].state = state;
     special_blocks[idx].block = block;
+    pthread_mutex_unlock(&special_block_mutex);
 }
 
 void special_block_clear(short x, uint8_t y, short z) {
-    int idx = find_entry(x, y, z);
-    if (idx < 0) return;
-    special_blocks[idx].occupied = 0;
-    special_blocks[idx].state = 0;
-    special_blocks[idx].block = 0;
-    special_blocks[idx].key = 0;
+    pthread_mutex_lock(&special_block_mutex);
+    int idx = find_entry_locked(x, y, z);
+    if (idx < 0) {
+        pthread_mutex_unlock(&special_block_mutex);
+        return;
+    }
+
+    clear_entry(&special_blocks[idx]);
     special_blocks_count--;
+
+    uint32_t mask = MAX_SPECIAL_BLOCKS - 1;
+    for (uint32_t probe = ((uint32_t)idx + 1) & mask;
+         !entry_is_empty(&special_blocks[probe]);
+         probe = (probe + 1) & mask) {
+        SpecialBlockEntry entry = special_blocks[probe];
+        clear_entry(&special_blocks[probe]);
+        special_blocks_count--;
+        reinsert_entry_locked(entry);
+    }
+
     if (special_blocks_count < 0) special_blocks_count = 0;
+    pthread_mutex_unlock(&special_block_mutex);
 }
 
 uint8_t special_block_has_entry(short x, uint8_t y, short z) {
-    return find_entry(x, y, z) >= 0;
+    pthread_mutex_lock(&special_block_mutex);
+    uint8_t has_entry = find_entry_locked(x, y, z) >= 0;
+    pthread_mutex_unlock(&special_block_mutex);
+    return has_entry;
 }
 
 /* ── Block type queries ───────────────────────────────────────────── */
@@ -160,16 +218,15 @@ uint16_t get_door_state_id(uint8_t block, uint8_t is_upper, uint8_t open, uint8_
 }
 
 uint16_t get_stair_state_id(uint8_t block, uint8_t half, uint8_t direction) {
-    uint16_t base_id = block_palette[block];
     /*
-     * Stair state offsets:
-     *   facing: north=0, east=60, south=20, west=40
-     *   top half: -10
+     * State layout: facing(n,s,w,e) × half(bottom,top), straight shape,
+     * non-waterlogged.
      */
-    static const int16_t facing_off[4] = {0, 60, 20, 40};
-    int16_t offset = facing_off[direction];
-    if (half) offset -= 10;
-    return base_id + (uint16_t)offset;
+    static const uint8_t table_facing[4] = {0, 3, 1, 2};  /* internal(n,e,s,w) → table(n,s,w,e) */
+    uint8_t tf = table_facing[direction];
+    uint8_t idx = tf * 2 + (half ? 1 : 0);
+    uint8_t row = stair_block_to_row[block];
+    return stair_state_rows[row][idx];
 }
 
 uint16_t get_trapdoor_state_id(uint8_t block, uint8_t open, uint8_t direction, uint8_t half) {
@@ -243,13 +300,15 @@ uint16_t furnace_encode_state(uint8_t direction, uint8_t lit) {
 /* ── Interaction helpers ──────────────────────────────────────────── */
 
 uint8_t is_door_open_at(short x, uint8_t y, short z) {
-    /* Look up state for this position (lower or upper half share the same entry key) */
     uint16_t state = special_block_get_state(x, y, z);
     return door_get_open(state);
 }
 
 void toggle_door_state(short x, uint8_t y, short z) {
-    uint16_t state = special_block_get_state(x, y, z);
-    state ^= 0x01;  /* flip open bit */
-    special_block_set_state(x, y, z, 0, state);  /* block type doesn't matter for update */
+    pthread_mutex_lock(&special_block_mutex);
+    int idx = find_entry_locked(x, y, z);
+    if (idx >= 0) {
+        special_blocks[idx].state ^= 0x01;
+    }
+    pthread_mutex_unlock(&special_block_mutex);
 }
