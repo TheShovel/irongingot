@@ -77,7 +77,9 @@ void init_config_defaults(void) {
   config.enable_flight = 0;
   config.enable_pickup_animation = 1;
   config.enable_cactus_damage = 1;
+  config.enable_commands = 1;
   config.fetch_skins_from_mojang = 1;
+  config.safe_area_radius = 0;  // 0 = disabled by default
 
   // Debug flags
   config.log_unknown_packets = 0;
@@ -217,6 +219,11 @@ int load_config(const char *filename) {
       config.enable_pickup_animation = parse_bool(value);
     } else if (strcmp(key, "enable_cactus_damage") == 0) {
       config.enable_cactus_damage = parse_bool(value);
+    } else if (strcmp(key, "enable_commands") == 0) {
+      config.enable_commands = parse_bool(value);
+    } else if (strcmp(key, "safe_area_radius") == 0) {
+      config.safe_area_radius = atoi(value);
+      if (config.safe_area_radius < 0) config.safe_area_radius = 0;
     } else if (strcmp(key, "fetch_skins_from_mojang") == 0) {
       config.fetch_skins_from_mojang = parse_bool(value);
     } else if (strcmp(key, "log_unknown_packets") == 0) {
@@ -317,6 +324,8 @@ int save_config(const char *filename) {
   fprintf(f, "enable_flight = %s\n", config.enable_flight ? "true" : "false");
   fprintf(f, "enable_pickup_animation = %s\n", config.enable_pickup_animation ? "true" : "false");
   fprintf(f, "enable_cactus_damage = %s\n", config.enable_cactus_damage ? "true" : "false");
+  fprintf(f, "enable_commands = %s\n", config.enable_commands ? "true" : "false");
+  fprintf(f, "safe_area_radius = %d\n", config.safe_area_radius);
   fprintf(f, "fetch_skins_from_mojang = %s\n", config.fetch_skins_from_mojang ? "true" : "false");
   fprintf(f, "\n");
 

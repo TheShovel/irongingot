@@ -31,6 +31,8 @@ Runs on as low as **~7MB of RAM** !!!
 
 You can download pre-built binaries from the [Releases page](https://github.com/TheShovel/irongingot/releases), or compile the server yourself. See the **Compilation** section below for instructions.
 
+> We also host a 24/7 survival server at `wages-oldest.gl.joinmc.link` for anyone to join, running on Irongingot!
+
 ### Configuration
 
 Edit `server.conf` to customize your server:

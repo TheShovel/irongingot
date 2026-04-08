@@ -52,7 +52,9 @@ typedef struct {
   int enable_flight;
   int enable_pickup_animation;
   int enable_cactus_damage;
+  int enable_commands;
   int fetch_skins_from_mojang;
+  int safe_area_radius;  // chunks from spawn (8,8) protected from modification
 
   // Debug flags
   int log_unknown_packets;

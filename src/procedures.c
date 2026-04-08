@@ -23,6 +23,26 @@
 #include "thread_pool.h"
 #include "config.h"
 
+// World spawn point (block coordinates)
+#define SPAWN_BLOCK_X 8
+#define SPAWN_BLOCK_Z 8
+// World spawn chunk (chunk coordinates)
+#define SPAWN_CHUNK_X (SPAWN_BLOCK_X >> 4)
+#define SPAWN_CHUNK_Z (SPAWN_BLOCK_Z >> 4)
+
+// Check if a block position is within the safe area (spawn protection)
+static int is_in_safe_area(short bx, short bz) {
+  if (config.safe_area_radius <= 0) return 0;
+  // Spawn is at block (8, 8) which is in chunk (0, 0)
+  int block_cx = div_floor(bx, 16);
+  int block_cz = div_floor(bz, 16);
+  // Use Chebyshev distance (square protection area)
+  int dx = block_cx < 0 ? -block_cx : block_cx;
+  int dz = block_cz < 0 ? -block_cz : block_cz;
+  int dist = dx > dz ? dx : dz;
+  return dist < config.safe_area_radius;
+}
+
 // Forward declaration for parallel player updates
 static void handlePlayerUpdatesParallel(int64_t time_since_last_tick, ThreadPool* pool);
 
@@ -1979,6 +1999,12 @@ void playPickupAnimation (PlayerData *player, uint16_t item, double x, double y,
 
 void handlePlayerAction (PlayerData *player, int action, short x, short y, short z) {
 
+  // Check spawn protection for block-breaking actions
+  if ((action == 0 || action == 2) && is_in_safe_area(x, z)) {
+    sc_systemChat(player->client_fd, "§cCannot break blocks in protected spawn area", 46);
+    return;
+  }
+
   // Re-sync slot when player drops an item
   if (action == 3 || action == 4) {
     sc_setContainerSlot(
@@ -2100,6 +2126,12 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
 }
 
 void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t face) {
+
+  // Check spawn protection for block interactions
+  if (face != 255 && is_in_safe_area(x, z)) {
+    sc_systemChat(player->client_fd, "§cCannot interact with blocks in protected spawn area", 54);
+    return;
+  }
 
   // Get targeted block (if coordinates are provided)
   uint8_t target = face == 255 ? 0 : getBlockAt(x, y, z);

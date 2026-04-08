@@ -1581,6 +1581,10 @@ int cs_chat (int client_fd) {
   }
 
   // Handle chat commands
+  if (!config.enable_commands) {
+    sc_systemChat(client_fd, "§cCommands are disabled on this server", 39);
+    goto cleanup;
+  }
 
   if (!strncmp((char *)recv_buffer, "!msg", 4)) {
 

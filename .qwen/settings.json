@@ -92,7 +92,11 @@
       "Bash(4)",
       "Bash(2)",
       "Bash(entries.append)",
-      "Bash(make)"
+      "Bash(make)",
+      "Bash(cloudflared *)",
+      "Bash(dig *)",
+      "Bash(xxd *)",
+      "Bash(git log *)"
     ]
   },
   "$version": 3
