@@ -2655,6 +2655,8 @@ void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health) {
     uint32_t r = fast_rand();
     memcpy(uuid, &r, 4);
     memcpy(uuid + 4, &i, 4);
+    // Zero out the remaining bytes to ensure valid UUIDs
+    memset(uuid + 8, 0, 8);
 
     // Broadcast entity creation to all players
     for (int j = 0; j < MAX_PLAYERS; j ++) {
@@ -3161,7 +3163,7 @@ void handleServerTick (int64_t time_since_last_tick) {
     }
 
     // Find the player closest to this mob
-    PlayerData* closest_player = &player_data[0];
+    PlayerData* closest_player = NULL;
     double closest_dist_double = 2147483647.0;
     for (int j = 0; j < MAX_PLAYERS; j ++) {
       if (player_data[j].client_fd == -1) continue;
@@ -3172,6 +3174,11 @@ void handleServerTick (int64_t time_since_last_tick) {
         closest_dist_double = curr_dist;
         closest_player = &player_data[j];
       }
+    }
+
+    // If no players are online, skip AI updates (mobs stay idle)
+    if (closest_player == NULL) {
+      continue;
     }
 
     // Despawn mobs past a certain distance from nearest player
@@ -3267,7 +3274,10 @@ void handleServerTick (int64_t time_since_last_tick) {
       if (dist_to_player < 3.0 && y_diff < 2.0) {
         // Attack cooldown check - zombies can't attack more than once per second
         if (mob_data[i].move_timer <= 0) {
-          hurtEntity(closest_player->client_fd, entity_id, D_generic, 1);
+          // Only attack if the player is still connected
+          if (closest_player->client_fd != -1) {
+            hurtEntity(closest_player->client_fd, entity_id, D_generic, 1);
+          }
           mob_data[i].move_timer = 20; // 1 second cooldown (20 ticks)
         }
       }

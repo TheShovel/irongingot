@@ -148,6 +148,16 @@ static void streamChunksForPlayer(PlayerData *player) {
   if (player->client_fd == -1) return;
   if (player->flags & 0x20) return;  // still loading
 
+  // Verify client state is still valid
+  ClientState *client_state = NULL;
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (client_states[i].client_fd == player->client_fd) {
+      client_state = &client_states[i];
+      break;
+    }
+  }
+  if (client_state == NULL) return;  // Client state was cleared
+
   int center_x = div_floor(player->x, 16);
   int center_z = div_floor(player->z, 16);
 
@@ -360,6 +370,8 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
         uint8_t uuid[16];
         uint32_t r = fast_rand();
         memcpy(uuid, &r, 4);
+        // Zero out the remaining bytes to ensure valid UUIDs
+        memset(uuid + 4, 0, 12);
         // Send allocated living mobs, use ID for second half of UUID
         for (int i = 0; i < MAX_MOBS; i ++) {
           if (mob_data[i].type == 0) continue;
