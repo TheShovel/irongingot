@@ -238,6 +238,8 @@ async function extractItemsAndBlocks() {
 
   // Trapdoor state lookup tables: { name: [16 state IDs] }
   const trapdoorStateTables = {};
+  // Stair state lookup tables: { name: [8 state IDs] }
+  const stairStateTables = {};
 
   for (const entry of sortedBlocks) {
     const defaultState = entry[1].states.find((c) => c.default);
@@ -277,6 +279,27 @@ async function extractItemsAndBlocks() {
         }
       }
       trapdoorStateTables[name] = trapdoorRow;
+    }
+
+    // Extract stair state IDs for lookup table generation
+    if (entry[0].endsWith("_stairs")) {
+      const name = entry[0].replace("minecraft:", "");
+      const facingOrder = ["north", "south", "west", "east"];
+      const halfOrder = ["bottom", "top"];
+      const stairRow = [];
+      for (const f of facingOrder) {
+        for (const h of halfOrder) {
+          const st = entry[1].states.find(
+            (s) =>
+              s.properties.facing === f &&
+              s.properties.half === h &&
+              s.properties.shape === "straight" &&
+              s.properties.waterlogged === "false",
+          );
+          stairRow.push(st ? st.id : 0);
+        }
+      }
+      stairStateTables[name] = stairRow;
     }
     // Include "snowy" variants of blocks as well
     if ("properties" in defaultState && "snowy" in defaultState.properties) {
@@ -346,6 +369,7 @@ async function extractItemsAndBlocks() {
     mappingWithOverrides,
     blockRegistry,
     trapdoorStateTables,
+    stairStateTables,
   };
 }
 
@@ -603,7 +627,21 @@ async function convert() {
     }
   }
 
-  const sourceCode = `\
+  // Build stair state table and block-to-row mapping
+  // Map palette INDEX (0-255) to row index in stair_state_rows
+  const stairRowMap = [];
+  for (let i = 0; i < 256; i++) stairRowMap.push(0);
+  const stairRows = [];
+  for (let paletteIdx = 0; paletteIdx < paletteEntries.length; paletteIdx++) {
+    const name = paletteEntries[paletteIdx];
+    const row = itemsAndBlocks.stairStateTables[name];
+    if (row && row.length === 8) {
+      stairRowMap[paletteIdx] = stairRows.length;
+      stairRows.push(row);
+    }
+  }
+
+  const sourceCode = `\\
 #include <stdint.h>
 #include "registries.h"
 
@@ -636,13 +674,23 @@ uint8_t I_to_B (uint16_t item) {
 
 // Trapdoor state IDs: [block_palette_index][16 states]
 // State layout: facing(n,s,w,e) × half(bottom,top) × open(false,true), non-waterlogged
+extern const uint8_t trapdoor_block_to_row[];
+extern const uint16_t trapdoor_state_rows[][16];
 const uint8_t trapdoor_block_to_row[] = { ${trapdoorRowMap.join(", ")} };
 const uint16_t trapdoor_state_rows[${trapdoorRows.length}][16] = {
   ${trapdoorRows.map((r) => `{ ${r.join(", ")} }`).join(",\n  ")}
 };
-`;
 
-  const headerCode = `\
+// Stair state IDs: [block_palette_index][8 states]
+// State layout: facing(n,s,w,e) × half(bottom,top), straight shape, non-waterlogged
+extern const uint8_t stair_block_to_row[];
+extern const uint16_t stair_state_rows[][8];
+const uint8_t stair_block_to_row[] = { ${stairRowMap.join(", ")} };
+const uint16_t stair_state_rows[${stairRows.length}][8] = {
+  ${stairRows.map((r) => `{ ${r.join(", ")} }`).join(",\n  ")}
+};`;
+
+  const headerCode = `
 #ifndef H_REGISTRIES
 #define H_REGISTRIES
 
@@ -660,6 +708,10 @@ uint8_t I_to_B (uint16_t item); // Item-to-block mapping
 // Trapdoor state lookup (generated from registry data)
 extern const uint8_t trapdoor_block_to_row[256];
 extern const uint16_t trapdoor_state_rows[][16];
+
+// Stair state lookup (generated from registry data)
+extern const uint8_t stair_block_to_row[256];
+extern const uint16_t stair_state_rows[][8];
 
 // Block identifiers
 ${Object.keys(itemsAndBlocks.palette)

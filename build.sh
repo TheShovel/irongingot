@@ -91,7 +91,7 @@ ZLIB_INCLUDE="-Ithird_party/zlib"
 
 # musl requires static linking and bundled zlib (to avoid glibc headers conflict)
 if [ "$musl" -eq 1 ]; then
-  eval $compiler $SRC_LIST $ZLIB_SRCS -O3 -ffast-math -D_GNU_SOURCE -Iinclude -Isrc/cubiomes $ZLIB_INCLUDE -o "bareiron$exe" $windows_linker -lm -static -lpthread
+  eval $compiler $SRC_LIST $ZLIB_SRCS -O3 -ffast-math -D_GNU_SOURCE -Iinclude -Isrc/cubiomes $ZLIB_INCLUDE -o "bareiron$exe" $windows_linker -lm -static -fno-link-libatomic -lpthread
 else
   eval $compiler $SRC_LIST -O3 -ffast-math $mojang_skin_cflags -Iinclude -Isrc/cubiomes -o "bareiron$exe" $windows_linker -lm -lz -pthread $mojang_skin_libs
 fi

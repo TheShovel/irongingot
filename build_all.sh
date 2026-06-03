@@ -87,7 +87,7 @@ if command -v musl-gcc &>/dev/null; then
     third_party/zlib/zutil.c
   )
   MUSL_INCLUDES="$INCLUDES -Ithird_party/zlib"
-  musl-gcc ${SRC_FILES[@]} ${ZLIB_SRCS[@]} $CFLAGS -D_GNU_SOURCE $MUSL_INCLUDES -o build/bareiron-musl -static -lpthread -lm
+  musl-gcc ${SRC_FILES[@]} ${ZLIB_SRCS[@]} $CFLAGS -D_GNU_SOURCE $MUSL_INCLUDES -o build/bareiron-musl -static -fno-link-libatomic -lpthread -lm
   echo "Linux musl binary: build/bareiron-musl"
   MUSL_BUILT=1
 else
