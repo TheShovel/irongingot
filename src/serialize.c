@@ -234,7 +234,8 @@ int initSerializer () {
     // Read player data directly into memory
     read = fread(player_data, 1, sizeof(player_data), file);
     if (read != sizeof(player_data)) {
-      printf("Read %u bytes from \"world.bin\", expected %u (player data). Aborting.\n", read, sizeof(player_data));
+      printf("Read %u bytes from \"world.bin\", expected %zu (player data). Aborting.\n",
+        read, sizeof(player_data));
       fclose(file);
       return 1;
     }

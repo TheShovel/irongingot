@@ -2049,11 +2049,12 @@ uint16_t buildChunkSection (int cx, int cy, int cz, uint8_t dimension) {
       // sees *something*. The correct state comes via block update packets.
     } else
     #endif
-    // Check if block is within this chunk section
+    // Check if block is within this chunk section and matches dimension
     if (
       block_changes_snapshot[i].x >= cx && block_changes_snapshot[i].x < cx + 16 &&
       block_changes_snapshot[i].y >= cy && block_changes_snapshot[i].y < cy + 16 &&
-      block_changes_snapshot[i].z >= cz && block_changes_snapshot[i].z < cz + 16
+      block_changes_snapshot[i].z >= cz && block_changes_snapshot[i].z < cz + 16 &&
+      block_changes_snapshot[i].dimension == dimension
     ) {
       int dx = block_changes_snapshot[i].x - cx;
       int dy = block_changes_snapshot[i].y - cy;

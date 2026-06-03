@@ -320,6 +320,10 @@ typedef struct {
   // 0x80 - craft_items lock (for storing pointers)
   uint8_t flags;
   uint8_t dimension;
+  uint8_t portal_valid;  // 0 = none, 1 = portal_ow fields track overworld entry
+  short portal_ow_x;
+  uint8_t portal_ow_y;
+  short portal_ow_z;
 } PlayerData;
 
 #define PLAYER_TEXTURE_VALUE_MAX 4096
