@@ -2329,6 +2329,21 @@ void switchPlayerDimension(PlayerData *player) {
   player->visited_z[0] = cz;
   player->visited_next = 1;
 
+  // The sc_respawn packet above is sent with "data kept" = 0, which tells the
+  // client to wipe its local copy of the player's inventory. We have to push
+  // the full inventory back down, otherwise the player sees an empty inventory
+  // in the new dimension until they pick up an item or rejoin.
+  for (uint8_t i = 0; i < 41; i++) {
+    sc_setContainerSlot(
+      player->client_fd, 0,
+      serverSlotToClientSlot(0, i),
+      player->inventory_count[i],
+      player->inventory_items[i]
+    );
+  }
+  sc_setHeldItem(player->client_fd, player->hotbar);
+  sc_setHealth(player->client_fd, player->health, player->hunger, player->saturation);
+
   sc_synchronizePlayerPosition(player->client_fd,
     (float)player->x + 0.5f, (float)player->y, (float)player->z + 0.5f,
     player->yaw * 180.0f / 127.0f, player->pitch * 90.0f / 127.0f);
