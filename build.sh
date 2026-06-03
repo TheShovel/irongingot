@@ -96,7 +96,4 @@ else
   eval $compiler $SRC_LIST -O3 -ffast-math $mojang_skin_cflags -Iinclude -Isrc/cubiomes -o "bareiron$exe" $windows_linker -lm -lz -pthread $mojang_skin_libs
 fi
 
-# Only run if not cross-compiling and not musl build
-if [[ "$musl" -eq 0 ]] && [[ "$OSTYPE" != msys* && "$OSTYPE" != cygwin* && "$OSTYPE" != win32* ]]; then
-  "./bareiron$exe"
-fi
+echo "Build complete: bareiron$exe"
