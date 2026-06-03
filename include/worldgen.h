@@ -42,6 +42,8 @@ uint16_t buildChunkSection (int cx, int cy, int cz, uint8_t dimension);
 uint16_t buildNetherChunkSection(int cx, int cy, int cz);
 uint8_t getChunkNetherBiome(short x, short z);
 
+void init_worldgen(void);
+
 // Noise samplers
 extern OctavePerlinNoiseSampler surface_noise;
 extern OctavePerlinNoiseSampler detail_noise;

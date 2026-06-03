@@ -174,6 +174,7 @@ void resetPlayerData (PlayerData *player) {
   player->x = 8;
   player->z = 8;
   player->y = 80;
+  player->dimension = DIMENSION_OVERWORLD;
   player->flags |= 0x02;
   player->grounded_y = 0;
   for (int i = 0; i < 41; i ++) {
@@ -560,10 +561,10 @@ void spawnPlayer (PlayerData *player) {
   sc_startWaitingForChunks(player->client_fd);
   sc_setCenterChunk(player->client_fd, _x, _z);
 
-  // Ensure the spawn chunk is available right away for initial login.
-  // Movement-driven chunk loading uses non-blocking background generation.
+  sc_chunkBatchStart(player->client_fd);
   generate_chunk_data(_x, _z, DIMENSION_OVERWORLD);
   sc_chunkDataAndUpdateLight(player->client_fd, _x, _z, DIMENSION_OVERWORLD);
+  sc_chunkBatchFinished(player->client_fd, 1);
 
   // Initialize visited chunks tracking
   player->visited_next = 0;
@@ -2207,14 +2208,6 @@ void switchPlayerDimension(PlayerData *player) {
   if (player->z < -16384) player->z = -16384;
   if (player->z > 16384) player->z = 16384;
 
-  if (new_dim == DIMENSION_OVERWORLD) {
-    uint8_t surface_y = getHeightAt(player->x, player->z);
-    if (surface_y > 0) player->y = surface_y + 1;
-    else player->y = 80;
-  } else {
-    player->y = 40;
-  }
-
   player->dimension = new_dim;
 
   sc_respawn(player->client_fd, new_dim);
@@ -2226,8 +2219,27 @@ void switchPlayerDimension(PlayerData *player) {
   short cz = div_floor(player->z, 16);
   sc_setCenterChunk(player->client_fd, cx, cz);
 
+  sc_chunkBatchStart(player->client_fd);
   generate_chunk_data(cx, cz, new_dim);
   sc_chunkDataAndUpdateLight(player->client_fd, cx, cz, new_dim);
+  sc_chunkBatchFinished(player->client_fd, 1);
+
+  if (new_dim == DIMENSION_OVERWORLD) {
+    uint8_t surface_y = getHeightAt(player->x, player->z);
+    if (surface_y > 0) player->y = surface_y + 1;
+    else player->y = 80;
+  } else {
+    init_worldgen();
+    int bx = (int)player->x;
+    int bz = (int)player->z;
+    double floor_n = octave_sample(&surface_noise, (double)bx * 0.015, 0, (double)bz * 0.015);
+    int floor_h = 80 + (int)(floor_n * 15.0);
+    if (floor_h < 65) floor_h = 65;
+    if (floor_h > 100) floor_h = 100;
+    player->y = (float)(floor_h + 2);
+    printf("NETHER SPAWN: bx=%d bz=%d floor_n=%f floor_h=%d player_y=%d\n",
+      bx, bz, floor_n, floor_h, (int)player->y);
+  }
 
   player->visited_next = 0;
   for (int j = 0; j < VISITED_HISTORY; j++) {

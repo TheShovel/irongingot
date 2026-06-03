@@ -432,6 +432,21 @@ int sc_startWaitingForChunks (int client_fd) {
   return 0;
 }
 
+// S->C Chunk Batch Start (1.21.5+)
+int sc_chunkBatchStart (int client_fd) {
+  startPacket(client_fd, 0x0C);
+  endPacket(client_fd);
+  return 0;
+}
+
+// S->C Chunk Batch Finished (1.21.5+)
+int sc_chunkBatchFinished (int client_fd, int batchSize) {
+  startPacket(client_fd, 0x0B);
+  writeVarInt(client_fd, batchSize);
+  endPacket(client_fd);
+  return 0;
+}
+
 // S->C Set Center Chunk
 int sc_setCenterChunk (int client_fd, int x, int y) {
   startPacket(client_fd, 0x57);
@@ -487,6 +502,14 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
 
   int x = _x * 16, z = _z * 16;
 
+  // Determine section count per dimension
+  // Overworld:  min_y=-64, height=384 -> 24 sections
+  // Nether:     min_y=0,   height=256 -> 16 sections
+  int terrain_sections = (dimension == DIMENSION_NETHER) ? 16 : 20;
+  int bedrock_sections = (dimension == DIMENSION_NETHER) ? 0  : 4;
+  int total_sections   = bedrock_sections + terrain_sections;
+  int light_bits       = total_sections + 2;  // +2 for border sections
+
   // Try to get cached chunk data
   if (!get_cached_chunk_copy(_x, _z, dimension, cached_sections, cached_biomes)) {
     // Not cached yet: queue generation and skip sending this chunk for now.
@@ -497,8 +520,9 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
   }
 
   // 1. Send chunk sections
-  // send 4 chunk sections (up to Y=0) with no blocks (bedrock)
-  for (int i = 0; i < 4; i ++) {
+  // send bedrock sections at the bottom (overworld only, Y=-64 to -1)
+  uint32_t val;
+  for (int i = 0; i < bedrock_sections; i ++) {
     if (data_offset + 32 > (int)data_buf_capacity) {
       fprintf(stderr, "ERROR: Chunk data buffer overflow at bedrock sections\n");
       return 1;
@@ -509,7 +533,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
     // block bits
     data_buf[data_offset++] = 0;
     // block palette (bedrock = 85)
-    uint32_t val = 85;
+    val = 85;
     while (true) {
       if (data_offset + 32 > (int)data_buf_capacity) {
         fprintf(stderr, "ERROR: Chunk data buffer overflow at bedrock palette\n");
@@ -525,109 +549,68 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
     data_buf[data_offset++] = 0;
   }
 
-  // send middle chunk sections using cached data
-  for (int i = 0; i < 20; i ++) {
+  // A helper to encode a single section into the data buffer
+  // (captures data_offset and data_buf by scope)
+  #define ENCODE_SECTION(section_data, biome) do { \
+    uint16_t* _sd = (section_data); \
+    uint8_t _biome = (biome); \
+    uint16_t _first = _sd[0]; \
+    uint8_t _uniform = 1; \
+    for (int _j = 1; _j < 4096; _j++) { if (_sd[_j] != _first) { _uniform = 0; break; } } \
+    if (_uniform) { \
+      uint16_t _bc = (_first == 0) ? 0 : 4096; \
+      data_buf[data_offset++] = _bc >> 8; \
+      data_buf[data_offset++] = _bc & 0xFF; \
+      data_buf[data_offset++] = 0; \
+      val = block_palette[_first]; \
+      while (1) { \
+        if ((val & ~SEGMENT_BITS) == 0) { data_buf[data_offset++] = val; break; } \
+        data_buf[data_offset++] = (val & SEGMENT_BITS) | CONTINUE_BIT; \
+        val >>= 7; \
+      } \
+    } else { \
+      uint16_t _pal[256]; \
+      uint16_t _palidx[277]; \
+      int _psize = 0; \
+      memset(_palidx, 0xFF, sizeof(_palidx)); \
+      for (int _j = 0; _j < 4096; _j++) { \
+        uint16_t _b = _sd[_j]; \
+        if (_palidx[_b] == 0xFFFF) { _palidx[_b] = _psize; _pal[_psize++] = _b; } \
+      } \
+      uint16_t _bc = 0; \
+      for (int _j = 0; _j < 4096; _j++) if (_sd[_j] != 0) _bc++; \
+      data_buf[data_offset++] = _bc >> 8; \
+      data_buf[data_offset++] = _bc & 0xFF; \
+      data_buf[data_offset++] = 8; \
+      val = _psize; \
+      while (1) { \
+        if ((val & ~SEGMENT_BITS) == 0) { data_buf[data_offset++] = val; break; } \
+        data_buf[data_offset++] = (val & SEGMENT_BITS) | CONTINUE_BIT; \
+        val >>= 7; \
+      } \
+      ENSURE_SPACE(_psize * 3 + 4096); \
+      for (int _j = 0; _j < _psize; _j++) { \
+        val = block_palette[_pal[_j]]; \
+        while (1) { \
+          if ((val & ~SEGMENT_BITS) == 0) { data_buf[data_offset++] = val; break; } \
+          data_buf[data_offset++] = (val & SEGMENT_BITS) | CONTINUE_BIT; \
+          val >>= 7; \
+        } \
+      } \
+      ENSURE_SPACE(4096); \
+      for (int _j = 0; _j < 4096; _j++) data_buf[data_offset++] = _palidx[_sd[_j]]; \
+    } \
+    data_buf[data_offset++] = 0; \
+    data_buf[data_offset++] = _biome; \
+  } while(0)
+
+  // send terrain sections using cached data
+  for (int i = 0; i < terrain_sections; i ++) {
     if (data_offset + 32 > (int)data_buf_capacity) {
-      fprintf(stderr, "ERROR: Chunk data buffer overflow at middle sections\n");
+      fprintf(stderr, "ERROR: Chunk data buffer overflow at terrain sections\n");
       return 1;
     }
-
-    uint16_t* section_data = cached_sections[i];
-    uint8_t biome = cached_biomes[i];
-
-    // Check if section is uniform
-    uint16_t first_block = section_data[0];
-    uint8_t uniform = true;
-    for (int j = 1; j < 4096; j ++) {
-      if (section_data[j] != first_block) {
-        uniform = false;
-        break;
-      }
-    }
-
-    if (uniform) {
-      uint16_t block_count = (first_block == 0) ? 0 : 4096;
-      data_buf[data_offset++] = block_count >> 8;
-      data_buf[data_offset++] = block_count & 0xFF;
-      data_buf[data_offset++] = 0;
-      uint32_t val = block_palette[first_block];
-      while (true) {
-        if (data_offset + 32 > (int)data_buf_capacity) {
-          fprintf(stderr, "ERROR: Chunk data buffer overflow at uniform palette\n");
-          return 1;
-        }
-        if ((val & ~SEGMENT_BITS) == 0) { data_buf[data_offset++] = val; break; }
-        data_buf[data_offset++] = (val & SEGMENT_BITS) | CONTINUE_BIT;
-        val >>= 7;
-      }
-    } else {
-      // Build per-section palette (unique blocks only)
-      uint16_t section_palette[256];
-      uint16_t palette_idx[277];
-      int palette_size = 0;
-      memset(palette_idx, 0xFF, sizeof(palette_idx));
-
-      for (int j = 0; j < 4096; j++) {
-        uint16_t block = section_data[j];
-        if (palette_idx[block] == 0xFFFF) {
-          palette_idx[block] = palette_size;
-          section_palette[palette_size++] = block;
-        }
-      }
-
-      uint16_t block_count = 0;
-      for (int j = 0; j < 4096; j ++) if (section_data[j] != 0) block_count ++;
-      data_buf[data_offset++] = block_count >> 8;
-      data_buf[data_offset++] = block_count & 0xFF;
-      data_buf[data_offset++] = 8;
-
-      uint32_t val = palette_size;
-      while (true) {
-        if (data_offset + 32 > (int)data_buf_capacity) {
-          fprintf(stderr, "ERROR: Chunk data buffer overflow at palette size\n");
-          return 1;
-        }
-        if ((val & ~SEGMENT_BITS) == 0) { data_buf[data_offset++] = val; break; }
-        data_buf[data_offset++] = (val & SEGMENT_BITS) | CONTINUE_BIT;
-        val >>= 7;
-      }
-
-      ENSURE_SPACE(palette_size * 3 + 4096);
-      for (int j = 0; j < palette_size; j++) {
-        val = block_palette[section_palette[j]];
-        while (true) {
-          if (data_offset + 32 > (int)data_buf_capacity) {
-            fprintf(stderr, "ERROR: Chunk data buffer overflow at palette entry\n");
-            return 1;
-          }
-          if ((val & ~SEGMENT_BITS) == 0) { data_buf[data_offset++] = val; break; }
-          data_buf[data_offset++] = (val & SEGMENT_BITS) | CONTINUE_BIT;
-          val >>= 7;
-        }
-      }
-
-      ENSURE_SPACE(4096);
-      for (int j = 0; j < 4096; j++) {
-        data_buf[data_offset++] = palette_idx[section_data[j]];
-      }
-    }
-
-    data_buf[data_offset++] = 0;
-    data_buf[data_offset++] = biome;
-  }
-
-  // send 8 chunk sections (up to Y=192) with no blocks (air)
-  for (int i = 0; i < 8; i ++) {
-    if (data_offset + 32 > (int)data_buf_capacity) {
-      fprintf(stderr, "ERROR: Chunk data buffer overflow at air sections\n");
-      return 1;
-    }
-    data_buf[data_offset++] = 0; // block count
-    data_buf[data_offset++] = 0;
-    data_buf[data_offset++] = 0; // bits
-    data_buf[data_offset++] = 0; // palette (air)
-    data_buf[data_offset++] = 0; // biome bits
-    data_buf[data_offset++] = 0; // biome palette
+    ENCODE_SECTION(cached_sections[i], cached_biomes[i]);
   }
 
   int chunk_data_size = data_offset;
@@ -645,31 +628,42 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
 
   writeVarInt(client_fd, 0); // omit block entities
 
-  // light data
+  // Light data
+  // Sky light mask: all sections + 2 border sections
+  uint64_t light_mask = ((uint64_t)1 << light_bits) - 1;
   writeVarInt(client_fd, 1);
-  writeUint64(client_fd, 0b11111111111111111111111111);
+  writeUint64(client_fd, light_mask);
+  // Block light mask: empty
   writeVarInt(client_fd, 0);
+  // Empty sky light mask: empty
   writeVarInt(client_fd, 0);
+  // Empty block light mask: empty
   writeVarInt(client_fd, 0);
 
-  // sky light array
-  writeVarInt(client_fd, 26);
-  // Dedicated light buffer (do NOT reuse worldgen's global chunk_section).
-  // Reusing chunk_section races with the chunk generator thread and corrupts chunks.
-  static THREAD_LOCAL uint8_t light_buf[4096];
-  memset(light_buf, 0xFF, 2048);
-  memset(light_buf + 2048, 0, 2048);
+  // Sky light arrays
+  static THREAD_LOCAL uint8_t light_sky[2048];
+  static THREAD_LOCAL uint8_t light_dark[2048];
+  if (dimension == DIMENSION_NETHER) {
+    memset(light_sky, 0, 2048);
+    memset(light_dark, 0, 2048);
+  } else {
+    memset(light_sky, 0xFF, 2048);
+    memset(light_dark, 0, 2048);
+  }
 
-  // Cache VarInt for 2048
-  for (int i = 0; i < 8; i ++) {
+  writeVarInt(client_fd, light_bits);
+  // One section below world: dark
+  writeVarInt(client_fd, 2048);
+  send_all(client_fd, light_dark, 2048);
+  // In-world sections: sky lit for overworld, dark for nether
+  for (int i = 0; i < total_sections; i ++) {
     writeVarInt(client_fd, 2048);
-    send_all(client_fd, light_buf + 2048, 2048);
+    send_all(client_fd, light_sky, 2048);
   }
-  for (int i = 0; i < 18; i ++) {
-    writeVarInt(client_fd, 2048);
-    send_all(client_fd, light_buf, 2048);
-  }
-  // don't send block light
+  // One section above world: sky lit
+  writeVarInt(client_fd, 2048);
+  send_all(client_fd, light_sky, 2048);
+  // No block light
   writeVarInt(client_fd, 0);
 
   if (endPacket(client_fd) != 0) {
@@ -1678,6 +1672,7 @@ int cs_chat (int client_fd) {
     // Send command guide
     const char help_msg[] = "§7Commands:\n"
     "  !msg <player> <message> - Send a private message\n"
+    "  !portal - Build a Nether portal at your position\n"
     "  !biome [x z] - Show biome at current or given coordinates\n"
     "  !tp <x> <y> <z> - Teleport to coordinates\n"
     "  !timeset <ticks> - Set world time (0=day, 12000=night)\n"
@@ -1685,6 +1680,43 @@ int cs_chat (int client_fd) {
     "  !find biome <name> [radius] - Alias for !findbiome\n"
     "  !help - Show this help message";
     sc_systemChat(client_fd, (char *)help_msg, (uint16_t)sizeof(help_msg) - 1);
+    goto cleanup;
+  }
+
+  // !portal - Build a Nether portal at the player's position
+  if (!strncmp((char *)recv_buffer, "!portal", 7)) {
+    short px = player->x;
+    uint8_t py = player->y;
+    short pz = player->z;
+
+    char resp[128];
+    int len = snprintf(resp, sizeof(resp), "§7Building portal at §f%d, %d, %d", px, py, pz);
+    sc_systemChat(client_fd, resp, (uint16_t)len);
+
+    // Build 4-wide x 5-tall portal frame, offset so the portal is to the north
+    int ox = 0, oz = -3;
+    uint8_t dim = player->dimension;
+
+    // Bottom frame (Y = py)
+    for (int w = 0; w < 4; w++)
+      makeBlockChange(px + w + ox, py, pz + oz, B_obsidian, dim);
+
+    // Top frame (Y = py + 4)
+    for (int w = 0; w < 4; w++)
+      makeBlockChange(px + w + ox, py + 4, pz + oz, B_obsidian, dim);
+
+    // Left and right pillars
+    for (int h = 1; h < 4; h++) {
+      makeBlockChange(px + ox, py + h, pz + oz, B_obsidian, dim);
+      makeBlockChange(px + 3 + ox, py + h, pz + oz, B_obsidian, dim);
+    }
+
+    // Fill interior with portal blocks
+    for (int w = 1; w < 3; w++)
+      for (int h = 1; h < 4; h++)
+        makeBlockChange(px + w + ox, py + h, pz + oz, B_nether_portal, dim);
+
+    sc_systemChat(client_fd, "§aPortal built! Step into it to travel to the Nether.", 56);
     goto cleanup;
   }
 

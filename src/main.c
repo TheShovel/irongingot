@@ -402,11 +402,17 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
       if (state == STATE_PLAY) cs_chat(client_fd);
       break;
 
+    case 0x0A:
+      if (state == STATE_PLAY) {
+        readVarInt(client_fd);
+      }
+      break;
+
     case 0x0B:
       if (state == STATE_PLAY) cs_clientStatus(client_fd);
       break;
 
-    case 0x0C: // Client tick (ignored)
+    case 0x0C:
       break;
 
     case 0x11:
