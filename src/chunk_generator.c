@@ -16,6 +16,7 @@
 typedef struct {
   int x;
   int z;
+  uint8_t dimension;
 } ChunkCoord;
 
 static CachedChunkData* chunk_cache = NULL;
@@ -38,15 +39,15 @@ static pthread_mutex_t chunk_locks[CHUNK_LOCK_BUCKETS];
 static int chunk_locks_initialized = 0;
 
 // Hash function for chunk coordinates
-static inline uint32_t chunk_hash(int x, int z) {
-  uint32_t h = (uint32_t)x * 374761393u + (uint32_t)z * 668265263u;
+static inline uint32_t chunk_hash(int x, int z, uint8_t dimension) {
+  uint32_t h = (uint32_t)x * 374761393u + (uint32_t)z * 668265263u + (uint32_t)dimension * 1640531513u;
   h = (h ^ (h >> 13)) * 1274126177u;
   return h ^ (h >> 16);
 }
 
 // Get lock for specific chunk
-static inline pthread_mutex_t* get_chunk_lock(int x, int z) {
-  return &chunk_locks[chunk_hash(x, z) % CHUNK_LOCK_BUCKETS];
+static inline pthread_mutex_t* get_chunk_lock(int x, int z, uint8_t dimension) {
+  return &chunk_locks[chunk_hash(x, z, dimension) % CHUNK_LOCK_BUCKETS];
 }
 
 // Initialize per-chunk locks
@@ -60,10 +61,10 @@ static void init_chunk_locks(void) {
 }
 
 // Find cache slot for chunk (must be called with cache_mutex held)
-static CachedChunkData* get_cache_locked(int x, int z) {
+static CachedChunkData* get_cache_locked(int x, int z, uint8_t dimension) {
   // Check if already cached or in progress
   for (int i = 0; i < cache_size; i++) {
-    if (chunk_cache[i].x == x && chunk_cache[i].z == z &&
+    if (chunk_cache[i].x == x && chunk_cache[i].z == z && chunk_cache[i].dimension == dimension &&
         (chunk_cache[i].valid || chunk_cache[i].generating)) {
       chunk_cache[i].access_count = ++global_access_counter;
       return &chunk_cache[i];
@@ -77,6 +78,7 @@ static CachedChunkData* get_cache_locked(int x, int z) {
     if (!chunk_cache[i].valid && !chunk_cache[i].generating) {
       chunk_cache[i].x = x;
       chunk_cache[i].z = z;
+      chunk_cache[i].dimension = dimension;
       chunk_cache[i].access_count = ++global_access_counter;
       return &chunk_cache[i];
     }
@@ -94,6 +96,7 @@ static CachedChunkData* get_cache_locked(int x, int z) {
   // Overwrite LRU slot
   chunk_cache[lru_slot].x = x;
   chunk_cache[lru_slot].z = z;
+  chunk_cache[lru_slot].dimension = dimension;
   chunk_cache[lru_slot].access_count = ++global_access_counter;
   chunk_cache[lru_slot].valid = 0;  // Mark invalid until generation completes
   chunk_cache[lru_slot].generating = 0;
@@ -101,9 +104,9 @@ static CachedChunkData* get_cache_locked(int x, int z) {
 }
 
 // Check whether a chunk is already cached or being generated (cache_mutex held)
-static int is_chunk_cached_or_generating_locked(int x, int z) {
+static int is_chunk_cached_or_generating_locked(int x, int z, uint8_t dimension) {
   for (int i = 0; i < cache_size; i++) {
-    if (chunk_cache[i].x == x && chunk_cache[i].z == z &&
+    if (chunk_cache[i].x == x && chunk_cache[i].z == z && chunk_cache[i].dimension == dimension &&
         (chunk_cache[i].valid || chunk_cache[i].generating)) {
       chunk_cache[i].access_count = ++global_access_counter;
       return 1;
@@ -114,11 +117,11 @@ static int is_chunk_cached_or_generating_locked(int x, int z) {
 
 // Queue a chunk generation request if it's not already queued.
 // If the queue is full, evict the oldest request to prioritize newest chunks.
-static void enqueue_chunk_request(int x, int z) {
+static void enqueue_chunk_request(int x, int z, uint8_t dimension) {
   pthread_mutex_lock(&request_mutex);
 
   for (int i = request_head; i != request_tail; i = (i + 1) % CHUNK_REQUEST_QUEUE_SIZE) {
-    if (request_queue[i].x == x && request_queue[i].z == z) {
+    if (request_queue[i].x == x && request_queue[i].z == z && request_queue[i].dimension == dimension) {
       pthread_mutex_unlock(&request_mutex);
       return;
     }
@@ -132,13 +135,14 @@ static void enqueue_chunk_request(int x, int z) {
 
   request_queue[request_tail].x = x;
   request_queue[request_tail].z = z;
+  request_queue[request_tail].dimension = dimension;
   request_tail = next_tail;
 
   pthread_cond_signal(&request_cond);
   pthread_mutex_unlock(&request_mutex);
 }
 
-static int pop_chunk_request(int *x, int *z) {
+static int pop_chunk_request(int *x, int *z, uint8_t *dimension) {
   pthread_mutex_lock(&request_mutex);
 
   if (request_head == request_tail) {
@@ -148,6 +152,7 @@ static int pop_chunk_request(int *x, int *z) {
 
   *x = request_queue[request_head].x;
   *z = request_queue[request_head].z;
+  *dimension = request_queue[request_head].dimension;
   request_head = (request_head + 1) % CHUNK_REQUEST_QUEUE_SIZE;
 
   pthread_mutex_unlock(&request_mutex);
@@ -168,9 +173,9 @@ static int maybe_pregen_one_chunk(void) {
         int cx = px + dx;
         int cz = pz + dz;
 
-        CachedChunkData* cached = get_cached_chunk(cx, cz);
+        CachedChunkData* cached = get_cached_chunk(cx, cz, 0);
         if (!cached) {
-          generate_chunk_data(cx, cz);
+          generate_chunk_data(cx, cz, 0);
           return 1;
         }
       }
@@ -181,12 +186,12 @@ static int maybe_pregen_one_chunk(void) {
 
 // Generate chunk data (can be called from worker thread or main thread)
 // This function now supports parallel generation of non-adjacent chunks
-void generate_chunk_data(int x, int z) {
-  pthread_mutex_t* chunk_lock = get_chunk_lock(x, z);
+void generate_chunk_data(int x, int z, uint8_t dimension) {
+  pthread_mutex_t* chunk_lock = get_chunk_lock(x, z, dimension);
   pthread_mutex_lock(chunk_lock);  // Lock only this chunk's bucket
   pthread_mutex_lock(&cache_mutex);
 
-  CachedChunkData* cache = get_cache_locked(x, z);
+  CachedChunkData* cache = get_cache_locked(x, z, dimension);
   if (cache == NULL) {
     pthread_mutex_unlock(&cache_mutex);
     pthread_mutex_unlock(chunk_lock);
@@ -202,6 +207,7 @@ void generate_chunk_data(int x, int z) {
 
   // Mark as being generated to prevent duplicate work
   cache->generating = 1;
+  cache->dimension = dimension;
 
   pthread_mutex_unlock(&cache_mutex);
 
@@ -209,14 +215,14 @@ void generate_chunk_data(int x, int z) {
   int world_z = z * 16;
 
   // Temporary buffer to build complete chunk data
-  uint8_t temp_sections[20][4096];
+  uint16_t temp_sections[20][4096];
   uint8_t temp_biomes[20];
 
   // Generate all 20 middle sections into temporary buffer
   for (int i = 0; i < 20; i++) {
     int y = i * 16;
-    temp_biomes[i] = buildChunkSection(world_x, y, world_z);
-    memcpy(temp_sections[i], chunk_section, 4096);
+    temp_biomes[i] = (uint8_t)buildChunkSection(world_x, y, world_z, dimension);
+    memcpy(temp_sections[i], chunk_section, 4096 * sizeof(uint16_t));
   }
 
   // Copy complete data to cache atomically
@@ -232,22 +238,22 @@ void generate_chunk_data(int x, int z) {
 
 // Queue background generation for a chunk if needed.
 // This is intentionally non-blocking to keep packet handling fast.
-void request_chunk_generation(int x, int z) {
+void request_chunk_generation(int x, int z, uint8_t dimension) {
   pthread_mutex_lock(&cache_mutex);
-  int already_ready_or_generating = is_chunk_cached_or_generating_locked(x, z);
+  int already_ready_or_generating = is_chunk_cached_or_generating_locked(x, z, dimension);
   pthread_mutex_unlock(&cache_mutex);
 
   if (already_ready_or_generating) return;
-  enqueue_chunk_request(x, z);
+  enqueue_chunk_request(x, z, dimension);
 }
 
 // Get cached chunk data (returns NULL if not cached or being generated)
-CachedChunkData* get_cached_chunk(int x, int z) {
+CachedChunkData* get_cached_chunk(int x, int z, uint8_t dimension) {
   pthread_mutex_lock(&cache_mutex);
 
   for (int i = 0; i < cache_size; i++) {
     if (chunk_cache[i].valid && !chunk_cache[i].generating &&
-        chunk_cache[i].x == x && chunk_cache[i].z == z) {
+        chunk_cache[i].x == x && chunk_cache[i].z == z && chunk_cache[i].dimension == dimension) {
       chunk_cache[i].access_count = ++global_access_counter;
       pthread_mutex_unlock(&cache_mutex);
       return &chunk_cache[i];
@@ -258,14 +264,14 @@ CachedChunkData* get_cached_chunk(int x, int z) {
   return NULL;
 }
 
-int get_cached_chunk_copy(int x, int z, uint8_t out_sections[20][4096], uint8_t out_biomes[20]) {
+int get_cached_chunk_copy(int x, int z, uint8_t dimension, uint16_t out_sections[20][4096], uint8_t out_biomes[20]) {
   if (out_sections == NULL || out_biomes == NULL) return 0;
 
   pthread_mutex_lock(&cache_mutex);
 
   for (int i = 0; i < cache_size; i++) {
     if (chunk_cache[i].valid && !chunk_cache[i].generating &&
-        chunk_cache[i].x == x && chunk_cache[i].z == z) {
+        chunk_cache[i].x == x && chunk_cache[i].z == z && chunk_cache[i].dimension == dimension) {
       chunk_cache[i].access_count = ++global_access_counter;
       memcpy(out_sections, chunk_cache[i].sections, sizeof(chunk_cache[i].sections));
       memcpy(out_biomes, chunk_cache[i].biomes, sizeof(chunk_cache[i].biomes));
@@ -279,12 +285,12 @@ int get_cached_chunk_copy(int x, int z, uint8_t out_sections[20][4096], uint8_t 
 }
 
 // Invalidate cached chunk (called when block changes are made)
-void invalidate_cached_chunk(int x, int z) {
+void invalidate_cached_chunk(int x, int z, uint8_t dimension) {
   pthread_mutex_lock(&cache_mutex);
 
   for (int i = 0; i < cache_size; i++) {
     if (chunk_cache[i].valid &&
-        chunk_cache[i].x == x && chunk_cache[i].z == z) {
+        chunk_cache[i].x == x && chunk_cache[i].z == z && chunk_cache[i].dimension == dimension) {
       chunk_cache[i].valid = 0;  // Mark as invalid, will regenerate on next access
       break;
     }
@@ -304,10 +310,11 @@ void* chunk_generator_worker(void* arg) {
 
   while (running) {
     int request_x, request_z;
+    uint8_t request_dimension;
 
     // Always prioritize explicit chunk requests from networking.
-    if (pop_chunk_request(&request_x, &request_z)) {
-      generate_chunk_data(request_x, request_z);
+    if (pop_chunk_request(&request_x, &request_z, &request_dimension)) {
+      generate_chunk_data(request_x, request_z, request_dimension);
       continue;
     }
 
@@ -384,12 +391,12 @@ void shutdown_chunk_generator() {
 // Task function for chunk generation
 static void chunk_gen_task(void* arg) {
   ChunkCoord* coord = (ChunkCoord*)arg;
-  generate_chunk_data(coord->x, coord->z);
+  generate_chunk_data(coord->x, coord->z, coord->dimension);
   free(coord);
 }
 
 // Generate multiple chunks in parallel using thread pool
-void generate_chunks_parallel(int* chunks, int chunk_count, ThreadPool* pool) {
+void generate_chunks_parallel(int* chunks, int chunk_count, uint8_t dimension, ThreadPool* pool) {
   if (pool == NULL || chunks == NULL || chunk_count <= 0) {
     return;
   }
@@ -401,7 +408,7 @@ void generate_chunks_parallel(int* chunks, int chunk_count, ThreadPool* pool) {
     int z = chunks[i + 1];
 
     // Check if already cached before submitting
-    if (get_cached_chunk(x, z) != NULL) {
+    if (get_cached_chunk(x, z, dimension) != NULL) {
       continue;
     }
 
@@ -411,6 +418,7 @@ void generate_chunks_parallel(int* chunks, int chunk_count, ThreadPool* pool) {
     }
     coord->x = x;
     coord->z = z;
+    coord->dimension = dimension;
 
     if (thread_pool_submit(pool, chunk_gen_task, coord) == 0) {
       submitted++;

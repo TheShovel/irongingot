@@ -196,7 +196,7 @@ static void streamChunksForPlayer(PlayerData *player) {
           continue;
         }
 
-        if (sc_chunkDataAndUpdateLight(player->client_fd, check_x, check_z) == 0) {
+        if (sc_chunkDataAndUpdateLight(player->client_fd, check_x, check_z, player->dimension) == 0) {
           markChunkVisited(player, check_x, check_z);
           chunks_per_cycle--;
         } else {
@@ -346,10 +346,11 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
 
         // Enter client into "play" state
         setClientState(client_fd, STATE_PLAY);
-        sc_loginPlay(client_fd);
 
         PlayerData *player;
         if (getPlayerData(client_fd, &player)) break;
+
+        sc_loginPlay(client_fd, player->dimension);
 
         // Send full client spawn sequence
         spawnPlayer(player);

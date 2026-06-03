@@ -10,20 +10,20 @@ static inline int abs_i(int value) {
   return value < 0 ? -value : value;
 }
 
-void setBlockIfReplaceable (short x, uint8_t y, short z, uint8_t block) {
-  uint8_t target = getBlockAt(x, y, z);
+void setBlockIfReplaceable (short x, uint8_t y, short z, uint16_t block) {
+  uint16_t target = getBlockAt(x, y, z);
   if (!isReplaceableBlock(target) && !isLeafBlock(target) && !isSaplingBlock(target)) return;
-  makeBlockChange(x, y, z, block);
+  makeBlockChange(x, y, z, block, DIMENSION_OVERWORLD);
 }
 
-static void setTrunkColumn(short x, uint8_t y, short z, uint8_t log, uint8_t height) {
-  makeBlockChange(x, y - 1, z, B_dirt);
+static void setTrunkColumn(short x, uint8_t y, short z, uint16_t log, uint8_t height) {
+  makeBlockChange(x, y - 1, z, B_dirt, DIMENSION_OVERWORLD);
   for (int i = 0; i < height; i++) {
     setBlockIfReplaceable(x, y + i, z, log);
   }
 }
 
-static void setRoundCanopy(short x, uint8_t y, short z, uint8_t leaves, uint8_t radius, uint8_t skip_corners) {
+static void setRoundCanopy(short x, uint8_t y, short z, uint16_t leaves, uint8_t radius, uint8_t skip_corners) {
   for (int dx = -radius; dx <= radius; dx++) {
     for (int dz = -radius; dz <= radius; dz++) {
       int manhattan = abs_i(dx) + abs_i(dz);
@@ -34,7 +34,7 @@ static void setRoundCanopy(short x, uint8_t y, short z, uint8_t leaves, uint8_t 
   }
 }
 
-static void placeRoundedTree(short x, uint8_t y, short z, uint8_t log, uint8_t leaves, uint8_t min_height, uint8_t height_variation) {
+static void placeRoundedTree(short x, uint8_t y, short z, uint16_t log, uint16_t leaves, uint8_t min_height, uint8_t height_variation) {
   uint32_t r = fast_rand();
   uint8_t height = min_height + (r % height_variation);
 
@@ -46,7 +46,7 @@ static void placeRoundedTree(short x, uint8_t y, short z, uint8_t log, uint8_t l
   setBlockIfReplaceable(x, y + height + 1, z, leaves);
 }
 
-static void placeConiferTree(short x, uint8_t y, short z, uint8_t log, uint8_t leaves) {
+static void placeConiferTree(short x, uint8_t y, short z, uint16_t log, uint16_t leaves) {
   uint8_t height = 6 + (fast_rand() % 4);
   uint8_t leaf_top = y + height;
 
@@ -77,7 +77,7 @@ static void placeJungleTree(short x, uint8_t y, short z) {
   setBlockIfReplaceable(x, y + height + 2, z, B_jungle_leaves);
 }
 
-static void placeFlatCanopyTree(short x, uint8_t y, short z, uint8_t log, uint8_t leaves, uint8_t min_height, uint8_t height_variation) {
+static void placeFlatCanopyTree(short x, uint8_t y, short z, uint16_t log, uint16_t leaves, uint8_t min_height, uint8_t height_variation) {
   uint8_t height = min_height + (fast_rand() % height_variation);
   uint8_t canopy_y = y + height - 1;
 
@@ -87,7 +87,7 @@ static void placeFlatCanopyTree(short x, uint8_t y, short z, uint8_t log, uint8_
   setRoundCanopy(x, canopy_y + 2, z, leaves, 2, 0);
 }
 
-static void placeDenseTree(short x, uint8_t y, short z, uint8_t log, uint8_t leaves) {
+static void placeDenseTree(short x, uint8_t y, short z, uint16_t log, uint16_t leaves) {
   uint8_t height = 6 + (fast_rand() % 3);
 
   setTrunkColumn(x, y, z, log, height);
@@ -97,7 +97,7 @@ static void placeDenseTree(short x, uint8_t y, short z, uint8_t log, uint8_t lea
   setBlockIfReplaceable(x, y + height + 1, z, leaves);
 }
 
-void placeSaplingStructure (short x, uint8_t y, short z, uint8_t sapling_block) {
+void placeSaplingStructure (short x, uint8_t y, short z, uint16_t sapling_block) {
   switch (sapling_block) {
     case B_spruce_sapling:
       placeConiferTree(x, y, z, B_spruce_log, B_spruce_leaves);

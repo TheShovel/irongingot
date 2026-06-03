@@ -319,8 +319,8 @@ void init_worldgen() {
         return;
     }
     setupGenerator(&g, MC_1_20, 0);
-    applySeed(&g, DIM_OVERWORLD, (uint64_t)world_seed);
-    initSurfaceNoise(&surface_noise_biome, DIM_OVERWORLD, (uint64_t)world_seed);
+    applySeed(&g, DIMENSION_OVERWORLD, (uint64_t)world_seed);
+    initSurfaceNoise(&surface_noise_biome, DIMENSION_OVERWORLD, (uint64_t)world_seed);
 
     // Surface noise: increased octaves for more dramatic terrain
     octave_init(&surface_noise, (uint64_t)world_seed, 6);
@@ -559,7 +559,7 @@ uint8_t getHeightAtFromHash (int rx, int rz, int _x, int _z, uint32_t chunk_hash
 
 // Check if this position is an ore "seed" (starting point of a vein)
 // Returns the ore type or 0 if not a seed
-static uint8_t getOreSeedAt(int x, int y, int z, uint8_t biome) {
+static uint16_t getOreSeedAt(int x, int y, int z, uint8_t biome) {
   // Sample ore clump noise to find vein centers
   double ore_noise = octave_sample(&ore_clump_noise, x * 0.12, y * 0.12, z * 0.12);
   double ore_density = (ore_noise + 1.0) / 2.0;
@@ -589,14 +589,14 @@ static uint8_t getOreSeedAt(int x, int y, int z, uint8_t biome) {
 
 // Generate ore at position, including spreading from nearby seeds
 // Returns the ore block type or 0 if no ore
-static uint8_t getOreClumpAt(int x, int y, int z, uint8_t biome) {
+static uint16_t getOreClumpAt(int x, int y, int z, uint8_t biome) {
   // First, check if this block is an ore seed
-  uint8_t seed_ore = getOreSeedAt(x, y, z, biome);
+  uint16_t seed_ore = getOreSeedAt(x, y, z, biome);
   if (seed_ore != 0) return seed_ore;
   
   // Not a seed - check if adjacent to a seed and spread with 1/4 chance
   // Each direction has its own hash for independent spread chance
-  uint8_t adjacent_ore = 0;
+  uint16_t adjacent_ore = 0;
   
   // Check +X neighbor (25% chance to spread)
   adjacent_ore = getOreSeedAt(x + 1, y, z, biome);
@@ -654,7 +654,7 @@ static inline uint8_t isCaveSimple(int x, int y, int z, uint8_t height, uint8_t 
 }
 
 
-uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor anchor, ChunkFeature feature, uint8_t height) {
+uint16_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor anchor, ChunkFeature feature, uint8_t height) {
 
   if (y >= 64 && y >= height) switch (anchor.biome) {
     case W_plains: { // Generate oak trees and grass in plains
@@ -1662,7 +1662,7 @@ uint8_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor 
     }
 
     // Generate ore clumps using 3D noise for clustered veins
-    uint8_t ore = getOreClumpAt(x, y, z, anchor.biome);
+    uint16_t ore = getOreClumpAt(x, y, z, anchor.biome);
     if (ore != 0) return ore;
     
     // Deep bedrock layer
@@ -1747,7 +1747,7 @@ ChunkFeature getFeatureFromAnchor (ChunkAnchor anchor) {
 
 }
 
-uint8_t getTerrainAt (int x, int y, int z, ChunkAnchor anchor) {
+uint16_t getTerrainAt (int x, int y, int z, ChunkAnchor anchor) {
 
   if (y > 320) return B_air;
 
@@ -1763,11 +1763,11 @@ uint8_t getTerrainAt (int x, int y, int z, ChunkAnchor anchor) {
 
 }
 
-uint8_t getBlockAt (int x, int y, int z) {
+uint16_t getBlockAt (int x, int y, int z) {
 
   if (y < 0) return B_bedrock;
 
-  uint8_t block_change = getBlockChange(x, y, z);
+  uint16_t block_change = getBlockChange(x, y, z);
   if (block_change != 0xFF) return block_change;
 
   short anchor_x = div_floor(x, CHUNK_SIZE);
@@ -1783,14 +1783,182 @@ uint8_t getBlockAt (int x, int y, int z) {
 
 }
 
-WORLDGEN_THREAD_LOCAL uint8_t chunk_section[4096];
+WORLDGEN_THREAD_LOCAL uint16_t chunk_section[4096];
 static WORLDGEN_THREAD_LOCAL ChunkAnchor chunk_anchors[(16 / CHUNK_SIZE + 1) * (16 / CHUNK_SIZE + 1)];
 static WORLDGEN_THREAD_LOCAL ChunkFeature chunk_features[256 / (CHUNK_SIZE * CHUNK_SIZE)];
 static WORLDGEN_THREAD_LOCAL uint8_t chunk_section_height[16][16];
 
+uint8_t getChunkNetherBiome(short x, short z) {
+    uint32_t h = getChunkHash(x, z);
+    switch (h % 5) {
+        case 0: return W_nether_wastes;
+        case 1: return W_soul_sand_valley;
+        case 2: return W_crimson_forest;
+        case 3: return W_warped_forest;
+        case 4: return W_basalt_deltas;
+        default: return W_nether_wastes;
+    }
+}
+
+// Builds a 16x16x16 nether chunk section
+// Fills chunk_section with nether terrain blocks
+// Returns the biome for this chunk column
+uint16_t buildNetherChunkSection(int cx, int cy, int cz) {
+    init_worldgen();
+
+    short anchor_x = (short)div_floor(cx, 16);
+    short anchor_z = (short)div_floor(cz, 16);
+    uint8_t biome = getChunkNetherBiome(anchor_x, anchor_z);
+
+    for (int dy = 0; dy < 16; dy++) {
+        int y = cy + dy;
+        for (int dz = 0; dz < 16; dz++) {
+            int z = cz + dz;
+            for (int dx = 0; dx < 16; dx++) {
+                int x = cx + dx;
+
+                int address = dx + (dz << 4) + (dy << 8);
+                int index = (address & ~7) | (7 - (address & 7));
+
+                // Floor height (top of lower netherrack body), varies with XZ
+                double floor_n = octave_sample(&surface_noise, x * 0.015, 0, z * 0.015);
+                int floor_h = 80 + (int)(floor_n * 15.0);
+                if (floor_h < 65) floor_h = 65;
+                if (floor_h > 100) floor_h = 100;
+
+                // Ceiling height (bottom of upper netherrack body), varies with XZ
+                double ceil_n = octave_sample(&surface_noise, x * 0.015 + 100.0, 0, z * 0.015 + 100.0);
+                int ceil_h = 235 + (int)(ceil_n * 15.0);
+                if (ceil_h < 220) ceil_h = 220;
+                if (ceil_h > 255) ceil_h = 255;
+
+                uint16_t block = B_air;
+
+                // === Zone 1: Bottom bedrock (Y 0-15) ===
+                if (cy == 0) {
+                    if (y < 5) {
+                        block = B_bedrock;
+                    } else {
+                        double n = octave_sample(&detail_noise, x * 0.05, y * 0.1, z * 0.05);
+                        block = (n > 0.0) ? B_bedrock : B_netherrack;
+                    }
+                }
+                // === Zone 2: Lower netherrack body (Y 16 to floor_h) ===
+                else if (y <= floor_h) {
+                    if (y <= 31) {
+                        double n = octave_sample(&detail_noise, x * 0.03, y * 0.05, z * 0.03);
+                        block = (n > 0.3) ? B_lava : B_netherrack;
+                    } else {
+                        block = B_netherrack;
+                        if (y < floor_h - 2) {
+                            double cave = octave_sample(&cave_noise, x * 0.03, y * 0.03, z * 0.03);
+                            if (cave > 0.55) block = B_air;
+                        }
+                    }
+                }
+                // === Zone 3: Ceiling netherrack (ceil_h to Y 303) ===
+                else if (y >= ceil_h && cy < 19) {
+                    block = B_netherrack;
+                    if (y > ceil_h + 2 && cy > 0) {
+                        double cave = octave_sample(&cave_noise, x * 0.03 + 500.0, y * 0.03, z * 0.03 + 500.0);
+                        if (cave > 0.55) block = B_air;
+                    }
+                }
+                // === Zone 4: Top bedrock (Y 304-319) ===
+                else if (cy == 19) {
+                    if (y >= 315) {
+                        block = B_bedrock;
+                    } else {
+                        double n = octave_sample(&detail_noise, x * 0.05 + 1000.0, y * 0.1, z * 0.05 + 1000.0);
+                        block = (n > 0.0) ? B_bedrock : B_netherrack;
+                    }
+                }
+                // === Zone 5: Open void between floor and ceiling ===
+                else if (y > floor_h && y < ceil_h) {
+                    double bridge = octave_sample(&surface_noise, x * 0.025, y * 0.02, z * 0.025);
+                    if (bridge > 0.75) {
+                        double cave = octave_sample(&cave_noise, x * 0.04, y * 0.04, z * 0.04);
+                        if (cave < 0.5) block = B_netherrack;
+                    }
+                }
+
+                // === Decorations ===
+                if (block == B_netherrack) {
+                    uint32_t h = (uint32_t)(x * 31337 + y * 13337 + z * 74747);
+
+                    // Nether quartz ore (~1.5%)
+                    if ((h & 0x3F) == 0) {
+                        block = B_nether_quartz_ore;
+                    }
+                    // Nether gold ore (~0.8%, shallow)
+                    else if ((h & 0x7F) == 0x20 && y < 80) {
+                        block = B_nether_gold_ore;
+                    }
+                    // Ancient debris (~0.06%, deep)
+                    else if ((h & 0xFFF) == 0xDEB && y < 40) {
+                        block = B_ancient_debris;
+                    }
+
+                    // Glowstone clusters near ceiling face
+                    if (block == B_netherrack && y >= ceil_h && y < ceil_h + 6) {
+                        double glow = octave_sample(&detail_noise, x * 0.08 + 2000.0, y * 0.1, z * 0.08 + 2000.0);
+                        if (glow > 0.65) block = B_glowstone;
+                    }
+
+                    // Surface nylium in crimson/warped forests
+                    if (biome == W_crimson_forest && (y == floor_h || y == ceil_h)) {
+                        block = B_crimson_nylium;
+                    } else if (biome == W_warped_forest && (y == floor_h || y == ceil_h)) {
+                        block = B_warped_nylium;
+                    }
+                }
+
+                // Soul sand / soul soil patches on floor surface
+                if (block == B_air && y == floor_h + 1) {
+                    double soul = octave_sample(&detail_noise, x * 0.02 + 3000.0, 0, z * 0.02 + 3000.0);
+                    if (soul > 0.5) {
+                        uint32_t sh = (uint32_t)(x * 31337 + z * 74747);
+                        block = (sh & 1) ? B_soul_sand : B_soul_soil;
+                    }
+                }
+
+                // Gravel patches on floor
+                if (block == B_air && y == floor_h + 1) {
+                    double gravel = octave_sample(&detail_noise, x * 0.03 + 4000.0, 0, z * 0.03 + 4000.0);
+                    if (gravel > 0.6) block = B_gravel;
+                }
+
+                // Basalt columns rising from floor
+                if (block == B_air && y > floor_h + 1 && y < floor_h + 30) {
+                    double col = octave_sample(&detail_noise, x * 0.05 + 5000.0, 0, z * 0.05 + 5000.0);
+                    if (col > 0.75) {
+                        double col_h_n = octave_sample(&surface_noise, x * 0.015 + 6000.0, 0, z * 0.015 + 6000.0);
+                        int col_h = 5 + (int)((col_h_n + 1.0) * 12.0);
+                        if (y - floor_h <= col_h) {
+                            block = B_basalt;
+                        }
+                    }
+                }
+
+                // Magma blocks on soul sand valley floor
+                if (block == B_air && y == floor_h + 1 && biome == W_soul_sand_valley) {
+                    double magma = octave_sample(&detail_noise, x * 0.04 + 7000.0, 0, z * 0.04 + 7000.0);
+                    if (magma > 0.65) block = B_magma_block;
+                }
+
+                chunk_section[index] = block;
+            }
+        }
+    }
+    return biome;
+}
+
 // Builds a 16x16x16 chunk of blocks and writes it to `chunk_section`
 // Returns the biome at the origin corner of the chunk
-uint8_t buildChunkSection (int cx, int cy, int cz) {
+uint16_t buildChunkSection (int cx, int cy, int cz, uint8_t dimension) {
+  if (dimension == DIMENSION_NETHER) {
+    return buildNetherChunkSection(cx, cy, cz);
+  }
   // Precompute hashes, anchors and features for each relevant minichunk
   int anchor_index = 0, feature_index = 0;
   for (int i = cz; i < cz + 16 + CHUNK_SIZE; i += CHUNK_SIZE) {
@@ -1864,7 +2032,7 @@ uint8_t buildChunkSection (int cx, int cy, int cz) {
 
   // Apply block changes on top of terrain
   // Special blocks (stairs, doors, chests, furnaces) are SKIPPED here because
-  // their state IDs don't fit in the uint8_t chunk_section[] / fixed 256-entry
+  // their state IDs don't fit in the uint16_t chunk_section[] / fixed 256-entry
   // global palette. They are sent via individual block update packets after the
   // chunk bulk (see sc_chunkDataAndUpdateLight).
   for (int i = 0; i < block_changes_snapshot_count; i ++) {

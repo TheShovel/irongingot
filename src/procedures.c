@@ -562,8 +562,8 @@ void spawnPlayer (PlayerData *player) {
 
   // Ensure the spawn chunk is available right away for initial login.
   // Movement-driven chunk loading uses non-blocking background generation.
-  generate_chunk_data(_x, _z);
-  sc_chunkDataAndUpdateLight(player->client_fd, _x, _z);
+  generate_chunk_data(_x, _z, DIMENSION_OVERWORLD);
+  sc_chunkDataAndUpdateLight(player->client_fd, _x, _z, DIMENSION_OVERWORLD);
 
   // Initialize visited chunks tracking
   player->visited_next = 0;
@@ -735,7 +735,7 @@ typedef struct {
   short x;
   short z;
   uint8_t y;
-  uint8_t block;
+  uint16_t block;
   uint32_t epoch;
 } BlockLookupCacheEntry;
 
@@ -871,11 +871,11 @@ static inline void notify_block_change_mutation(short x, short z) {
   int chunk_x = div_floor(x, 16);
   int chunk_z = div_floor(z, 16);
   mark_modified_chunk(chunk_x, chunk_z);
-  invalidate_cached_chunk(chunk_x, chunk_z);
+  invalidate_cached_chunk(chunk_x, chunk_z, 0);
   invalidate_block_lookup_cache();
 }
 
-uint8_t getBlockChange (short x, uint8_t y, short z) {
+uint16_t getBlockChange (short x, uint8_t y, short z) {
   uint32_t epoch = block_lookup_cache_epoch;
   uint32_t cache_idx = block_lookup_hash(x, y, z) & (BLOCK_LOOKUP_CACHE_SIZE - 1);
   BlockLookupCacheEntry *cached = &block_lookup_cache[cache_idx];
@@ -888,7 +888,7 @@ uint8_t getBlockChange (short x, uint8_t y, short z) {
     return cached->block;
   }
 
-  uint8_t block = 0xFF;
+  uint16_t block = 0xFF;
   for (int i = 0; i < block_changes_count; i ++) {
     if (block_changes[i].block == 0xFF) continue;
     if (
@@ -932,10 +932,10 @@ uint8_t getBlockChange (short x, uint8_t y, short z) {
 }
 
 // Handle running out of memory for new block changes
-void failBlockChange (short x, uint8_t y, short z, uint8_t block) {
+void failBlockChange (short x, uint8_t y, short z, uint16_t block) {
 
   // Get previous block at this location
-  uint8_t before = getBlockAt(x, y, z);
+  uint16_t before = getBlockAt(x, y, z);
 
   // Broadcast a new update to all players
   for (int i = 0; i < MAX_PLAYERS; i ++) {
@@ -949,7 +949,7 @@ void failBlockChange (short x, uint8_t y, short z, uint8_t block) {
 
 }
 
-uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
+uint8_t makeBlockChange (short x, uint8_t y, short z, uint16_t block, uint8_t dimension) {
 
   // Transmit block update to all in-game clients
   for (int i = 0; i < MAX_PLAYERS; i ++) {
@@ -1014,6 +1014,7 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
         special_block_clear(x, y, z);
       } else {
         block_changes[i].block = block;
+        block_changes[i].dimension = dimension;
         // Initialize default state for special blocks
         if (is_door_block(block)) {
           special_block_set_state(x, y, z, block, door_encode_state(0, 0, 0));
@@ -1094,6 +1095,7 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
     block_changes[base].y = y;
     block_changes[base].z = z;
     block_changes[base].block = block;
+    block_changes[base].dimension = dimension;
 
     if (block == B_chest) {
       // Zero out the following 14 entries for item data
@@ -1112,6 +1114,7 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
       block_changes[base + 1].y = y + 1;
       block_changes[base + 1].z = z;
       block_changes[base + 1].block = block;
+      block_changes[base + 1].dimension = dimension;
       // State entry
       block_changes[base + 2].x = 0;
       block_changes[base + 2].y = 0;
@@ -1152,13 +1155,13 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block) {
 }
 
 // Forward declarations for breakConnectedLeaves
-static void breakConnectedLeaves(short x, uint8_t y, short z, uint8_t leaf_type, PlayerData *player, int *broken_count);
-static void breakFloatingLeaves(short bx, uint8_t by, short bz, uint8_t leaf_type, PlayerData *player, int *broken_count);
+static void breakConnectedLeaves(short x, uint8_t y, short z, uint16_t leaf_type, PlayerData *player, int *broken_count);
+static void breakFloatingLeaves(short bx, uint8_t by, short bz, uint16_t leaf_type, PlayerData *player, int *broken_count);
 void playPickupAnimation(PlayerData *player, uint16_t item, double x, double y, double z);
 int givePlayerItem(PlayerData *player, uint16_t item, uint8_t count);
-uint16_t getMiningResult(uint16_t held_item, uint8_t block);
+uint16_t getMiningResult(uint16_t held_item, uint16_t block);
 
-uint8_t isLeafBlock (uint8_t block) {
+uint8_t isLeafBlock (uint16_t block) {
   return (
     block == B_oak_leaves ||
     block == B_spruce_leaves ||
@@ -1173,7 +1176,7 @@ uint8_t isLeafBlock (uint8_t block) {
 }
 
 // Recursively break connected leaf blocks of the same type (cap at 6 total)
-static void breakConnectedLeaves (short x, uint8_t y, short z, uint8_t leaf_type, PlayerData *player, int *broken_count) {
+static void breakConnectedLeaves (short x, uint8_t y, short z, uint16_t leaf_type, PlayerData *player, int *broken_count) {
   if (*broken_count >= 6) return;
 
   // Check all 6 adjacent blocks
@@ -1188,9 +1191,9 @@ static void breakConnectedLeaves (short x, uint8_t y, short z, uint8_t leaf_type
     uint8_t ny = y + dy[i];
     short nz = z + dz[i];
 
-    uint8_t adj = getBlockAt(nx, ny, nz);
+    uint16_t adj = getBlockAt(nx, ny, nz);
     if (adj == leaf_type) {
-      makeBlockChange(nx, ny, nz, 0);
+      makeBlockChange(nx, ny, nz, 0, player->dimension);
       (*broken_count)++;
       // Drop item from breaking this leaf
       uint16_t held_item = player->inventory_items[player->hotbar];
@@ -1208,7 +1211,7 @@ static void breakConnectedLeaves (short x, uint8_t y, short z, uint8_t leaf_type
 }
 
 // Check if a block is any kind of log
-static uint8_t isLogBlock(uint8_t block) {
+static uint8_t isLogBlock(uint16_t block) {
   return (
     block == B_oak_log ||
     block == B_spruce_log ||
@@ -1223,7 +1226,7 @@ static uint8_t isLogBlock(uint8_t block) {
 }
 
 // Break floating leaf blocks within a 2-block radius that have no log support
-static void breakFloatingLeaves (short bx, uint8_t by, short bz, uint8_t leaf_type, PlayerData *player, int *broken_count) {
+static void breakFloatingLeaves (short bx, uint8_t by, short bz, uint16_t leaf_type, PlayerData *player, int *broken_count) {
   // Scan a 5x5x5 area centered on the broken block (radius 2)
   for (short dx = -2; dx <= 2; dx++) {
     for (short dz = -2; dz <= 2; dz++) {
@@ -1237,7 +1240,7 @@ static void breakFloatingLeaves (short bx, uint8_t by, short bz, uint8_t leaf_ty
         // Skip the block that was already broken
         if (dx == 0 && dy == 0 && dz == 0) continue;
 
-        uint8_t adj = getBlockAt(nx, ny, nz);
+        uint16_t adj = getBlockAt(nx, ny, nz);
         if (adj != leaf_type) continue;
 
         // Check if this leaf has a log within 2 blocks
@@ -1255,7 +1258,7 @@ static void breakFloatingLeaves (short bx, uint8_t by, short bz, uint8_t leaf_ty
 
         // Break the leaf if it has no log support
         if (!has_support) {
-          makeBlockChange(nx, ny, nz, 0);
+          makeBlockChange(nx, ny, nz, 0, player->dimension);
           (*broken_count)++;
           uint16_t held_item = player->inventory_items[player->hotbar];
           uint16_t drop = getMiningResult(held_item, leaf_type);
@@ -1271,7 +1274,7 @@ static void breakFloatingLeaves (short bx, uint8_t by, short bz, uint8_t leaf_ty
   }
 }
 
-uint8_t isSaplingBlock (uint8_t block) {
+uint8_t isSaplingBlock (uint16_t block) {
   return (
     block == B_oak_sapling ||
     block == B_spruce_sapling ||
@@ -1285,7 +1288,7 @@ uint8_t isSaplingBlock (uint8_t block) {
   );
 }
 
-static uint16_t getLeafItemFromBlock(uint8_t block) {
+static uint16_t getLeafItemFromBlock(uint16_t block) {
   switch (block) {
     case B_oak_leaves: return I_oak_leaves;
     case B_spruce_leaves: return I_spruce_leaves;
@@ -1300,7 +1303,7 @@ static uint16_t getLeafItemFromBlock(uint8_t block) {
   }
 }
 
-static uint16_t getSaplingItemFromLeafBlock(uint8_t block) {
+static uint16_t getSaplingItemFromLeafBlock(uint16_t block) {
   switch (block) {
     case B_oak_leaves: return I_oak_sapling;
     case B_spruce_leaves: return I_spruce_sapling;
@@ -1315,7 +1318,7 @@ static uint16_t getSaplingItemFromLeafBlock(uint8_t block) {
   }
 }
 
-static uint8_t leafDropsApple(uint8_t block) {
+static uint8_t leafDropsApple(uint16_t block) {
   return (
     block == B_oak_leaves ||
     block == B_dark_oak_leaves ||
@@ -1353,7 +1356,7 @@ static uint8_t isSaplingItem(uint16_t item) {
 
 // Returns the result of mining a block, taking into account the block type and tools
 // Probability numbers obtained with this formula: N = floor(P * (2 ^ 32))
-uint16_t getMiningResult (uint16_t held_item, uint8_t block) {
+uint16_t getMiningResult (uint16_t held_item, uint16_t block) {
   if (isLeafBlock(block)) {
     uint16_t leaf_item = getLeafItemFromBlock(block);
     uint16_t sapling_item = getSaplingItemFromLeafBlock(block);
@@ -1423,7 +1426,7 @@ uint16_t getMiningResult (uint16_t held_item, uint8_t block) {
 
 
 // Checks whether the given block would be mined instantly with the held tool
-uint8_t isInstantlyMined (PlayerData *player, uint8_t block) {
+uint8_t isInstantlyMined (PlayerData *player, uint16_t block) {
 
   uint16_t held_item = player->inventory_items[player->hotbar];
 
@@ -1468,7 +1471,7 @@ uint8_t isInstantlyMined (PlayerData *player, uint8_t block) {
 }
 
 // Checks whether the given block has to have something beneath it
-uint8_t isColumnBlock (uint8_t block) {
+uint8_t isColumnBlock (uint16_t block) {
   return (
     block == B_snow ||
     block == B_moss_carpet ||
@@ -1501,7 +1504,7 @@ uint8_t isColumnBlock (uint8_t block) {
 // Checks whether the given block is non-solid
 // Note: This function doesn't take coordinates, so for doors we check the block type only
 // For coordinate-aware passability, use isDoorOpen() separately
-uint8_t isPassableBlock (uint8_t block) {
+uint8_t isPassableBlock (uint16_t block) {
   return (
     block == B_air ||
     (block >= B_water && block < B_water + 8) ||
@@ -1533,7 +1536,7 @@ uint8_t isPassableBlock (uint8_t block) {
   );
 }
 // Checks whether the given block is non-solid and spawnable
-uint8_t isPassableSpawnBlock (uint8_t block) {
+uint8_t isPassableSpawnBlock (uint16_t block) {
     if ((block >= B_water && block < B_water + 8) ||
         (block >= B_lava && block < B_lava + 4))
     {
@@ -1543,7 +1546,7 @@ uint8_t isPassableSpawnBlock (uint8_t block) {
 }
 
 // Checks whether the given block can be replaced by another block
-uint8_t isReplaceableBlock (uint8_t block) {
+uint8_t isReplaceableBlock (uint16_t block) {
   return (
     block == B_air ||
     (block >= B_water && block < B_water + 8) ||
@@ -1555,7 +1558,7 @@ uint8_t isReplaceableBlock (uint8_t block) {
   );
 }
 
-uint8_t isReplaceableFluid (uint8_t block, uint8_t level, uint8_t fluid) {
+uint8_t isReplaceableFluid (uint16_t block, uint8_t level, uint16_t fluid) {
   if (block >= fluid && block - fluid < 8) {
     return block - fluid > level;
   }
@@ -1643,10 +1646,10 @@ uint8_t getItemStackSize (uint16_t item) {
 #ifdef ALLOW_DOORS
 /* Legacy wrappers for compatibility with existing code that calls these.
  * All actual logic is in special_block.c */
-uint8_t isDoorBlock (uint8_t block) { return is_door_block(block); }
-uint8_t isStairBlock (uint8_t block) { return is_stair_block(block); }
-uint8_t isTrapdoorBlock (uint8_t block) { return is_trapdoor_block(block); }
-uint8_t isOrientedBlock (uint8_t block) { return is_oriented_block(block); }
+uint8_t isDoorBlock (uint16_t block) { return is_door_block(block); }
+uint8_t isStairBlock (uint16_t block) { return is_stair_block(block); }
+uint8_t isTrapdoorBlock (uint16_t block) { return is_trapdoor_block(block); }
+uint8_t isOrientedBlock (uint16_t block) { return is_oriented_block(block); }
 uint8_t isDoorItem (uint16_t item) {
   return (
     item == I_oak_door ||
@@ -1660,7 +1663,7 @@ uint8_t isDoorItem (uint16_t item) {
     item == I_mangrove_door
   );
 }
-uint16_t getDoorItemFromBlock (uint8_t block) {
+uint16_t getDoorItemFromBlock (uint16_t block) {
   switch (block) {
     case B_oak_door: return I_oak_door;
     case B_spruce_door: return I_spruce_door;
@@ -1695,12 +1698,12 @@ uint8_t isDoorOpen (short x, uint8_t y, short z) {
 }
 
 /* Legacy wrappers for network state ID computation */
-uint16_t getDoorStateId (uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge) {
+uint16_t getDoorStateId (uint16_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge) {
   return get_door_state_id(block, is_upper, open, direction, hinge);
 }
 
 // Send door block update with proper state
-void sendDoorUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge) {
+void sendDoorUpdate (int client_fd, short x, uint8_t y, short z, uint16_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge) {
   startPacket(client_fd, 0x08);
   writeUint64(client_fd, (((int64_t)x & 0x3FFFFFF) << 38) | (((int64_t)z & 0x3FFFFFF) << 12) | (y & 0xFFF));
   writeVarInt(client_fd, get_door_state_id(block, is_upper, open, direction, hinge));
@@ -1708,12 +1711,12 @@ void sendDoorUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, 
 }
 
 // Get trapdoor state ID for network packet
-uint16_t getTrapdoorStateId (uint8_t block, uint8_t open, uint8_t direction, uint8_t half) {
+uint16_t getTrapdoorStateId (uint16_t block, uint8_t open, uint8_t direction, uint8_t half) {
   return get_trapdoor_state_id(block, open, direction, half);
 }
 
 // Send trapdoor block update with proper state
-void sendTrapdoorUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, uint8_t open, uint8_t direction, uint8_t half) {
+void sendTrapdoorUpdate (int client_fd, short x, uint8_t y, short z, uint16_t block, uint8_t open, uint8_t direction, uint8_t half) {
   startPacket(client_fd, 0x08);
   writeUint64(client_fd, (((int64_t)x & 0x3FFFFFF) << 38) | (((int64_t)z & 0x3FFFFFF) << 12) | (y & 0xFFF));
   writeVarInt(client_fd, get_trapdoor_state_id(block, open, direction, half));
@@ -1721,12 +1724,12 @@ void sendTrapdoorUpdate (int client_fd, short x, uint8_t y, short z, uint8_t blo
 }
 
 // Get oriented block state ID for network packet
-uint16_t getOrientedStateId (uint8_t block, uint8_t direction) {
+uint16_t getOrientedStateId (uint16_t block, uint8_t direction) {
   return get_oriented_state_id(block, direction);
 }
 
 // Send oriented block update with proper state
-void sendOrientedUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, uint8_t direction) {
+void sendOrientedUpdate (int client_fd, short x, uint8_t y, short z, uint16_t block, uint8_t direction) {
   startPacket(client_fd, 0x08);
   writeUint64(client_fd, (((int64_t)x & 0x3FFFFFF) << 38) | (((int64_t)z & 0x3FFFFFF) << 12) | (y & 0xFFF));
   writeVarInt(client_fd, get_oriented_state_id(block, direction));
@@ -1734,12 +1737,12 @@ void sendOrientedUpdate (int client_fd, short x, uint8_t y, short z, uint8_t blo
 }
 
 // Get stair state ID for network packet
-uint16_t getStairStateId (uint8_t block, uint8_t half, uint8_t direction) {
+uint16_t getStairStateId (uint16_t block, uint8_t half, uint8_t direction) {
   return get_stair_state_id(block, half, direction);
 }
 
 // Send stair block update with proper state
-void sendStairUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, uint8_t half, uint8_t direction) {
+void sendStairUpdate (int client_fd, short x, uint8_t y, short z, uint16_t block, uint8_t half, uint8_t direction) {
   startPacket(client_fd, 0x08);
   writeUint64(client_fd, (((int64_t)x & 0x3FFFFFF) << 38) | (((int64_t)z & 0x3FFFFFF) << 12) | (y & 0xFFF));
   writeVarInt(client_fd, get_stair_state_id(block, half, direction));
@@ -1884,7 +1887,7 @@ uint8_t handlePlayerEating (PlayerData *player, uint8_t just_check) {
   return true;
 }
 
-void handleFluidMovement (short x, uint8_t y, short z, uint8_t fluid, uint8_t block) {
+void handleFluidMovement (short x, uint8_t y, short z, uint16_t fluid, uint16_t block) {
 
   // Get fluid level (0-7)
   // The terminology here is a bit different from vanilla:
@@ -1892,7 +1895,7 @@ void handleFluidMovement (short x, uint8_t y, short z, uint8_t fluid, uint8_t bl
   uint8_t level = block - fluid;
 
   // Query blocks adjacent to this fluid stream
-  uint8_t adjacent[4] = {
+  uint16_t adjacent[4] = {
     getBlockAt(x + 1, y, z),
     getBlockAt(x - 1, y, z),
     getBlockAt(x, y, z + 1),
@@ -1911,7 +1914,7 @@ void handleFluidMovement (short x, uint8_t y, short z, uint8_t fluid, uint8_t bl
     }
     // If not connected, clear this block and recalculate surrounding flow
     if (!connected) {
-      makeBlockChange(x, y, z, B_air);
+      makeBlockChange(x, y, z, B_air, DIMENSION_OVERWORLD);
       checkFluidUpdate(x + 1, y, z, adjacent[0]);
       checkFluidUpdate(x - 1, y, z, adjacent[1]);
       checkFluidUpdate(x, y, z + 1, adjacent[2]);
@@ -1921,9 +1924,9 @@ void handleFluidMovement (short x, uint8_t y, short z, uint8_t fluid, uint8_t bl
   }
 
   // Check if water should flow down, prioritize that over lateral flow
-  uint8_t block_below = getBlockAt(x, y - 1, z);
+  uint16_t block_below = getBlockAt(x, y - 1, z);
   if (isReplaceableBlock(block_below)) {
-    makeBlockChange(x, y - 1, z, fluid);
+    makeBlockChange(x, y - 1, z, fluid, DIMENSION_OVERWORLD);
     return handleFluidMovement(x, y - 1, z, fluid, fluid);
   }
 
@@ -1933,27 +1936,27 @@ void handleFluidMovement (short x, uint8_t y, short z, uint8_t fluid, uint8_t bl
 
   // Handle lateral water flow, increasing level by 1
   if (isReplaceableFluid(adjacent[0], level, fluid)) {
-    makeBlockChange(x + 1, y, z, block + 1);
+    makeBlockChange(x + 1, y, z, block + 1, DIMENSION_OVERWORLD);
     handleFluidMovement(x + 1, y, z, fluid, block + 1);
   }
   if (isReplaceableFluid(adjacent[1], level, fluid)) {
-    makeBlockChange(x - 1, y, z, block + 1);
+    makeBlockChange(x - 1, y, z, block + 1, DIMENSION_OVERWORLD);
     handleFluidMovement(x - 1, y, z, fluid, block + 1);
   }
   if (isReplaceableFluid(adjacent[2], level, fluid)) {
-    makeBlockChange(x, y, z + 1, block + 1);
+    makeBlockChange(x, y, z + 1, block + 1, DIMENSION_OVERWORLD);
     handleFluidMovement(x, y, z + 1, fluid, block + 1);
   }
   if (isReplaceableFluid(adjacent[3], level, fluid)) {
-    makeBlockChange(x, y, z - 1, block + 1);
+    makeBlockChange(x, y, z - 1, block + 1, DIMENSION_OVERWORLD);
     handleFluidMovement(x, y, z - 1, fluid, block + 1);
   }
 
 }
 
-void checkFluidUpdate (short x, uint8_t y, short z, uint8_t block) {
+void checkFluidUpdate (short x, uint8_t y, short z, uint16_t block) {
 
-  uint8_t fluid;
+  uint16_t fluid;
   if (block >= B_water && block < B_water + 8) fluid = B_water;
   else if (block >= B_lava && block < B_lava + 4) fluid = B_lava;
   else return;
@@ -2029,17 +2032,17 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
   // In creative, only the "start mining" action is sent
   // No additional verification is performed, the block is simply removed
   if (action == 0 && GAMEMODE == 1) {
-    makeBlockChange(x, y, z, 0);
+    makeBlockChange(x, y, z, 0, player->dimension);
     return;
   }
 
-  uint8_t block = getBlockAt(x, y, z);
+  uint16_t block = getBlockAt(x, y, z);
 
   // If this is a "start mining" packet, the block must be instamine
   if (action == 0 && !isInstantlyMined(player, block)) return;
 
   // Don't continue if the block change failed
-  if (makeBlockChange(x, y, z, 0)) return;
+  if (makeBlockChange(x, y, z, 0, player->dimension)) return;
 
   uint16_t held_item = player->inventory_items[player->hotbar];
   uint16_t item = getMiningResult(held_item, block);
@@ -2066,9 +2069,9 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
 
     // Break the other half
     if (is_upper_half) {
-      makeBlockChange(x, y - 1, z, 0);  // Break lower half
+      makeBlockChange(x, y - 1, z, 0, player->dimension);  // Break lower half
     } else {
-      makeBlockChange(x, y + 1, z, 0);  // Break upper half
+      makeBlockChange(x, y + 1, z, 0, player->dimension);  // Break upper half
     }
 
     // Clear door state from the unified special block table
@@ -2099,7 +2102,7 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
   }
 
   // Update nearby fluids
-  uint8_t block_above = getBlockAt(x, y + 1, z);
+  uint16_t block_above = getBlockAt(x, y + 1, z);
   #ifdef DO_FLUID_FLOW
   if (config.do_fluid_flow) {
     checkFluidUpdate(x, y + 1, z, block_above);
@@ -2115,13 +2118,139 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
   uint8_t y_offset = 1;
   while (isColumnBlock(block_above)) {
     // Destroy the next block
-    makeBlockChange(x, y + y_offset, z, 0);
+    makeBlockChange(x, y + y_offset, z, 0, player->dimension);
     // Check for item drops *without a tool*
     uint16_t item = getMiningResult(0, block_above);
     if (item) givePlayerItem(player, item, 1);
     // Select the next block in the column
     y_offset ++;
     block_above = getBlockAt(x, y + y_offset, z);
+  }
+}
+
+static uint8_t tryCreatePortal(short x, uint8_t y, short z, uint8_t face, uint8_t dimension) {
+  short fx = x, fz = z;
+  uint8_t fy = y;
+
+  switch (face) {
+    case 2: fz = z - 1; break;
+    case 3: fz = z + 1; break;
+    case 4: fx = x - 1; break;
+    case 5: fx = x + 1; break;
+    default: return 0;
+  }
+
+  uint16_t interior = getBlockAt(fx, fy, fz);
+  if (interior != B_air && interior != B_fire) return 0;
+
+  short dx = 0, dz = 0;
+  if (face == 2 || face == 3) { dx = 1; dz = 0; }
+  else { dx = 0; dz = 1; }
+
+  int neg = 0, pos = 0;
+  for (int s = 1; s <= 23; s++) {
+    if (getBlockAt(fx - dx * s, fy, fz - dz * s) == B_obsidian) { neg = s; break; }
+  }
+  if (neg == 0) return 0;
+  for (int s = 1; s <= 23; s++) {
+    if (getBlockAt(fx + dx * s, fy, fz + dz * s) == B_obsidian) { pos = s; break; }
+  }
+  if (pos == 0) return 0;
+
+  int width = neg + pos - 1;
+  if (width < 4 || width > 23) return 0;
+
+  int down = 0, up = 0;
+  for (int s = 1; s <= 23; s++) {
+    if (getBlockAt(fx, fy - s, fz) == B_obsidian) { down = s; break; }
+  }
+  if (down == 0) return 0;
+  for (int s = 1; s <= 23; s++) {
+    if (getBlockAt(fx, fy + s, fz) == B_obsidian) { up = s; break; }
+  }
+  if (up == 0) return 0;
+
+  int height = down + up - 1;
+  if (height < 5 || height > 23) return 0;
+
+  for (int h = -neg; h <= pos; h++) {
+    if (getBlockAt(fx + dx * h, fy + up, fz + dz * h) != B_obsidian) return 0;
+    if (getBlockAt(fx + dx * h, fy - down, fz + dz * h) != B_obsidian) return 0;
+  }
+  for (int v = -down; v <= up; v++) {
+    if (getBlockAt(fx - dx * neg, fy + v, fz - dz * neg) != B_obsidian) return 0;
+    if (getBlockAt(fx + dx * pos, fy + v, fz + dz * pos) != B_obsidian) return 0;
+  }
+
+  for (int w = -(neg - 1); w <= pos - 1; w++) {
+    for (int h = -(down - 1); h <= up - 1; h++) {
+      makeBlockChange(fx + dx * w, fy + h, fz + dz * w, B_nether_portal, dimension);
+    }
+  }
+
+  return 1;
+}
+
+void switchPlayerDimension(PlayerData *player) {
+  uint8_t new_dim = (player->dimension == DIMENSION_OVERWORLD) ? DIMENSION_NETHER : DIMENSION_OVERWORLD;
+
+  if (new_dim == DIMENSION_NETHER) {
+    player->x = player->x / 8;
+    player->z = player->z / 8;
+  } else {
+    player->x = player->x * 8;
+    player->z = player->z * 8;
+  }
+
+  if (player->x < -16384) player->x = -16384;
+  if (player->x > 16384) player->x = 16384;
+  if (player->z < -16384) player->z = -16384;
+  if (player->z > 16384) player->z = 16384;
+
+  if (new_dim == DIMENSION_OVERWORLD) {
+    uint8_t surface_y = getHeightAt(player->x, player->z);
+    if (surface_y > 0) player->y = surface_y + 1;
+    else player->y = 80;
+  } else {
+    player->y = 40;
+  }
+
+  player->dimension = new_dim;
+
+  sc_respawn(player->client_fd, new_dim);
+
+  sc_setDefaultSpawnPosition(player->client_fd, 8, 80, 8);
+  sc_startWaitingForChunks(player->client_fd);
+
+  short cx = div_floor(player->x, 16);
+  short cz = div_floor(player->z, 16);
+  sc_setCenterChunk(player->client_fd, cx, cz);
+
+  generate_chunk_data(cx, cz, new_dim);
+  sc_chunkDataAndUpdateLight(player->client_fd, cx, cz, new_dim);
+
+  player->visited_next = 0;
+  for (int j = 0; j < VISITED_HISTORY; j++) {
+    player->visited_x[j] = 32767;
+    player->visited_z[j] = 32767;
+  }
+  player->visited_x[0] = cx;
+  player->visited_z[0] = cz;
+  player->visited_next = 1;
+
+  sc_synchronizePlayerPosition(player->client_fd,
+    (float)player->x + 0.5f, (float)player->y, (float)player->z + 0.5f,
+    player->yaw * 180.0f / 127.0f, player->pitch * 90.0f / 127.0f);
+}
+
+void handlePortalTravel(PlayerData *player) {
+  if (player->client_fd == -1) return;
+  if (player->flags & 0x20) return;
+  if (server_ticks % 5 != 0) return;
+
+  uint16_t block = getBlockAt(player->x, player->y, player->z);
+  if (block == B_nether_portal) {
+    switchPlayerDimension(player);
   }
 }
 
@@ -2134,7 +2263,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
   }
 
   // Get targeted block (if coordinates are provided)
-  uint8_t target = face == 255 ? 0 : getBlockAt(x, y, z);
+  uint16_t target = face == 255 ? 0 : getBlockAt(x, y, z);
   // Get held item properties
   uint8_t *count = &player->inventory_count[player->hotbar];
   uint16_t *item = &player->inventory_items[player->hotbar];
@@ -2207,7 +2336,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       short door_z = z;
 
       // Check if this is the upper half by looking for a door at y-1
-      uint8_t block_below = getBlockChange(x, y - 1, z);
+      uint16_t block_below = getBlockChange(x, y - 1, z);
       if (isDoorBlock(block_below)) {
         // This is the upper half, use lower half's position for state
         door_y = y - 1;
@@ -2224,7 +2353,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       special_block_set_state(door_x, door_y, door_z, target, state);
       
       // Also update upper half's state in the special block table
-      uint8_t above = getBlockChange(door_x, door_y + 1, door_z);
+      uint16_t above = getBlockChange(door_x, door_y + 1, door_z);
       if (isDoorBlock(above)) {
         special_block_set_state(door_x, door_y + 1, door_z, above, state);
       }
@@ -2268,7 +2397,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
 
   // Check special item handling
   if (*item == I_bone_meal) {
-    uint8_t target_below = getBlockAt(x, y - 1, z);
+    uint16_t target_below = getBlockAt(x, y - 1, z);
     if (isSaplingBlock(target)) {
       // Consume the bone meal (yes, even before checks)
       // Wasting bone meal on misplanted saplings is vanilla behavior
@@ -2310,8 +2439,42 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
   // Don't proceed with block placement if no coordinates were provided
   if (face == 255) return;
 
+  // Handle flint and steel - portal creation or fire placement
+  if (*item == I_flint_and_steel) {
+    if (target == B_obsidian && tryCreatePortal(x, y, z, face, player->dimension)) {
+      if (*count > 0) {
+        *count -= 1;
+        if (*count == 0) *item = 0;
+      }
+      sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
+      broadcastPlayerEquipment(player);
+      return;
+    }
+    short fx = x, fz = z;
+    uint8_t fy = y;
+    switch (face) {
+      case 0: fy = y - 1; break;
+      case 1: fy = y + 1; break;
+      case 2: fz = z - 1; break;
+      case 3: fz = z + 1; break;
+      case 4: fx = x - 1; break;
+      case 5: fx = x + 1; break;
+      default: break;
+    }
+    if (isReplaceableBlock(getBlockAt(fx, fy, fz))) {
+      makeBlockChange(fx, fy, fz, B_fire, player->dimension);
+      if (*count > 0) {
+        *count -= 1;
+        if (*count == 0) *item = 0;
+      }
+    }
+    sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
+    broadcastPlayerEquipment(player);
+    return;
+  }
+
   // If the selected item doesn't correspond to a block, exit
-  uint8_t block = I_to_B(*item);
+  uint16_t block = I_to_B(*item);
   if (block == 0) return;
 
   // Special handling for door placement
@@ -2328,9 +2491,9 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       default: break;
     }
 
-    uint8_t existing = getBlockAt(x, y, z);
-    uint8_t block_above = getBlockAt(x, y + 1, z);
-    uint8_t block_below = getBlockAt(x, y - 1, z);
+    uint16_t existing = getBlockAt(x, y, z);
+    uint16_t block_above = getBlockAt(x, y + 1, z);
+    uint16_t block_below = getBlockAt(x, y - 1, z);
 
     if (!isReplaceableBlock(existing) || isDoorBlock(existing)) return;
     if (!isReplaceableBlock(block_above) || isDoorBlock(block_above)) return;
@@ -2370,7 +2533,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       isReplaceableBlock(getBlockAt(x, y, z))
     ) {
       // Apply server-side block change (this will place both halves and set default state)
-      if (makeBlockChange(x, y, z, block)) return;
+      if (makeBlockChange(x, y, z, block, player->dimension)) return;
 
       // Update the door state with the correct direction in the unified special block table
       uint16_t state = door_encode_state(0, 0, direction);  // closed, hinge left, direction
@@ -2445,7 +2608,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       !(x == player->x && y == player->y && z == player->z) &&
       isReplaceableBlock(getBlockAt(x, y, z))
     ) {
-      if (makeBlockChange(x, y, z, block)) return;
+      if (makeBlockChange(x, y, z, block, player->dimension)) return;
 
       // Store trapdoor state (open=0 by default)
       uint16_t state = trapdoor_encode_state(0, half, direction);
@@ -2500,7 +2663,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       isReplaceableBlock(getBlockAt(x, y, z))
     ) {
       // Apply server-side block change
-      if (makeBlockChange(x, y, z, block)) return;
+      if (makeBlockChange(x, y, z, block, player->dimension)) return;
 
       // Update state with direction in the unified special block table
       uint16_t state = oriented_encode_state(direction);
@@ -2558,7 +2721,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       isReplaceableBlock(getBlockAt(x, y, z))
     ) {
       // Apply server-side block change
-      if (makeBlockChange(x, y, z, block)) return;
+      if (makeBlockChange(x, y, z, block, player->dimension)) return;
 
       // Update stair state in the unified special block table
       uint16_t state = stair_encode_state(half, direction);
@@ -2603,10 +2766,10 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     (!isColumnBlock(block) || getBlockAt(x, y - 1, z) != B_air)
   ) {
     // Apply server-side block change
-    if (makeBlockChange(x, y, z, block)) return;
+    if (makeBlockChange(x, y, z, block, player->dimension)) return;
     // Instant tree growth for saplings
     if (isSaplingBlock(block)) {
-      uint8_t target_below = getBlockAt(x, y - 1, z);
+      uint16_t target_below = getBlockAt(x, y - 1, z);
       if (
         target_below == B_dirt ||
         target_below == B_grass_block ||
@@ -2781,7 +2944,7 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
     if (surface_y == 0) continue; // Invalid height
 
     // Check that the block at surface is grass or snow
-    uint8_t surface_block = getBlockAt(spawn_x, surface_y, spawn_z);
+      uint16_t surface_block = getBlockAt(spawn_x, surface_y, spawn_z);
     if (surface_block != B_grass_block &&
         surface_block != B_snowy_grass_block &&
         surface_block != B_snow_block) continue;
@@ -2823,7 +2986,7 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
       uint8_t surface_y = getHeightAt(spawn_x, spawn_z);
       if (surface_y == 0) continue;
 
-      uint8_t surface_block = getBlockAt(spawn_x, surface_y, spawn_z);
+    uint16_t surface_block = getBlockAt(spawn_x, surface_y, spawn_z);
       if (surface_block != B_grass_block &&
           surface_block != B_snowy_grass_block &&
           surface_block != B_snow_block) continue;
@@ -3081,7 +3244,7 @@ void handleServerTick (int64_t time_since_last_tick) {
       if (server_ticks % (uint32_t)TICKS_PER_SECOND != 0) continue;
       sc_keepAlive(player->client_fd);
       sc_updateTime(player->client_fd, world_time);
-      uint8_t block = getBlockAt(player->x, player->y, player->z);
+      uint16_t block = getBlockAt(player->x, player->y, player->z);
       if (block >= B_lava && block < B_lava + 4) {
         hurtEntity(player->client_fd, -1, D_lava, 8);
       }
@@ -3103,6 +3266,15 @@ void handleServerTick (int64_t time_since_last_tick) {
         player->health ++;
       }
       sc_setHealth(player->client_fd, player->health, player->hunger, player->saturation);
+    }
+  }
+
+  // Check for portal travel every 5 ticks
+  if (server_ticks % 5 == 0) {
+    for (int i = 0; i < MAX_PLAYERS; i++) {
+      if (player_data[i].client_fd == -1) continue;
+      if (player_data[i].flags & 0x20) continue;
+      handlePortalTravel(&player_data[i]);
     }
   }
 
@@ -3316,9 +3488,9 @@ void handleServerTick (int64_t time_since_last_tick) {
     int block_z = (int)new_z;
 
     // Holds the block that the mob is moving into
-    uint8_t block = getBlockAt(block_x, block_y, block_z);
+    uint16_t block = getBlockAt(block_x, block_y, block_z);
     // Holds the block above the target block, i.e. the "head" block
-    uint8_t block_above = getBlockAt(block_x, block_y + 1, block_z);
+    uint16_t block_above = getBlockAt(block_x, block_y + 1, block_z);
 
     // Validate movement on X axis
     int old_block_x = (int)old_x;
@@ -3525,7 +3697,7 @@ static void updatePlayerStateTask(void* arg) {
   // Process once-per-second state updates (no packet sending here)
   if (server_ticks % (uint32_t)TICKS_PER_SECOND == 0) {
     // Calculate lava damage (apply health change, packet sent separately)
-    uint8_t block = getBlockAt(player->x, player->y, player->z);
+    uint16_t block = getBlockAt(player->x, player->y, player->z);
     if (block >= B_lava && block < B_lava + 4) {
       if (player->health > 8) player->health -= 8;
       else player->health = 0;

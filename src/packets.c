@@ -287,7 +287,7 @@ int sc_finishConfiguration (int client_fd) {
 }
 
 // S->C Login (play)
-int sc_loginPlay (int client_fd) {
+int sc_loginPlay (int client_fd, uint8_t dimension) {
 
   startPacket(client_fd, 0x2B);
   // entity id
@@ -296,9 +296,13 @@ int sc_loginPlay (int client_fd) {
   writeByte(client_fd, false);
   // dimensions
   writeVarInt(client_fd, 1);
-  writeVarInt(client_fd, 9);
-  const char *dimension = "overworld";
-  send_all(client_fd, dimension, 9);
+  if (dimension == DIMENSION_OVERWORLD) {
+    writeVarInt(client_fd, 18);
+    send_all(client_fd, "minecraft:overworld", 18);
+  } else {
+    writeVarInt(client_fd, 19);
+    send_all(client_fd, "minecraft:the_nether", 19);
+  }
   // maxplayers
   writeVarInt(client_fd, MAX_PLAYERS);
   // view distance
@@ -312,11 +316,15 @@ int sc_loginPlay (int client_fd) {
   // limited crafting
   writeByte(client_fd, false);
   // dimension id (from server-sent registries)
-  // the server only sends "overworld"
-  writeVarInt(client_fd, 0);
+  writeVarInt(client_fd, dimension);
   // dimension name
-  writeVarInt(client_fd, 9);
-  send_all(client_fd, dimension, 9);
+  if (dimension == DIMENSION_OVERWORLD) {
+    writeVarInt(client_fd, 18);
+    send_all(client_fd, "minecraft:overworld", 18);
+  } else {
+    writeVarInt(client_fd, 19);
+    send_all(client_fd, "minecraft:the_nether", 19);
+  }
   // hashed seed
   writeUint64(client_fd, 0x0123456789ABCDEF);
   // gamemode
@@ -330,7 +338,7 @@ int sc_loginPlay (int client_fd) {
   // has death location
   writeByte(client_fd, 0);
   // portal cooldown
-  writeVarInt(client_fd, 0);
+  writeVarInt(client_fd, 10);
   // sea level
   writeVarInt(client_fd, 63);
   // secure chat
@@ -434,7 +442,7 @@ int sc_setCenterChunk (int client_fd, int x, int y) {
 }
 
 // S->C Chunk Data and Update Light
-int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
+int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension) {
   chunk_debug_record_stream_request(client_fd, _x, _z);
 
   // Backpressure: if low-priority chunk backlog is already large, delay chunk packets
@@ -442,7 +450,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
   size_t chunk_queue_bytes = get_client_send_queue_bytes(client_fd);
   if (chunk_queue_bytes > (1024 * 1024)) {
     chunk_debug_record_backpressure_skip(client_fd, chunk_queue_bytes);
-    request_chunk_generation(_x, _z);
+    request_chunk_generation(_x, _z, dimension);
     return 1;
   }
 
@@ -450,7 +458,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
   // Grows as needed to handle large chunks
   static THREAD_LOCAL uint8_t *data_buf = NULL;
   static THREAD_LOCAL size_t data_buf_capacity = 0;
-  static THREAD_LOCAL uint8_t cached_sections[20][4096];
+  static THREAD_LOCAL uint16_t cached_sections[20][4096];
   static THREAD_LOCAL uint8_t cached_biomes[20];
   int data_offset = 0;
 
@@ -469,7 +477,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
   #define ENSURE_SPACE(needed) do { \
     if (data_offset + (needed) > (int)data_buf_capacity) { \
       size_t new_cap = data_buf_capacity * 2; \
-      while (new_cap < data_offset + (needed)) new_cap *= 2; \
+      while (new_cap < (size_t)(data_offset + (needed))) new_cap *= 2; \
       void *nb = realloc(data_buf, new_cap); \
       if (!nb) return 1; \
       data_buf = (uint8_t *)nb; \
@@ -480,11 +488,11 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
   int x = _x * 16, z = _z * 16;
 
   // Try to get cached chunk data
-  if (!get_cached_chunk_copy(_x, _z, cached_sections, cached_biomes)) {
+  if (!get_cached_chunk_copy(_x, _z, dimension, cached_sections, cached_biomes)) {
     // Not cached yet: queue generation and skip sending this chunk for now.
     // This keeps movement packet handling non-blocking.
     chunk_debug_record_cache_miss_skip(client_fd);
-    request_chunk_generation(_x, _z);
+    request_chunk_generation(_x, _z, dimension);
     return 1;
   }
 
@@ -524,11 +532,11 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
       return 1;
     }
 
-    uint8_t* section_data = cached_sections[i];
+    uint16_t* section_data = cached_sections[i];
     uint8_t biome = cached_biomes[i];
 
     // Check if section is uniform
-    uint8_t first_block = section_data[0];
+    uint16_t first_block = section_data[0];
     uint8_t uniform = true;
     for (int j = 1; j < 4096; j ++) {
       if (section_data[j] != first_block) {
@@ -553,27 +561,55 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z) {
         val >>= 7;
       }
     } else {
+      // Build per-section palette (unique blocks only)
+      uint16_t section_palette[256];
+      uint16_t palette_idx[277];
+      int palette_size = 0;
+      memset(palette_idx, 0xFF, sizeof(palette_idx));
+
+      for (int j = 0; j < 4096; j++) {
+        uint16_t block = section_data[j];
+        if (palette_idx[block] == 0xFFFF) {
+          palette_idx[block] = palette_size;
+          section_palette[palette_size++] = block;
+        }
+      }
+
       uint16_t block_count = 0;
       for (int j = 0; j < 4096; j ++) if (section_data[j] != 0) block_count ++;
       data_buf[data_offset++] = block_count >> 8;
       data_buf[data_offset++] = block_count & 0xFF;
       data_buf[data_offset++] = 8;
-      uint32_t val = 256;
+
+      uint32_t val = palette_size;
       while (true) {
         if (data_offset + 32 > (int)data_buf_capacity) {
-          fprintf(stderr, "ERROR: Chunk data buffer overflow at non-uniform header\n");
+          fprintf(stderr, "ERROR: Chunk data buffer overflow at palette size\n");
           return 1;
         }
         if ((val & ~SEGMENT_BITS) == 0) { data_buf[data_offset++] = val; break; }
         data_buf[data_offset++] = (val & SEGMENT_BITS) | CONTINUE_BIT;
         val >>= 7;
       }
-      // Check space for palette and section data
-      ENSURE_SPACE(sizeof(network_block_palette) + 4096);
-      memcpy(data_buf + data_offset, network_block_palette, sizeof(network_block_palette));
-      data_offset += sizeof(network_block_palette);
-      memcpy(data_buf + data_offset, section_data, 4096);
-      data_offset += 4096;
+
+      ENSURE_SPACE(palette_size * 3 + 4096);
+      for (int j = 0; j < palette_size; j++) {
+        val = block_palette[section_palette[j]];
+        while (true) {
+          if (data_offset + 32 > (int)data_buf_capacity) {
+            fprintf(stderr, "ERROR: Chunk data buffer overflow at palette entry\n");
+            return 1;
+          }
+          if ((val & ~SEGMENT_BITS) == 0) { data_buf[data_offset++] = val; break; }
+          data_buf[data_offset++] = (val & SEGMENT_BITS) | CONTINUE_BIT;
+          val >>= 7;
+        }
+      }
+
+      ENSURE_SPACE(4096);
+      for (int j = 0; j < 4096; j++) {
+        data_buf[data_offset++] = palette_idx[section_data[j]];
+      }
     }
 
     data_buf[data_offset++] = 0;
@@ -786,7 +822,7 @@ int sc_setContainerSlot (int client_fd, int window_id, uint16_t slot, uint8_t co
 }
 
 // S->C Block Update
-int sc_blockUpdate (int client_fd, int64_t x, int64_t y, int64_t z, uint8_t block) {
+int sc_blockUpdate (int client_fd, int64_t x, int64_t y, int64_t z, uint16_t block) {
   startPacket(client_fd, 0x08);
   writeUint64(client_fd, ((x & 0x3FFFFFF) << 38) | ((z & 0x3FFFFFF) << 12) | (y & 0xFFF));
   writeVarInt(client_fd, block_palette[block]);
@@ -1478,16 +1514,20 @@ int sc_setHealth (int client_fd, uint8_t health, uint8_t food, uint16_t saturati
 }
 
 // S->C Respawn
-int sc_respawn (int client_fd) {
+int sc_respawn (int client_fd, uint8_t dimension) {
 
   startPacket(client_fd, 0x4B);
 
   // dimension id (from server-sent registries)
-  writeVarInt(client_fd, 0);
+  writeVarInt(client_fd, dimension);
   // dimension name
-  const char *dimension = "overworld";
-  writeVarInt(client_fd, 9);
-  send_all(client_fd, dimension, 9);
+  if (dimension == DIMENSION_OVERWORLD) {
+    writeVarInt(client_fd, 18);
+    send_all(client_fd, "minecraft:overworld", 18);
+  } else {
+    writeVarInt(client_fd, 19);
+    send_all(client_fd, "minecraft:the_nether", 19);
+  }
   // hashed seed
   writeUint64(client_fd, 0x0123456789ABCDEF);
   // gamemode
@@ -1501,7 +1541,7 @@ int sc_respawn (int client_fd) {
   // has death location
   writeByte(client_fd, 0);
   // portal cooldown
-  writeVarInt(client_fd, 0);
+  writeVarInt(client_fd, 10);
   // sea level
   writeVarInt(client_fd, 63);
   // data kept
@@ -1521,7 +1561,7 @@ int cs_clientStatus (int client_fd) {
   if (getPlayerData(client_fd, &player)) return 1;
 
   if (id == 0) {
-    sc_respawn(client_fd);
+    sc_respawn(client_fd, DIMENSION_OVERWORLD);
     resetPlayerData(player);
     spawnPlayer(player);
   }

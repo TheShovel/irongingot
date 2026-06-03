@@ -45,6 +45,10 @@
 // Max render distance, determines how many chunks to send
 #define VIEW_DISTANCE 5
 
+// Dimension identifiers (avoid conflict with cubiomes DIM_NETHER/DIM_OVERWORLD)
+#define DIMENSION_OVERWORLD 0
+#define DIMENSION_NETHER 1
+
 // Time between server ticks in microseconds (default = 50ms for 20 TPS)
 #define TIME_BETWEEN_TICKS 50000
 
@@ -270,7 +274,8 @@ typedef struct {
   short x;
   short z;
   uint8_t y;
-  uint8_t block;
+  uint16_t block;
+  uint8_t dimension;
 } BlockChange;
 
 #pragma pack(push, 1)
@@ -314,6 +319,7 @@ typedef struct {
   // 0x40 - movement update cooldown
   // 0x80 - craft_items lock (for storing pointers)
   uint8_t flags;
+  uint8_t dimension;
 } PlayerData;
 
 #define PLAYER_TEXTURE_VALUE_MAX 4096

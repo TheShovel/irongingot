@@ -47,7 +47,7 @@ typedef struct {
     int16_t z;
     uint16_t state;
     uint8_t y;
-    uint8_t block;
+    uint16_t block;
 } SpecialBlockEntry;
 
 #define SPECIAL_BLOCK_EMPTY 0xFF
@@ -58,22 +58,22 @@ extern int special_blocks_count;
 /* Hash table operations */
 void special_block_init(void);
 uint16_t special_block_get_state(short x, uint8_t y, short z);
-void special_block_set_state(short x, uint8_t y, short z, uint8_t block, uint16_t state);
+void special_block_set_state(short x, uint8_t y, short z, uint16_t block, uint16_t state);
 void special_block_clear(short x, uint8_t y, short z);
 uint8_t special_block_has_entry(short x, uint8_t y, short z);
 
 /* Block state ID computation for network packets */
-uint16_t get_door_state_id(uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge);
-uint16_t get_trapdoor_state_id(uint8_t block, uint8_t open, uint8_t direction, uint8_t half);
-uint16_t get_stair_state_id(uint8_t block, uint8_t half, uint8_t direction);
-uint16_t get_oriented_state_id(uint8_t block, uint8_t direction);
+uint16_t get_door_state_id(uint16_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge);
+uint16_t get_trapdoor_state_id(uint16_t block, uint8_t open, uint8_t direction, uint8_t half);
+uint16_t get_stair_state_id(uint16_t block, uint8_t half, uint8_t direction);
+uint16_t get_oriented_state_id(uint16_t block, uint8_t direction);
 uint16_t get_furnace_state_id(uint8_t direction, uint8_t lit);
 
 /* Block type queries */
-uint8_t is_door_block(uint8_t block);
-uint8_t is_stair_block(uint8_t block);
-uint8_t is_trapdoor_block(uint8_t block);
-uint8_t is_oriented_block(uint8_t block);
+uint8_t is_door_block(uint16_t block);
+uint8_t is_stair_block(uint16_t block);
+uint8_t is_trapdoor_block(uint16_t block);
+uint8_t is_oriented_block(uint16_t block);
 
 /* State decode helpers */
 uint8_t door_get_open(uint16_t state);

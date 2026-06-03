@@ -97,7 +97,7 @@ uint16_t special_block_get_state(short x, uint8_t y, short z) {
     return state;
 }
 
-void special_block_set_state(short x, uint8_t y, short z, uint8_t block, uint16_t state) {
+void special_block_set_state(short x, uint8_t y, short z, uint16_t block, uint16_t state) {
     pthread_mutex_lock(&special_block_mutex);
     int idx = insert_entry_locked(x, y, z);
     if (idx < 0) {
@@ -143,7 +143,7 @@ uint8_t special_block_has_entry(short x, uint8_t y, short z) {
 
 /* ── Block type queries ───────────────────────────────────────────── */
 
-uint8_t is_door_block(uint8_t block) {
+uint8_t is_door_block(uint16_t block) {
     return (
         block == B_oak_door ||
         block == B_spruce_door ||
@@ -157,7 +157,7 @@ uint8_t is_door_block(uint8_t block) {
     );
 }
 
-uint8_t is_stair_block(uint8_t block) {
+uint8_t is_stair_block(uint16_t block) {
     return (
         block == B_oak_stairs ||
         block == B_spruce_stairs ||
@@ -172,7 +172,7 @@ uint8_t is_stair_block(uint8_t block) {
     );
 }
 
-uint8_t is_trapdoor_block(uint8_t block) {
+uint8_t is_trapdoor_block(uint16_t block) {
     return (
         block == B_oak_trapdoor ||
         block == B_spruce_trapdoor ||
@@ -186,7 +186,7 @@ uint8_t is_trapdoor_block(uint8_t block) {
     );
 }
 
-uint8_t is_oriented_block(uint8_t block) {
+uint8_t is_oriented_block(uint16_t block) {
     return (
         block == B_chest ||
         block == B_furnace
@@ -200,7 +200,7 @@ uint8_t is_oriented_block(uint8_t block) {
  * These offsets are added to the base palette ID to get the final state ID.
  */
 
-uint16_t get_door_state_id(uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge) {
+uint16_t get_door_state_id(uint16_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge) {
     uint16_t base_id = block_palette[block];
     /*
      * Door state offsets:
@@ -217,7 +217,7 @@ uint16_t get_door_state_id(uint8_t block, uint8_t is_upper, uint8_t open, uint8_
     return base_id + (uint16_t)offset;
 }
 
-uint16_t get_stair_state_id(uint8_t block, uint8_t half, uint8_t direction) {
+uint16_t get_stair_state_id(uint16_t block, uint8_t half, uint8_t direction) {
     /*
      * State layout: facing(n,s,w,e) × half(bottom,top), straight shape,
      * non-waterlogged.
@@ -229,7 +229,7 @@ uint16_t get_stair_state_id(uint8_t block, uint8_t half, uint8_t direction) {
     return stair_state_rows[row][idx];
 }
 
-uint16_t get_trapdoor_state_id(uint8_t block, uint8_t open, uint8_t direction, uint8_t half) {
+uint16_t get_trapdoor_state_id(uint16_t block, uint8_t open, uint8_t direction, uint8_t half) {
     /*
      * Use registry-generated lookup table.
      * State layout: facing(n,s,w,e) × half(bottom,top) × open(false,true), non-waterlogged, non-powered
@@ -243,7 +243,7 @@ uint16_t get_trapdoor_state_id(uint8_t block, uint8_t open, uint8_t direction, u
     return trapdoor_state_rows[row][idx];
 }
 
-uint16_t get_oriented_state_id(uint8_t block, uint8_t direction) {
+uint16_t get_oriented_state_id(uint16_t block, uint8_t direction) {
     uint16_t base_id = block_palette[block];
     if (block == B_chest) {
         /* chest: north=0, south=6, west=12, east=18 */

@@ -197,6 +197,12 @@ const biomes = [
   "flower_forest",
   "ice_spikes",
   "eroded_badlands",
+  // Nether biomes
+  "nether_wastes",
+  "soul_sand_valley",
+  "crimson_forest",
+  "warped_forest",
+  "basalt_deltas",
 ];
 
 // Extract item and block data from registry dump
@@ -351,6 +357,26 @@ async function extractItemsAndBlocks() {
       items[blockToItemOverrides[block]] || items[block] || 0,
     );
     if (mapping.length === 256) break;
+  }
+
+  // Now add nether/essential blocks after the initial 256
+  const extraBlocks = [
+    "netherrack", "soul_sand", "soul_soil", "glowstone",
+    "nether_quartz_ore", "obsidian", "ancient_debris",
+    "basalt", "blackstone", "crimson_nylium", "warped_nylium",
+    "shroomlight", "nether_bricks", "cracked_nether_bricks",
+    "nether_wart_block", "warped_wart_block",
+    "crimson_stem", "warped_stem", "fire", "gilded_blackstone",
+    "nether_portal",
+  ];
+  for (const block of extraBlocks) {
+    if (block in palette) continue;  // Already included in first 256
+    if (!(block in blocks)) continue;  // Not in notchian data
+    palette[block] = blocks[block];
+    mapping.push(items[block] || 0);
+    mappingWithOverrides.push(
+      items[blockToItemOverrides[block]] || items[block] || 0,
+    );
   }
 
   // Build list of block IDs, but from the registries
@@ -551,7 +577,7 @@ async function convert() {
   // Send biomes separately - only "plains" is actually required
   registryBuffers.push(serializeRegistry("worldgen/biome", biomes));
   // Send dimensions separately - we only use "overworld"
-  registryBuffers.push(serializeRegistry("dimension_type", ["overworld"]));
+  registryBuffers.push(serializeRegistry("dimension_type", ["overworld", "the_nether"]));
   const fullRegistryBuffer = Buffer.concat(registryBuffers);
 
   const itemsAndBlocks = await extractItemsAndBlocks();
@@ -613,11 +639,11 @@ async function convert() {
   );
 
   // Build trapdoor state table and block-to-row mapping
-  // Map palette INDEX (0-255) to row index in trapdoor_state_rows
-  const trapdoorRowMap = [];
-  for (let i = 0; i < 256; i++) trapdoorRowMap.push(0);
-  const trapdoorRows = [];
+  // Map palette INDEX to row index in trapdoor_state_rows
   const paletteEntries = Object.keys(itemsAndBlocks.palette);
+  const trapdoorRowMap = [];
+  for (let i = 0; i < paletteEntries.length; i++) trapdoorRowMap.push(0);
+  const trapdoorRows = [];
   for (let paletteIdx = 0; paletteIdx < paletteEntries.length; paletteIdx++) {
     const name = paletteEntries[paletteIdx];
     const row = itemsAndBlocks.trapdoorStateTables[name];
@@ -628,9 +654,9 @@ async function convert() {
   }
 
   // Build stair state table and block-to-row mapping
-  // Map palette INDEX (0-255) to row index in stair_state_rows
+  // Map palette INDEX to row index in stair_state_rows
   const stairRowMap = [];
-  for (let i = 0; i < 256; i++) stairRowMap.push(0);
+  for (let i = 0; i < paletteEntries.length; i++) stairRowMap.push(0);
   const stairRows = [];
   for (let paletteIdx = 0; paletteIdx < paletteEntries.length; paletteIdx++) {
     const name = paletteEntries[paletteIdx];
@@ -664,7 +690,7 @@ ${toCArray(networkBlockPalette)}
 // Block-to-item mapping
 uint16_t B_to_I[] = { ${itemsAndBlocks.mappingWithOverrides.join(", ")} };
 // Item-to-block mapping
-uint8_t I_to_B (uint16_t item) {
+uint16_t I_to_B (uint16_t item) {
   switch (item) {
     ${itemsAndBlocks.mapping.map((c, i) => (c ? `case ${c}: return ${i};\n    ` : "")).join("")}
     default: break;
@@ -700,17 +726,17 @@ const uint16_t stair_state_rows[${stairRows.length}][8] = {
 extern uint8_t registries_bin[${fullRegistryBuffer.length}];
 extern uint8_t tags_bin[${tagBuffer.length}];
 
-extern uint16_t block_palette[256]; // Block palette
+extern uint16_t block_palette[${paletteEntries.length}]; // Block palette
 extern uint8_t network_block_palette[${networkBlockPalette.length}]; // Block palette as VarInt buffer
-extern uint16_t B_to_I[256]; // Block-to-item mapping
-uint8_t I_to_B (uint16_t item); // Item-to-block mapping
+extern uint16_t B_to_I[${paletteEntries.length}]; // Block-to-item mapping
+uint16_t I_to_B (uint16_t item); // Item-to-block mapping
 
 // Trapdoor state lookup (generated from registry data)
-extern const uint8_t trapdoor_block_to_row[256];
+extern const uint8_t trapdoor_block_to_row[${paletteEntries.length}];
 extern const uint16_t trapdoor_state_rows[][16];
 
 // Stair state lookup (generated from registry data)
-extern const uint8_t stair_block_to_row[256];
+extern const uint8_t stair_block_to_row[${paletteEntries.length}];
 extern const uint16_t stair_state_rows[][8];
 
 // Block identifiers

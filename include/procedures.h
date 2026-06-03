@@ -35,53 +35,56 @@ void broadcastMobMetadata (int client_fd, int entity_id);
 uint8_t serverSlotToClientSlot (int window_id, uint8_t slot);
 uint8_t clientSlotToServerSlot (int window_id, uint8_t slot);
 
-uint8_t getBlockChange (short x, uint8_t y, short z);
-uint8_t makeBlockChange (short x, uint8_t y, short z, uint8_t block);
+uint16_t getBlockChange (short x, uint8_t y, short z);
+uint8_t makeBlockChange (short x, uint8_t y, short z, uint16_t block, uint8_t dimension);
 uint8_t isChunkModified (int chunk_x, int chunk_z);
 void rebuildBlockChangeIndexes (void);
 BlockChange *copyBlockChangesSnapshot (int *count);
 void freeBlockChangesSnapshot (BlockChange *snapshot);
 
-uint8_t isInstantlyMined (PlayerData *player, uint8_t block);
-uint8_t isColumnBlock (uint8_t block);
-uint8_t isLeafBlock (uint8_t block);
-uint8_t isSaplingBlock (uint8_t block);
-uint8_t isStairBlock (uint8_t block);
-uint8_t isOrientedBlock (uint8_t block);
-uint8_t isPassableBlock (uint8_t block);
-uint8_t isPassableSpawnBlock (uint8_t block);
-uint8_t isReplaceableBlock (uint8_t block);
+uint8_t isInstantlyMined (PlayerData *player, uint16_t block);
+uint8_t isColumnBlock (uint16_t block);
+uint8_t isLeafBlock (uint16_t block);
+uint8_t isSaplingBlock (uint16_t block);
+uint8_t isStairBlock (uint16_t block);
+uint8_t isOrientedBlock (uint16_t block);
+uint8_t isPassableBlock (uint16_t block);
+uint8_t isPassableSpawnBlock (uint16_t block);
+uint8_t isReplaceableBlock (uint16_t block);
 uint32_t isCompostItem (uint16_t item);
 uint8_t getItemStackSize (uint16_t item);
 
 #ifdef ALLOW_DOORS
-uint8_t isDoorBlock (uint8_t block);
-uint8_t isTrapdoorBlock (uint8_t block);
+uint8_t isDoorBlock (uint16_t block);
+uint8_t isTrapdoorBlock (uint16_t block);
 uint8_t isDoorItem (uint16_t item);
-uint16_t getDoorItemFromBlock (uint8_t block);
+uint16_t getDoorItemFromBlock (uint16_t block);
 uint8_t getDoorBlockFromItem (uint16_t item);
 uint8_t isDoorOpen (short x, uint8_t y, short z);
-uint16_t getDoorStateId (uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge);
-void sendDoorUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge);
-uint16_t getTrapdoorStateId (uint8_t block, uint8_t open, uint8_t direction, uint8_t half);
-void sendTrapdoorUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, uint8_t open, uint8_t direction, uint8_t half);
-uint16_t getOrientedStateId (uint8_t block, uint8_t direction);
-void sendOrientedUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, uint8_t direction);
-uint16_t getStairStateId (uint8_t block, uint8_t half, uint8_t direction);
-void sendStairUpdate (int client_fd, short x, uint8_t y, short z, uint8_t block, uint8_t half, uint8_t direction);
+uint16_t getDoorStateId (uint16_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge);
+void sendDoorUpdate (int client_fd, short x, uint8_t y, short z, uint16_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge);
+uint16_t getTrapdoorStateId (uint16_t block, uint8_t open, uint8_t direction, uint8_t half);
+void sendTrapdoorUpdate (int client_fd, short x, uint8_t y, short z, uint16_t block, uint8_t open, uint8_t direction, uint8_t half);
+uint16_t getOrientedStateId (uint16_t block, uint8_t direction);
+void sendOrientedUpdate (int client_fd, short x, uint8_t y, short z, uint16_t block, uint8_t direction);
+uint16_t getStairStateId (uint16_t block, uint8_t half, uint8_t direction);
+void sendStairUpdate (int client_fd, short x, uint8_t y, short z, uint16_t block, uint8_t half, uint8_t direction);
 #endif
 
-uint16_t getMiningResult (uint16_t held_item, uint8_t block);
+uint16_t getMiningResult (uint16_t held_item, uint16_t block);
 
 void handlePlayerAction (PlayerData *player, int action, short x, short y, short z);
 void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t face);
 
-void checkFluidUpdate (short x, uint8_t y, short z, uint8_t block);
+void checkFluidUpdate (short x, uint8_t y, short z, uint16_t block);
 
 void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health);
 void interactEntity (int entity_id, int interactor_id);
 void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t damage);
 void handleServerTick (int64_t time_since_last_tick);
+
+void switchPlayerDimension (PlayerData *player);
+void handlePortalTravel (PlayerData *player);
 
 void broadcastChestUpdate (int origin_fd, uint8_t *storage_ptr, uint16_t item, uint8_t count, uint8_t slot);
 
