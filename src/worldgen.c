@@ -1763,13 +1763,32 @@ uint16_t getTerrainAt (int x, int y, int z, ChunkAnchor anchor) {
 
 }
 
-uint16_t getBlockAt (int x, int y, int z) {
-
+// Simplified nether block lookup (no caves/ores/glowstone — enough for block interaction queries)
+uint16_t getNetherBlockAt (int x, int y, int z) {
   if (y < 0) return B_bedrock;
+  if (y > 255) return B_air;
+  // Ceiling: Y 220-255
+  if (y >= 220) return B_netherrack;
+  // Compute floor height from same noise used in buildNetherChunkSection
+  double fn = octave_sample(&surface_noise, (double)x * 0.015, 0, (double)z * 0.015);
+  int floor_h = 80 + (int)(fn * 15.0);
+  if (floor_h < 65) floor_h = 65;
+  if (floor_h > 100) floor_h = 100;
+  if (y < floor_h) {
+    if (y <= 31) return B_lava;
+    return B_netherrack;
+  }
+  // Above surface
+  return B_air;
+}
 
+uint16_t getBlockAt2 (int x, int y, int z, uint8_t dimension) {
+  if (y < 0) return B_bedrock;
   uint16_t block_change = getBlockChange(x, y, z);
   if (block_change != 0xFF) return block_change;
-
+  if (dimension == DIMENSION_NETHER) {
+    return getNetherBlockAt(x, y, z);
+  }
   short anchor_x = div_floor(x, CHUNK_SIZE);
   short anchor_z = div_floor(z, CHUNK_SIZE);
   ChunkAnchor anchor = {
@@ -1778,9 +1797,11 @@ uint16_t getBlockAt (int x, int y, int z) {
     .hash = getChunkHash(anchor_x, anchor_z),
     .biome = getChunkBiome(anchor_x, anchor_z)
   };
-
   return getTerrainAt(x, y, z, anchor);
+}
 
+uint16_t getBlockAt (int x, int y, int z) {
+  return getBlockAt2(x, y, z, DIMENSION_OVERWORLD);
 }
 
 WORLDGEN_THREAD_LOCAL uint16_t chunk_section[4096];

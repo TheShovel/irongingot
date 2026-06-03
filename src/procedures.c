@@ -31,7 +31,8 @@
 #define SPAWN_CHUNK_Z (SPAWN_BLOCK_Z >> 4)
 
 // Check if a block position is within the safe area (spawn protection)
-static int is_in_safe_area(short bx, short bz) {
+static int is_in_safe_area(short bx, short bz, uint8_t dimension) {
+  if (dimension != DIMENSION_OVERWORLD) return 0;
   if (config.safe_area_radius <= 0) return 0;
   // Spawn is at block (8, 8) which is in chunk (0, 0)
   int block_cx = div_floor(bx, 16);
@@ -522,19 +523,20 @@ void spawnPlayer (PlayerData *player) {
     spawn_x = (float)player->x + 0.5;
     spawn_y = player->y;
     spawn_z = (float)player->z + 0.5;
-    // Validate Y against terrain height to avoid spawning in ground
-    if (player->dimension == DIMENSION_OVERWORLD) {
-      uint8_t surface_y = getHeightAt(player->x, player->z);
-      if (surface_y >= (uint8_t)spawn_y) spawn_y = surface_y + 1;
-    } else {
-      init_worldgen();
-      double fn = octave_sample(&surface_noise, (double)player->x * 0.015, 0, (double)player->z * 0.015);
-      int fh = 80 + (int)(fn * 15.0);
-      if (fh < 65) fh = 65;
-      if (fh > 100) fh = 100;
-      if ((uint8_t)spawn_y <= fh) spawn_y = (float)(fh + 2);
+    // If Y is 0 or impossibly low, lift above surface
+    if ((uint8_t)spawn_y == 0 || (uint8_t)spawn_y > 255) {
+      if (player->dimension == DIMENSION_OVERWORLD) {
+        spawn_y = getHeightAt(player->x, player->z) + 1;
+      } else {
+        init_worldgen();
+        double fn = octave_sample(&surface_noise, (double)player->x * 0.015, 0, (double)player->z * 0.015);
+        int fh = 80 + (int)(fn * 15.0);
+        if (fh < 65) fh = 65;
+        if (fh > 100) fh = 100;
+        spawn_y = (float)(fh + 2);
+      }
+      player->y = (uint8_t)spawn_y;
     }
-    player->y = (uint8_t)spawn_y;
     spawn_yaw = player->yaw * 180 / 127;
     spawn_pitch = player->pitch * 90 / 127;
   }
@@ -984,7 +986,8 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint16_t block, uint8_t di
   anchor.hash = getChunkHash(anchor.x, anchor.z);
   anchor.biome = getChunkBiome(anchor.x, anchor.z);
 
-  uint8_t is_base_block = block == getTerrainAt(x, y, z, anchor);
+  // base-terrain comparison is meaningless for the nether (getTerrainAt returns overworld)
+  uint8_t is_base_block = (dimension != DIMENSION_NETHER) && (block == getTerrainAt(x, y, z, anchor));
   int write_from = -1;
   int write_to = -1;
 
@@ -1205,7 +1208,7 @@ static void breakConnectedLeaves (short x, uint8_t y, short z, uint16_t leaf_typ
     uint8_t ny = y + dy[i];
     short nz = z + dz[i];
 
-    uint16_t adj = getBlockAt(nx, ny, nz);
+    uint16_t adj = getBlockAt2(nx, ny, nz, player->dimension);
     if (adj == leaf_type) {
       makeBlockChange(nx, ny, nz, 0, player->dimension);
       (*broken_count)++;
@@ -1254,7 +1257,7 @@ static void breakFloatingLeaves (short bx, uint8_t by, short bz, uint16_t leaf_t
         // Skip the block that was already broken
         if (dx == 0 && dy == 0 && dz == 0) continue;
 
-        uint16_t adj = getBlockAt(nx, ny, nz);
+        uint16_t adj = getBlockAt2(nx, ny, nz, player->dimension);
         if (adj != leaf_type) continue;
 
         // Check if this leaf has a log within 2 blocks
@@ -1263,7 +1266,7 @@ static void breakFloatingLeaves (short bx, uint8_t by, short bz, uint16_t leaf_t
           for (short lz = -2; lz <= 2 && !has_support; lz++) {
             for (int ly = -2; ly <= 2 && !has_support; ly++) {
               if (lx == 0 && ly == 0 && lz == 0) continue;
-              if (isLogBlock(getBlockAt(nx + lx, ny + ly, nz + lz))) {
+              if (isLogBlock(getBlockAt2(nx + lx, ny + ly, nz + lz, player->dimension))) {
                 has_support = 1;
               }
             }
@@ -2017,7 +2020,7 @@ void playPickupAnimation (PlayerData *player, uint16_t item, double x, double y,
 void handlePlayerAction (PlayerData *player, int action, short x, short y, short z) {
 
   // Check spawn protection for block-breaking actions
-  if ((action == 0 || action == 2) && is_in_safe_area(x, z)) {
+  if ((action == 0 || action == 2) && is_in_safe_area(x, z, player->dimension)) {
     sc_systemChat(player->client_fd, "§cCannot break blocks in protected spawn area", 46);
     return;
   }
@@ -2050,7 +2053,7 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
     return;
   }
 
-  uint16_t block = getBlockAt(x, y, z);
+  uint16_t block = getBlockAt2(x, y, z, player->dimension);
 
   // If this is a "start mining" packet, the block must be instamine
   if (action == 0 && !isInstantlyMined(player, block)) return;
@@ -2116,14 +2119,14 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
   }
 
   // Update nearby fluids
-  uint16_t block_above = getBlockAt(x, y + 1, z);
+  uint16_t block_above = getBlockAt2(x, y + 1, z, player->dimension);
   #ifdef DO_FLUID_FLOW
   if (config.do_fluid_flow) {
     checkFluidUpdate(x, y + 1, z, block_above);
-    checkFluidUpdate(x - 1, y, z, getBlockAt(x - 1, y, z));
-    checkFluidUpdate(x + 1, y, z, getBlockAt(x + 1, y, z));
-    checkFluidUpdate(x, y, z - 1, getBlockAt(x, y, z - 1));
-    checkFluidUpdate(x, y, z + 1, getBlockAt(x, y, z + 1));
+    checkFluidUpdate(x - 1, y, z, getBlockAt2(x - 1, y, z, player->dimension));
+    checkFluidUpdate(x + 1, y, z, getBlockAt2(x + 1, y, z, player->dimension));
+    checkFluidUpdate(x, y, z - 1, getBlockAt2(x, y, z - 1, player->dimension));
+    checkFluidUpdate(x, y, z + 1, getBlockAt2(x, y, z + 1, player->dimension));
   }
   #endif
 
@@ -2138,7 +2141,7 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
     if (item) givePlayerItem(player, item, 1);
     // Select the next block in the column
     y_offset ++;
-    block_above = getBlockAt(x, y + y_offset, z);
+    block_above = getBlockAt2(x, y + y_offset, z, player->dimension);
   }
 }
 
@@ -2154,20 +2157,20 @@ static uint8_t tryCreatePortal(short x, uint8_t y, short z, uint8_t face, uint8_
     default: return 0;
   }
 
-  uint16_t interior = getBlockAt(fx, fy, fz);
-  if (interior != B_air && interior != B_fire) return 0;
-
-  short dx = 0, dz = 0;
+  // Determine portal direction based on which face was clicked
+  // dx, dz: direction from the clicked block toward the interior
+  int8_t dx = 0, dz = 0;
   if (face == 2 || face == 3) { dx = 1; dz = 0; }
   else { dx = 0; dz = 1; }
 
+  // Check if there's obsidian to the north and south (or east and west)
   int neg = 0, pos = 0;
   for (int s = 1; s <= 23; s++) {
-    if (getBlockAt(fx - dx * s, fy, fz - dz * s) == B_obsidian) { neg = s; break; }
+    if (getBlockAt2(fx - dx * s, fy, fz - dz * s, dimension) == B_obsidian) { neg = s; break; }
   }
   if (neg == 0) return 0;
   for (int s = 1; s <= 23; s++) {
-    if (getBlockAt(fx + dx * s, fy, fz + dz * s) == B_obsidian) { pos = s; break; }
+    if (getBlockAt2(fx + dx * s, fy, fz + dz * s, dimension) == B_obsidian) { pos = s; break; }
   }
   if (pos == 0) return 0;
 
@@ -2176,11 +2179,11 @@ static uint8_t tryCreatePortal(short x, uint8_t y, short z, uint8_t face, uint8_
 
   int down = 0, up = 0;
   for (int s = 1; s <= 23; s++) {
-    if (getBlockAt(fx, fy - s, fz) == B_obsidian) { down = s; break; }
+    if (getBlockAt2(fx, fy - s, fz, dimension) == B_obsidian) { down = s; break; }
   }
   if (down == 0) return 0;
   for (int s = 1; s <= 23; s++) {
-    if (getBlockAt(fx, fy + s, fz) == B_obsidian) { up = s; break; }
+    if (getBlockAt2(fx, fy + s, fz, dimension) == B_obsidian) { up = s; break; }
   }
   if (up == 0) return 0;
 
@@ -2188,14 +2191,13 @@ static uint8_t tryCreatePortal(short x, uint8_t y, short z, uint8_t face, uint8_
   if (height < 5 || height > 23) return 0;
 
   for (int h = -neg; h <= pos; h++) {
-    if (getBlockAt(fx + dx * h, fy + up, fz + dz * h) != B_obsidian) return 0;
-    if (getBlockAt(fx + dx * h, fy - down, fz + dz * h) != B_obsidian) return 0;
+    if (getBlockAt2(fx + dx * h, fy + up, fz + dz * h, dimension) != B_obsidian) return 0;
+    if (getBlockAt2(fx + dx * h, fy - down, fz + dz * h, dimension) != B_obsidian) return 0;
   }
   for (int v = -down; v <= up; v++) {
-    if (getBlockAt(fx - dx * neg, fy + v, fz - dz * neg) != B_obsidian) return 0;
-    if (getBlockAt(fx + dx * pos, fy + v, fz + dz * pos) != B_obsidian) return 0;
+    if (getBlockAt2(fx - dx * neg, fy + v, fz - dz * neg, dimension) != B_obsidian) return 0;
+    if (getBlockAt2(fx + dx * pos, fy + v, fz + dz * pos, dimension) != B_obsidian) return 0;
   }
-
   for (int w = -(neg - 1); w <= pos - 1; w++) {
     for (int h = -(down - 1); h <= up - 1; h++) {
       makeBlockChange(fx + dx * w, fy + h, fz + dz * w, B_nether_portal, dimension);
@@ -2312,7 +2314,7 @@ void handlePortalTravel(PlayerData *player) {
   if (player->flags & 0x20) return;
   if (server_ticks % 5 != 0) return;
 
-  uint16_t block = getBlockAt(player->x, player->y, player->z);
+  uint16_t block = getBlockAt2(player->x, player->y, player->z, player->dimension);
   if (block == B_nether_portal) {
     switchPlayerDimension(player);
   }
@@ -2321,13 +2323,13 @@ void handlePortalTravel(PlayerData *player) {
 void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t face) {
 
   // Check spawn protection for block interactions
-  if (face != 255 && is_in_safe_area(x, z)) {
+  if (face != 255 && is_in_safe_area(x, z, player->dimension)) {
     sc_systemChat(player->client_fd, "§cCannot interact with blocks in protected spawn area", 54);
     return;
   }
 
   // Get targeted block (if coordinates are provided)
-  uint16_t target = face == 255 ? 0 : getBlockAt(x, y, z);
+  uint16_t target = face == 255 ? 0 : getBlockAt2(x, y, z, player->dimension);
   // Get held item properties
   uint8_t *count = &player->inventory_count[player->hotbar];
   uint16_t *item = &player->inventory_items[player->hotbar];
@@ -2461,7 +2463,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
 
   // Check special item handling
   if (*item == I_bone_meal) {
-    uint16_t target_below = getBlockAt(x, y - 1, z);
+      uint16_t target_below = getBlockAt2(x, y - 1, z, player->dimension);
     if (isSaplingBlock(target)) {
       // Consume the bone meal (yes, even before checks)
       // Wasting bone meal on misplanted saplings is vanilla behavior
@@ -2525,7 +2527,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       case 5: fx = x + 1; break;
       default: break;
     }
-    if (isReplaceableBlock(getBlockAt(fx, fy, fz))) {
+    if (isReplaceableBlock(getBlockAt2(fx, fy, fz, player->dimension))) {
       makeBlockChange(fx, fy, fz, B_fire, player->dimension);
       if (*count > 0) {
         *count -= 1;
@@ -2555,9 +2557,9 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       default: break;
     }
 
-    uint16_t existing = getBlockAt(x, y, z);
-    uint16_t block_above = getBlockAt(x, y + 1, z);
-    uint16_t block_below = getBlockAt(x, y - 1, z);
+    uint16_t existing = getBlockAt2(x, y, z, player->dimension);
+    uint16_t block_above = getBlockAt2(x, y + 1, z, player->dimension);
+    uint16_t block_below = getBlockAt2(x, y - 1, z, player->dimension);
 
     if (!isReplaceableBlock(existing) || isDoorBlock(existing)) return;
     if (!isReplaceableBlock(block_above) || isDoorBlock(block_above)) return;
@@ -2594,7 +2596,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
         (y == player->y || y == player->y + 1) &&
         z == player->z
       ) &&
-      isReplaceableBlock(getBlockAt(x, y, z))
+      isReplaceableBlock(getBlockAt2(x, y, z, player->dimension))
     ) {
       // Apply server-side block change (this will place both halves and set default state)
       if (makeBlockChange(x, y, z, block, player->dimension)) return;
@@ -2670,7 +2672,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     // Check placement validity
     if (
       !(x == player->x && y == player->y && z == player->z) &&
-      isReplaceableBlock(getBlockAt(x, y, z))
+      isReplaceableBlock(getBlockAt2(x, y, z, player->dimension))
     ) {
       if (makeBlockChange(x, y, z, block, player->dimension)) return;
 
@@ -2724,10 +2726,9 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
         (y == player->y || y == player->y + 1) &&
         z == player->z
       ) &&
-      isReplaceableBlock(getBlockAt(x, y, z))
+      isReplaceableBlock(getBlockAt2(x, y, z, player->dimension))
     ) {
       // Apply server-side block change
-      if (makeBlockChange(x, y, z, block, player->dimension)) return;
 
       // Update state with direction in the unified special block table
       uint16_t state = oriented_encode_state(direction);
@@ -2782,7 +2783,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
         (y == player->y || y == player->y + 1) &&
         z == player->z
       ) &&
-      isReplaceableBlock(getBlockAt(x, y, z))
+      isReplaceableBlock(getBlockAt2(x, y, z, player->dimension))
     ) {
       // Apply server-side block change
       if (makeBlockChange(x, y, z, block, player->dimension)) return;
@@ -2826,14 +2827,14 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       (y == player->y || y == player->y + 1) &&
       z == player->z
     ) &&
-    isReplaceableBlock(getBlockAt(x, y, z)) &&
-    (!isColumnBlock(block) || getBlockAt(x, y - 1, z) != B_air)
+    isReplaceableBlock(getBlockAt2(x, y, z, player->dimension)) &&
+    (!isColumnBlock(block) || getBlockAt2(x, y - 1, z, player->dimension) != B_air)
   ) {
     // Apply server-side block change
     if (makeBlockChange(x, y, z, block, player->dimension)) return;
     // Instant tree growth for saplings
     if (isSaplingBlock(block)) {
-      uint16_t target_below = getBlockAt(x, y - 1, z);
+    uint16_t target_below = getBlockAt2(x, y - 1, z, player->dimension);
       if (
         target_below == B_dirt ||
         target_below == B_grass_block ||
@@ -2849,11 +2850,11 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     // Calculate fluid flow
     #ifdef DO_FLUID_FLOW
     if (config.do_fluid_flow) {
-      checkFluidUpdate(x, y + 1, z, getBlockAt(x, y + 1, z));
-      checkFluidUpdate(x - 1, y, z, getBlockAt(x - 1, y, z));
-      checkFluidUpdate(x + 1, y, z, getBlockAt(x + 1, y, z));
-      checkFluidUpdate(x, y, z - 1, getBlockAt(x, y, z - 1));
-      checkFluidUpdate(x, y, z + 1, getBlockAt(x, y, z + 1));
+      checkFluidUpdate(x, y + 1, z, getBlockAt2(x, y + 1, z, player->dimension));
+      checkFluidUpdate(x - 1, y, z, getBlockAt2(x - 1, y, z, player->dimension));
+      checkFluidUpdate(x + 1, y, z, getBlockAt2(x + 1, y, z, player->dimension));
+      checkFluidUpdate(x, y, z - 1, getBlockAt2(x, y, z - 1, player->dimension));
+      checkFluidUpdate(x, y, z + 1, getBlockAt2(x, y, z + 1, player->dimension));
     }
     #endif
   }
@@ -3308,16 +3309,17 @@ void handleServerTick (int64_t time_since_last_tick) {
       if (server_ticks % (uint32_t)TICKS_PER_SECOND != 0) continue;
       sc_keepAlive(player->client_fd);
       sc_updateTime(player->client_fd, world_time);
-      uint16_t block = getBlockAt(player->x, player->y, player->z);
+      uint8_t pdim = player->dimension;
+      uint16_t block = getBlockAt2(player->x, player->y, player->z, pdim);
       if (block >= B_lava && block < B_lava + 4) {
         hurtEntity(player->client_fd, -1, D_lava, 8);
       }
       #ifdef ENABLE_CACTUS_DAMAGE
       if (block == B_cactus ||
-        getBlockAt(player->x + 1, player->y, player->z) == B_cactus ||
-        getBlockAt(player->x - 1, player->y, player->z) == B_cactus ||
-        getBlockAt(player->x, player->y, player->z + 1) == B_cactus ||
-        getBlockAt(player->x, player->y, player->z - 1) == B_cactus
+        getBlockAt2(player->x + 1, player->y, player->z, pdim) == B_cactus ||
+        getBlockAt2(player->x - 1, player->y, player->z, pdim) == B_cactus ||
+        getBlockAt2(player->x, player->y, player->z + 1, pdim) == B_cactus ||
+        getBlockAt2(player->x, player->y, player->z - 1, pdim) == B_cactus
       ) hurtEntity(player->client_fd, -1, D_cactus, 4);
       #endif
       if (player->health >= 20 || player->health == 0) continue;
@@ -3761,7 +3763,8 @@ static void updatePlayerStateTask(void* arg) {
   // Process once-per-second state updates (no packet sending here)
   if (server_ticks % (uint32_t)TICKS_PER_SECOND == 0) {
     // Calculate lava damage (apply health change, packet sent separately)
-    uint16_t block = getBlockAt(player->x, player->y, player->z);
+    uint8_t pdim = player->dimension;
+    uint16_t block = getBlockAt2(player->x, player->y, player->z, pdim);
     if (block >= B_lava && block < B_lava + 4) {
       if (player->health > 8) player->health -= 8;
       else player->health = 0;
@@ -3769,10 +3772,10 @@ static void updatePlayerStateTask(void* arg) {
     #ifdef ENABLE_CACTUS_DAMAGE
     // Calculate cactus damage (apply health change, packet sent separately)
     if (block == B_cactus ||
-        getBlockAt(player->x + 1, player->y, player->z) == B_cactus ||
-        getBlockAt(player->x - 1, player->y, player->z) == B_cactus ||
-        getBlockAt(player->x, player->y, player->z + 1) == B_cactus ||
-        getBlockAt(player->x, player->y, player->z - 1) == B_cactus) {
+        getBlockAt2(player->x + 1, player->y, player->z, pdim) == B_cactus ||
+        getBlockAt2(player->x - 1, player->y, player->z, pdim) == B_cactus ||
+        getBlockAt2(player->x, player->y, player->z + 1, pdim) == B_cactus ||
+        getBlockAt2(player->x, player->y, player->z - 1, pdim) == B_cactus) {
       if (player->health > 4) player->health -= 4;
       else player->health = 0;
     }

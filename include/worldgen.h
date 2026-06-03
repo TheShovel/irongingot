@@ -31,6 +31,8 @@ uint8_t getChunkBiome (short x, short z);
 uint8_t getHeightAt (int x, int z);
 uint16_t getTerrainAt (int x, int y, int z, ChunkAnchor anchor);
 uint16_t getBlockAt (int x, int y, int z);
+uint16_t getBlockAt2 (int x, int y, int z, uint8_t dimension);
+uint16_t getNetherBlockAt (int x, int y, int z);
 const char* getBiomeName(uint8_t biome_id);
 uint8_t biomeNameMatches(uint8_t biome_id, const char* name, uint8_t name_len);
 uint32_t getBiomeKeywordMask(uint8_t biome_id);
