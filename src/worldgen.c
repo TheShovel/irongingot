@@ -1767,18 +1767,27 @@ uint16_t getTerrainAt (int x, int y, int z, ChunkAnchor anchor) {
 uint16_t getNetherBlockAt (int x, int y, int z) {
   if (y < 0) return B_bedrock;
   if (y > 255) return B_air;
-  // Ceiling: Y 220-255
-  if (y >= 220) return B_netherrack;
-  // Compute floor height from same noise used in buildNetherChunkSection
+  // Compute floor and ceiling heights from the same noise used in
+  // buildNetherChunkSection, so the interaction query returns the same block
+  // the chunk renderer does (the previous version returned air for y ==
+  // floor_h, which broke column-block placement on the nether floor).
   double fn = octave_sample(&surface_noise, (double)x * 0.015, 0, (double)z * 0.015);
   int floor_h = 80 + (int)(fn * 15.0);
   if (floor_h < 65) floor_h = 65;
   if (floor_h > 100) floor_h = 100;
-  if (y < floor_h) {
+  double cn = octave_sample(&surface_noise, (double)x * 0.015 + 100.0, 0, (double)z * 0.015 + 100.0);
+  int ceil_h = 235 + (int)(cn * 15.0);
+  if (ceil_h < 220) ceil_h = 220;
+  if (ceil_h > 255) ceil_h = 255;
+  // Lower netherrack body: Y 0..floor_h (bedrock at the very bottom, lava for
+  // Y <= 31, netherrack above). Mirrors buildNetherChunkSection.
+  if (y <= floor_h) {
     if (y <= 31) return B_lava;
     return B_netherrack;
   }
-  // Above surface
+  // Ceiling netherrack body: Y ceil_h..255.
+  if (y >= ceil_h) return B_netherrack;
+  // Open void between floor and ceiling.
   return B_air;
 }
 
@@ -1971,6 +1980,53 @@ uint16_t buildNetherChunkSection(int cx, int cy, int cz) {
             }
         }
     }
+
+    // Overlay player-made block changes (portals, placed blocks, etc.) on top
+    // of the generated nether terrain. Without this, nether portals created
+    // by switchPlayerDimension and any blocks players place in the nether are
+    // not visible after a chunk is regenerated (e.g. on rejoin), because the
+    // bulk nether chunk data only contains terrain.
+    if (!isChunkModified(div_floor(cx, 16), div_floor(cz, 16))) {
+        return biome;
+    }
+
+    int block_changes_snapshot_count = 0;
+    BlockChange *block_changes_snapshot = copyBlockChangesSnapshot(&block_changes_snapshot_count);
+    if (block_changes_snapshot_count > 0 && block_changes_snapshot != NULL) {
+        for (int i = 0; i < block_changes_snapshot_count; i ++) {
+            if (block_changes_snapshot[i].block == 0xFF) continue;
+            // Skip special blocks (stairs, chests, furnaces): their state IDs
+            // are sent as per-block updates after the chunk bulk.
+            if (is_stair_block(block_changes_snapshot[i].block) || is_oriented_block(block_changes_snapshot[i].block)) {
+                if (block_changes_snapshot[i].block == B_chest) i += 14;
+                else if (is_stair_block(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_furnace) i += 1;
+                continue;
+            }
+            #ifdef ALLOW_DOORS
+            if (is_door_block(block_changes_snapshot[i].block)) {
+                // Still write the raw door block ID into chunk_section so the
+                // client sees *something*. The correct state comes via block
+                // update packets.
+            } else
+            #endif
+            // Only apply changes that belong to the nether and fall inside this chunk section
+            if (
+                block_changes_snapshot[i].dimension != DIMENSION_NETHER ||
+                block_changes_snapshot[i].x < cx || block_changes_snapshot[i].x >= cx + 16 ||
+                block_changes_snapshot[i].y < cy || block_changes_snapshot[i].y >= cy + 16 ||
+                block_changes_snapshot[i].z < cz || block_changes_snapshot[i].z >= cz + 16
+            ) continue;
+
+            int dx = block_changes_snapshot[i].x - cx;
+            int dy = block_changes_snapshot[i].y - cy;
+            int dz = block_changes_snapshot[i].z - cz;
+            unsigned address = (unsigned)(dx + (dz << 4) + (dy << 8));
+            unsigned index = (address & ~7u) | (7u - (address & 7u));
+            chunk_section[index] = block_changes_snapshot[i].block;
+        }
+        freeBlockChangesSnapshot(block_changes_snapshot);
+    }
+
     return biome;
 }
 

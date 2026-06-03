@@ -2264,9 +2264,19 @@ void switchPlayerDimension(PlayerData *player) {
   short cz = div_floor(player->z, 16);
   sc_setCenterChunk(player->client_fd, cx, cz);
 
+  // Pre-generate and send a 3x3 area of chunks around the portal before
+  // teleporting the player. Without this, the player can be dropped into the
+  // nether with only the center chunk loaded, leaving the surrounding floor
+  // invisible to the client and causing them to fall into the void and die
+  // while the streamer catches up. Generating a small area synchronously here
+  // keeps the spawn experience safe and instant.
   sc_chunkBatchStart(player->client_fd);
-  generate_chunk_data(cx, cz, new_dim);
-  sc_chunkDataAndUpdateLight(player->client_fd, cx, cz, new_dim);
+  for (int dz = -1; dz <= 1; dz++) {
+    for (int dx = -1; dx <= 1; dx++) {
+      generate_chunk_data(cx + dx, cz + dz, new_dim);
+      sc_chunkDataAndUpdateLight(player->client_fd, cx + dx, cz + dz, new_dim);
+    }
+  }
   sc_chunkBatchFinished(player->client_fd, 1);
 
   // Create portal blocks AFTER respawn + chunk send so client doesn't discard them
@@ -2275,15 +2285,30 @@ void switchPlayerDimension(PlayerData *player) {
       makeBlockChange(np_x, np_h + dy, np_z, B_nether_portal, DIMENSION_NETHER);
       makeBlockChange(np_x + 1, np_h + dy, np_z, B_nether_portal, DIMENSION_NETHER);
     }
-    // Shift player adjacent to portal
-    player->x = np_x + 2;
+    // Build an obsidian frame around the portal so it matches what a player
+    // would get from a hand-built portal: 2x3 portal interior framed by
+    // obsidian on all four sides, top, and bottom. The frame blocks are
+    // placed after the portal so any existing air/terrain underneath them
+    // is replaced cleanly.
+    // Bottom and top rails
+    for (int dx = 0; dx < 2; dx++) {
+      makeBlockChange(np_x + dx, np_h, np_z, B_obsidian, DIMENSION_NETHER);
+      makeBlockChange(np_x + dx, np_h + 4, np_z, B_obsidian, DIMENSION_NETHER);
+    }
+    // Left and right columns
+    for (int dy = 1; dy <= 3; dy++) {
+      makeBlockChange(np_x - 1, np_h + dy, np_z, B_obsidian, DIMENSION_NETHER);
+      makeBlockChange(np_x + 2, np_h + dy, np_z, B_obsidian, DIMENSION_NETHER);
+    }
+    // Stand the player on top of the obsidian frame so they have a solid
+    // platform that is guaranteed to be inside the pre-generated center
+    // chunk. (Previously the player was placed at (np_x + 2, ofh + 2, np_z),
+    // which is now occupied by the right column of the frame and sits in
+    // floor that may not be loaded yet.)
+    player->x = np_x;
     player->z = np_z;
-    double ofn = octave_sample(&surface_noise, (double)(np_x + 2) * 0.015, 0, (double)np_z * 0.015);
-    int ofh = 80 + (int)(ofn * 15.0);
-    if (ofh < 65) ofh = 65;
-    if (ofh > 100) ofh = 100;
-    player->y = (float)(ofh + 2);
-    // Recalculate center chunk from offset position
+    player->y = (float)(np_h + 5);
+    // Recalculate center chunk from new position
     cx = div_floor(player->x, 16);
     cz = div_floor(player->z, 16);
     sc_setCenterChunk(player->client_fd, cx, cz);

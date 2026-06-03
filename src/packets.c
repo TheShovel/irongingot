@@ -681,6 +681,8 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
 
   for (int i = 0; i < block_changes_snapshot_count; i ++) {
     if (block_changes_snapshot[i].block == 0xFF) continue;
+    // Only send block updates for blocks in the same dimension as this chunk
+    if (block_changes_snapshot[i].dimension != dimension) continue;
     if (
       block_changes_snapshot[i].block != B_torch &&
       !isOrientedBlock(block_changes_snapshot[i].block) &&
