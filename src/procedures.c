@@ -2033,6 +2033,19 @@ void handleFluidMovement (short x, uint8_t y, short z, uint16_t fluid, uint16_t 
     }
   }
 
+  // Infinite water source: flowing water with 2+ adjacent source blocks becomes a source
+  if (fluid == B_water && level != 0) {
+    uint8_t source_count = 0;
+    for (int i = 0; i < 4; i++) {
+      if (adjacent[i] == fluid) source_count++;
+    }
+    if (source_count >= 2) {
+      makeBlockChange(x, y, z, fluid, DIMENSION_OVERWORLD);
+      level = 0;
+      block = fluid;
+    }
+  }
+
   // Check if water should flow down, prioritize that over lateral flow
   uint16_t block_below = getBlockAt(x, y - 1, z);
   if (isReplaceableBlock(block_below)) {
@@ -2339,6 +2352,17 @@ static uint8_t handleBucketUse(PlayerData *player, short x, short y, short z, ui
         }
         if (!canReplaceHeldItemWithOverflow(player, *count, I_bucket)) return true;
         if (makeBlockChange(prev_x, prev_y, prev_z, fluid, player->dimension)) return true;
+        #ifdef DO_FLUID_FLOW
+        if (config.do_fluid_flow) {
+          checkFluidUpdate(prev_x, prev_y + 1, prev_z, getBlockAt2(prev_x, prev_y + 1, prev_z, player->dimension));
+          checkFluidUpdate(prev_x - 1, prev_y, prev_z, getBlockAt2(prev_x - 1, prev_y, prev_z, player->dimension));
+          checkFluidUpdate(prev_x + 1, prev_y, prev_z, getBlockAt2(prev_x + 1, prev_y, prev_z, player->dimension));
+          checkFluidUpdate(prev_x, prev_y, prev_z - 1, getBlockAt2(prev_x, prev_y, prev_z - 1, player->dimension));
+          checkFluidUpdate(prev_x, prev_y, prev_z + 1, getBlockAt2(prev_x, prev_y, prev_z + 1, player->dimension));
+          checkFluidUpdate(prev_x, prev_y - 1, prev_z, getBlockAt2(prev_x, prev_y - 1, prev_z, player->dimension));
+          checkFluidUpdate(prev_x, prev_y, prev_z, fluid);
+        }
+        #endif
         replaceHeldItemWithOverflow(player, count, item, I_bucket);
         syncHeldItem(player, *count, *item);
         player->last_bucket_tick = server_ticks;
@@ -2370,6 +2394,16 @@ static uint8_t handleBucketUse(PlayerData *player, short x, short y, short z, ui
     }
     if (!canReplaceHeldItemWithOverflow(player, *count, filled_bucket)) return true;
     if (makeBlockChange(x, y, z, B_air, player->dimension)) return true;
+    #ifdef DO_FLUID_FLOW
+    if (config.do_fluid_flow) {
+      checkFluidUpdate(x, y + 1, z, getBlockAt2(x, y + 1, z, player->dimension));
+      checkFluidUpdate(x - 1, y, z, getBlockAt2(x - 1, y, z, player->dimension));
+      checkFluidUpdate(x + 1, y, z, getBlockAt2(x + 1, y, z, player->dimension));
+      checkFluidUpdate(x, y, z - 1, getBlockAt2(x, y, z - 1, player->dimension));
+      checkFluidUpdate(x, y, z + 1, getBlockAt2(x, y, z + 1, player->dimension));
+      checkFluidUpdate(x, y - 1, z, getBlockAt2(x, y - 1, z, player->dimension));
+    }
+    #endif
     replaceHeldItemWithOverflow(player, count, item, filled_bucket);
     syncHeldItem(player, *count, *item);
     player->last_bucket_tick = server_ticks;
@@ -2400,6 +2434,17 @@ static uint8_t handleBucketUse(PlayerData *player, short x, short y, short z, ui
   }
   if (!canReplaceHeldItemWithOverflow(player, *count, I_bucket)) return true;
   if (makeBlockChange(fx, fy, fz, fluid, player->dimension)) return true;
+  #ifdef DO_FLUID_FLOW
+  if (config.do_fluid_flow) {
+    checkFluidUpdate(fx, fy + 1, fz, getBlockAt2(fx, fy + 1, fz, player->dimension));
+    checkFluidUpdate(fx - 1, fy, fz, getBlockAt2(fx - 1, fy, fz, player->dimension));
+    checkFluidUpdate(fx + 1, fy, fz, getBlockAt2(fx + 1, fy, fz, player->dimension));
+    checkFluidUpdate(fx, fy, fz - 1, getBlockAt2(fx, fy, fz - 1, player->dimension));
+    checkFluidUpdate(fx, fy, fz + 1, getBlockAt2(fx, fy, fz + 1, player->dimension));
+    checkFluidUpdate(fx, fy - 1, fz, getBlockAt2(fx, fy - 1, fz, player->dimension));
+    checkFluidUpdate(fx, fy, fz, fluid);
+  }
+  #endif
   replaceHeldItemWithOverflow(player, count, item, I_bucket);
   syncHeldItem(player, *count, *item);
   player->last_bucket_tick = server_ticks;
