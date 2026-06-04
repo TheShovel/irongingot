@@ -3722,6 +3722,19 @@ void handleServerTick (int64_t time_since_last_tick) {
   }
   #endif
 
+  // Sync all player inventories every 2 seconds (40 ticks)
+  if (server_ticks % 40 == 0) {
+    for (int i = 0; i < MAX_PLAYERS; i++) {
+      PlayerData *player = &player_data[i];
+      if (player->client_fd == -1) continue;
+      if (player->flags & 0x20) continue;
+      for (int j = 0; j < 41; j++) {
+        sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, j),
+          player->inventory_count[j], player->inventory_items[j]);
+      }
+    }
+  }
+
   // Perform regular checks for if it's time to write to disk
   writeDataToDiskOnInterval();
 
