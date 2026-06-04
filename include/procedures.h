@@ -77,6 +77,7 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
 void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t face);
 
 void checkFluidUpdate (short x, uint8_t y, short z, uint16_t block);
+void processFluidQueue (void);
 
 void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health);
 void interactEntity (int entity_id, int interactor_id);

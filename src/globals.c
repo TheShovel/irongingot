@@ -74,6 +74,10 @@ PlayerData player_data[MAX_PLAYERS];
 int player_data_count = 0;
 PlayerAppearance player_appearance[MAX_PLAYERS];
 
+FluidUpdateEntry fluid_queue[FLUID_QUEUE_SIZE];
+volatile int fluid_queue_head = 0;
+volatile int fluid_queue_tail = 0;
+
 MobData mob_data[MAX_MOBS];
 
 // Global thread pool for parallel operations

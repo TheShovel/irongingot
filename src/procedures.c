@@ -1997,14 +1997,15 @@ uint8_t handlePlayerEating (PlayerData *player, uint8_t just_check) {
   return true;
 }
 
+static void enqueueFluidUpdate (short x, uint8_t y, short z, uint16_t fluid, uint16_t block);
+
 void handleFluidMovement (short x, uint8_t y, short z, uint16_t fluid, uint16_t block) {
 
-  // Get fluid level (0-7)
-  // The terminology here is a bit different from vanilla:
-  // a higher fluid "level" means the fluid has traveled farther
+  // Skip stale entries — the block has already been changed by a prior update
+  if (getBlockAt(x, y, z) != block) return;
+
   uint8_t level = block - fluid;
 
-  // Query blocks adjacent to this fluid stream
   uint16_t adjacent[4] = {
     getBlockAt(x + 1, y, z),
     getBlockAt(x - 1, y, z),
@@ -2014,7 +2015,6 @@ void handleFluidMovement (short x, uint8_t y, short z, uint16_t fluid, uint16_t 
 
   // Handle maintaining connections to a fluid source
   if (level != 0) {
-    // Check if this fluid is connected to a block exactly one level lower
     uint8_t connected = false;
     for (int i = 0; i < 4; i ++) {
       if (adjacent[i] == block - 1) {
@@ -2022,7 +2022,6 @@ void handleFluidMovement (short x, uint8_t y, short z, uint16_t fluid, uint16_t 
         break;
       }
     }
-    // If not connected, clear this block and recalculate surrounding flow
     if (!connected) {
       makeBlockChange(x, y, z, B_air, DIMENSION_OVERWORLD);
       checkFluidUpdate(x + 1, y, z, adjacent[0]);
@@ -2050,7 +2049,8 @@ void handleFluidMovement (short x, uint8_t y, short z, uint16_t fluid, uint16_t 
   uint16_t block_below = getBlockAt(x, y - 1, z);
   if (isReplaceableBlock(block_below)) {
     makeBlockChange(x, y - 1, z, fluid, DIMENSION_OVERWORLD);
-    return handleFluidMovement(x, y - 1, z, fluid, fluid);
+    enqueueFluidUpdate(x, y - 1, z, fluid, fluid);
+    return;
   }
 
   // Stop flowing laterally at the maximum level
@@ -2060,21 +2060,42 @@ void handleFluidMovement (short x, uint8_t y, short z, uint16_t fluid, uint16_t 
   // Handle lateral water flow, increasing level by 1
   if (isReplaceableFluid(adjacent[0], level, fluid)) {
     makeBlockChange(x + 1, y, z, block + 1, DIMENSION_OVERWORLD);
-    handleFluidMovement(x + 1, y, z, fluid, block + 1);
+    enqueueFluidUpdate(x + 1, y, z, fluid, block + 1);
   }
   if (isReplaceableFluid(adjacent[1], level, fluid)) {
     makeBlockChange(x - 1, y, z, block + 1, DIMENSION_OVERWORLD);
-    handleFluidMovement(x - 1, y, z, fluid, block + 1);
+    enqueueFluidUpdate(x - 1, y, z, fluid, block + 1);
   }
   if (isReplaceableFluid(adjacent[2], level, fluid)) {
     makeBlockChange(x, y, z + 1, block + 1, DIMENSION_OVERWORLD);
-    handleFluidMovement(x, y, z + 1, fluid, block + 1);
+    enqueueFluidUpdate(x, y, z + 1, fluid, block + 1);
   }
   if (isReplaceableFluid(adjacent[3], level, fluid)) {
     makeBlockChange(x, y, z - 1, block + 1, DIMENSION_OVERWORLD);
-    handleFluidMovement(x, y, z - 1, fluid, block + 1);
+    enqueueFluidUpdate(x, y, z - 1, fluid, block + 1);
   }
 
+}
+
+static void enqueueFluidUpdate (short x, uint8_t y, short z, uint16_t fluid, uint16_t block) {
+  int next = (fluid_queue_tail + 1) % FLUID_QUEUE_SIZE;
+  if (next == fluid_queue_head) return;
+  fluid_queue[fluid_queue_tail].x = x;
+  fluid_queue[fluid_queue_tail].y = y;
+  fluid_queue[fluid_queue_tail].z = z;
+  fluid_queue[fluid_queue_tail].fluid = fluid;
+  fluid_queue[fluid_queue_tail].block = block;
+  fluid_queue_tail = next;
+}
+
+void processFluidQueue (void) {
+  int processed = 0;
+  while (processed < FLUID_UPDATES_PER_TICK && fluid_queue_head != fluid_queue_tail) {
+    FluidUpdateEntry entry = fluid_queue[fluid_queue_head];
+    fluid_queue_head = (fluid_queue_head + 1) % FLUID_QUEUE_SIZE;
+    handleFluidMovement(entry.x, entry.y, entry.z, entry.fluid, entry.block);
+    processed++;
+  }
 }
 
 void checkFluidUpdate (short x, uint8_t y, short z, uint16_t block) {
@@ -2084,7 +2105,7 @@ void checkFluidUpdate (short x, uint8_t y, short z, uint16_t block) {
   else if (block >= B_lava && block < B_lava + 4) fluid = B_lava;
   else return;
 
-  handleFluidMovement(x, y, z, fluid, block);
+  enqueueFluidUpdate(x, y, z, fluid, block);
 
 }
 
@@ -3687,6 +3708,13 @@ void handleServerTick (int64_t time_since_last_tick) {
       handlePortalTravel(&player_data[i]);
     }
   }
+
+  // Process queued fluid updates (spread across ticks for gradual flow)
+  #ifdef DO_FLUID_FLOW
+  if (config.do_fluid_flow) {
+    processFluidQueue();
+  }
+  #endif
 
   // Perform regular checks for if it's time to write to disk
   writeDataToDiskOnInterval();

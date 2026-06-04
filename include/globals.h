@@ -253,6 +253,22 @@ extern uint32_t rng_seed;
 extern uint16_t world_time;
 extern uint32_t server_ticks;
 
+// Fluid update queue for deferred processing
+#define FLUID_QUEUE_SIZE 65536
+#define FLUID_UPDATES_PER_TICK 12
+
+typedef struct {
+  short x;
+  uint8_t y;
+  short z;
+  uint16_t fluid;
+  uint16_t block;
+} FluidUpdateEntry;
+
+extern FluidUpdateEntry fluid_queue[FLUID_QUEUE_SIZE];
+extern volatile int fluid_queue_head;
+extern volatile int fluid_queue_tail;
+
 #define MOTD_MAX_LEN 256
 extern char motd[MOTD_MAX_LEN];
 extern uint8_t motd_len;
