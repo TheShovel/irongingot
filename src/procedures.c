@@ -2278,6 +2278,9 @@ static void syncHeldItem(PlayerData *player, uint8_t count, uint16_t item) {
 
 static uint8_t handleBucketUse(PlayerData *player, short x, short y, short z, uint8_t face, uint8_t *count, uint16_t *item) {
   if (face == 255) {
+    // For some reason, UseItemOn and UseItem are both sent when looking at a block.
+    // Skip the untargeted variant if the targeted one already ran this tick.
+    if (player->last_bucket_tick == server_ticks) return true;
     if (*item != I_bucket && *item != I_water_bucket && *item != I_lava_bucket) return false;
 
     const double yaw_rad = ((double)player->yaw * 180.0 / 127.0) * (3.14159265358979323846 / 180.0);
@@ -2325,6 +2328,7 @@ static uint8_t handleBucketUse(PlayerData *player, short x, short y, short z, ui
         if (makeBlockChange(prev_x, prev_y, prev_z, fluid, player->dimension)) return true;
         replaceHeldItemWithOverflow(player, count, item, I_bucket);
         syncHeldItem(player, *count, *item);
+        player->last_bucket_tick = server_ticks;
         return true;
       }
 
@@ -2355,6 +2359,7 @@ static uint8_t handleBucketUse(PlayerData *player, short x, short y, short z, ui
     if (makeBlockChange(x, y, z, B_air, player->dimension)) return true;
     replaceHeldItemWithOverflow(player, count, item, filled_bucket);
     syncHeldItem(player, *count, *item);
+    player->last_bucket_tick = server_ticks;
     return true;
   }
 
@@ -2376,6 +2381,7 @@ static uint8_t handleBucketUse(PlayerData *player, short x, short y, short z, ui
   if (makeBlockChange(fx, fy, fz, fluid, player->dimension)) return true;
   replaceHeldItemWithOverflow(player, count, item, I_bucket);
   syncHeldItem(player, *count, *item);
+  player->last_bucket_tick = server_ticks;
   return true;
 }
 
