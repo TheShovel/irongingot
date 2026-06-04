@@ -1019,9 +1019,8 @@ int cs_clickContainer (int client_fd) {
   uint8_t *p_count;
 
   #ifdef ALLOW_CHESTS
-  // See the handlePlayerUseItem function for more info on this hack
-  uint8_t *storage_ptr;
-  memcpy(&storage_ptr, player->craft_items, sizeof(storage_ptr));
+  int chest_idx = -1;
+  memcpy(&chest_idx, player->craft_items, sizeof(chest_idx));
   #endif
 
   for (int i = 0; i < changes_count; i ++) {
@@ -1032,10 +1031,9 @@ int cs_clickContainer (int client_fd) {
 
     #ifdef ALLOW_CHESTS
     if (window_id == 2 && slot > 40) {
-      // Get item pointers from the player's storage pointer
-      // See the handlePlayerUseItem function for more info on this hack
-      p_item = (uint16_t *)(storage_ptr + (slot - 41) * 3);
-      p_count = storage_ptr + (slot - 41) * 3 + 2;
+      uint8_t *base = (uint8_t *)&block_changes[chest_idx + 1];
+      p_item = (uint16_t *)(base + (slot - 41) * 3);
+      p_count = base + (slot - 41) * 3 + 2;
     } else
     #endif
     {
@@ -1056,7 +1054,7 @@ int cs_clickContainer (int client_fd) {
         ) equipment_dirty = true;
         #ifdef ALLOW_CHESTS
         if (window_id == 2 && slot > 40) {
-          broadcastChestUpdate(client_fd, storage_ptr, 0, 0, slot - 41);
+          broadcastChestUpdate(client_fd, chest_idx, 0, 0, slot - 41);
         }
         #endif
       }
@@ -1080,7 +1078,7 @@ int cs_clickContainer (int client_fd) {
       ) equipment_dirty = true;
       #ifdef ALLOW_CHESTS
       if (window_id == 2 && slot > 40) {
-        broadcastChestUpdate(client_fd, storage_ptr, item, count, slot - 41);
+        broadcastChestUpdate(client_fd, chest_idx, item, count, slot - 41);
       }
       #endif
     }

@@ -544,27 +544,8 @@ void writeDataToDiskOnInterval () {
 
 #ifdef ALLOW_CHESTS
 // Writes a chest slot change to disk
-void writeChestChangesToDisk (uint8_t *storage_ptr, uint8_t slot) {
-  /**
-   * More chest-related memory hacks!!
-   *
-   * Since chests are implemented in the block_changes array, any
-   * changes to the contents of a chest have to be synced to the block
-   * changes part of the world file. The index of the "blocks" is
-   * determined as such:
-   *
-   * The storage pointer points to the block entry directly following
-   * the chest itself. To get the index of this entry, we can subtract
-   * the pointer to the block changes array (cast to uint8_t*) from the
-   * storage pointer. This gets us the amount of bytes between the start
-   * of the block changes array and the chest's item data, as a pointer.
-   * To get the actual block index, we cast this weird pointer to an
-   * integer, and divide it by the byte size of the BlockChange struct.
-   * Finally, the chest slot divided by 2 is added to this index to get
-   * the block entry pertaining to the relevant chest slot, as each
-   * entry encodes exactly 2 slots.
-   */
-  int index = (int)(storage_ptr - (uint8_t *)block_changes) / sizeof(BlockChange) + slot / 2;
+void writeChestChangesToDisk (int chest_idx, uint8_t slot) {
+  int index = chest_idx + 1 + slot / 2;
   writeBlockChangesToDisk(index, index);
 }
 #endif

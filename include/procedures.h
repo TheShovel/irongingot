@@ -90,7 +90,7 @@ uint8_t isPlayerNoclipEnabled (PlayerData *player);
 void setPlayerNoclip (PlayerData *player, uint8_t enabled);
 void syncPlayerNoclipState (PlayerData *player);
 
-void broadcastChestUpdate (int origin_fd, uint8_t *storage_ptr, uint16_t item, uint8_t count, uint8_t slot);
+void broadcastChestUpdate (int origin_fd, int chest_idx, uint16_t item, uint8_t count, uint8_t slot);
 
 ssize_t writeEntityData (int client_fd, EntityData *data);
 

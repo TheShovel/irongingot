@@ -2738,33 +2738,23 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     }
     #ifdef ALLOW_CHESTS
     else if (target == B_chest && config.allow_chests) {
-      // Get a pointer to the entry following this chest in block_changes
-      uint8_t *storage_ptr = NULL;
-      for (int i = 0; i < block_changes_count; i ++) {
+      int chest_idx = -1;
+      for (int i = 0; i < block_changes_count; i++) {
         if (block_changes[i].block != B_chest) continue;
         if (block_changes[i].x != x || block_changes[i].y != y || block_changes[i].z != z) continue;
-        storage_ptr = (uint8_t *)(&block_changes[i + 1]);
+        chest_idx = i;
         break;
       }
-      if (storage_ptr == NULL) return;
-      // Terrible memory hack!!
-      // Copy the pointer into the player's crafting table item array.
-      // This allows us to save some memory by repurposing a feature that
-      // is mutually exclusive with chests, though it is otherwise a
-      // terrible idea for obvious reasons.
-      memcpy(player->craft_items, &storage_ptr, sizeof(storage_ptr));
-      // Flag craft_items as locked due to holding a pointer
+      if (chest_idx < 0) return;
+      memcpy(player->craft_items, &chest_idx, sizeof(chest_idx));
       player->flags |= 0x80;
-      // Show the player the chest UI
       sc_openScreen(player->client_fd, 2, "Chest", 5);
-      // Load the slots of the chest from the block_changes array.
-      // This is a similarly dubious memcpy hack, but at least we're not
-      // mixing data types? Kind of?
-      for (int i = 0; i < 27; i ++) {
+      uint8_t *base = (uint8_t *)&block_changes[chest_idx + 1];
+      for (int i = 0; i < 27; i++) {
         uint16_t item;
         uint8_t count;
-        memcpy(&item, storage_ptr + i * 3, 2);
-        memcpy(&count, storage_ptr + i * 3 + 2, 1);
+        memcpy(&item, base + i * 3, 2);
+        memcpy(&count, base + i * 3 + 2, 1);
         sc_setContainerSlot(player->client_fd, 2, i, count, item);
       }
       return;
@@ -3099,11 +3089,21 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       ) &&
       isReplaceableBlock(getBlockAt2(x, y, z, player->dimension))
     ) {
-      // Apply server-side block change
+      // Apply server-side block change (persists to block_changes and disk)
+      if (makeBlockChange(x, y, z, block, player->dimension)) return;
 
       // Update state with direction in the unified special block table
       uint16_t state = oriented_encode_state(direction);
       special_block_set_state(x, y, z, block, state);
+
+      // Store direction in legacy field for persistence across restarts
+      for (int i = 0; i < block_changes_count; i++) {
+        if (block_changes[i].block == B_chest &&
+            block_changes[i].x == x && block_changes[i].y == y && block_changes[i].z == z) {
+          block_changes[i + 14].y = direction;
+          break;
+        }
+      }
 
       // Send oriented updates to all players
       for (int j = 0; j < MAX_PLAYERS; j++) {
@@ -4262,19 +4262,19 @@ static void handlePlayerUpdatesParallel(int64_t time_since_last_tick, ThreadPool
 #ifdef ALLOW_CHESTS
 // Broadcasts a chest slot update to all clients who have that chest open,
 // except for the client who initiated the update.
-void broadcastChestUpdate (int origin_fd, uint8_t *storage_ptr, uint16_t item, uint8_t count, uint8_t slot) {
+void broadcastChestUpdate (int origin_fd, int chest_idx, uint16_t item, uint8_t count, uint8_t slot) {
 
   for (int i = 0; i < MAX_PLAYERS; i ++) {
     if (player_data[i].client_fd == -1) continue;
     if (player_data[i].flags & 0x20) continue;
-    // Filter for players that have this chest open
-    if (memcmp(player_data[i].craft_items, &storage_ptr, sizeof(storage_ptr)) != 0) continue;
-    // Send slot update packet
+    int other_idx;
+    memcpy(&other_idx, player_data[i].craft_items, sizeof(other_idx));
+    if (other_idx != chest_idx) continue;
     sc_setContainerSlot(player_data[i].client_fd, 2, slot, count, item);
   }
 
   #ifndef DISK_SYNC_BLOCKS_ON_INTERVAL
-  writeChestChangesToDisk(storage_ptr, slot);
+  writeChestChangesToDisk(chest_idx, slot);
   #endif
 
 }
