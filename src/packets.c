@@ -926,11 +926,15 @@ int cs_useItem (int client_fd) {
   uint8_t hand = readByte(client_fd);
   int sequence = readVarInt(client_fd);
 
-  // Ignore yaw/pitch
-  recv_all(client_fd, recv_buffer, 8, false);
+  float yaw = readFloat(client_fd);
+  float pitch = readFloat(client_fd);
 
   PlayerData *player;
   if (getPlayerData(client_fd, &player)) return 1;
+
+  player->yaw = ((short)(yaw + 540) % 360 - 180) * 127 / 180;
+  player->pitch = pitch / 90.0f * 127.0f;
+  sc_acknowledgeBlockChange(client_fd, sequence);
 
   handlePlayerUseItem(player, 0, 0, 0, 255);
 

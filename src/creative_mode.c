@@ -279,6 +279,9 @@ static const CreativeItem creative_items[] = {
   {I_fishing_rod, "Fishing Rod"},
   {I_bow, "Bow"},
   {I_flint_and_steel, "Flint and Steel"},
+  {I_bucket, "Bucket"},
+  {I_water_bucket, "Water Bucket"},
+  {I_lava_bucket, "Lava Bucket"},
   
   // Resources
   {I_coal, "Coal"},

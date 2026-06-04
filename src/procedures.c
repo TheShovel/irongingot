@@ -556,6 +556,24 @@ int givePlayerItem (PlayerData *player, uint16_t item, uint8_t count) {
 
 }
 
+static uint8_t canGivePlayerItem (PlayerData *player, uint16_t item, uint8_t count) {
+
+  if (item == 0 || count == 0) return true;
+
+  uint8_t stack_size = getItemStackSize(item);
+
+  for (int i = 0; i < 36; i ++) {
+    if (player->inventory_items[i] == item && player->inventory_count[i] <= stack_size - count) return true;
+  }
+
+  for (int i = 0; i < 36; i ++) {
+    if (player->inventory_count[i] == 0) return true;
+  }
+
+  return false;
+
+}
+
 // Sends the full sequence for spawning the player to the client
 void spawnPlayer (PlayerData *player) {
 
@@ -1708,11 +1726,15 @@ uint8_t getItemStackSize (uint16_t item) {
     item == I_diamond_hoe ||
     item == I_netherite_hoe ||
     // Shears
-    item == I_shears
+    item == I_shears ||
+    // Filled buckets
+    item == I_water_bucket ||
+    item == I_lava_bucket
   ) return 1;
 
   if (
-    item == I_snowball
+    item == I_snowball ||
+    item == I_bucket
   ) return 16;
 
   return 64;
@@ -2233,6 +2255,130 @@ static uint8_t getFaceOffsetBlock(short x, uint8_t y, short z, uint8_t face, sho
   return 1;
 }
 
+static uint8_t canReplaceHeldItemWithOverflow(PlayerData *player, uint8_t count, uint16_t replacement) {
+  if (count == 1) return true;
+  return canGivePlayerItem(player, replacement, 1);
+}
+
+static void replaceHeldItemWithOverflow(PlayerData *player, uint8_t *count, uint16_t *item, uint16_t replacement) {
+  if (*count == 1) {
+    *item = replacement;
+    return;
+  }
+
+  *count -= 1;
+  givePlayerItem(player, replacement, 1);
+}
+
+static void syncHeldItem(PlayerData *player, uint8_t count, uint16_t item) {
+  sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), count, item);
+  broadcastPlayerEquipment(player);
+  writePlayerDataToDisk();
+}
+
+static uint8_t handleBucketUse(PlayerData *player, short x, short y, short z, uint8_t face, uint8_t *count, uint16_t *item) {
+  if (face == 255) {
+    if (*item != I_bucket && *item != I_water_bucket && *item != I_lava_bucket) return false;
+
+    const double yaw_rad = ((double)player->yaw * 180.0 / 127.0) * (3.14159265358979323846 / 180.0);
+    const double pitch_rad = ((double)player->pitch * 90.0 / 127.0) * (3.14159265358979323846 / 180.0);
+    const double cos_pitch = cos(pitch_rad);
+    const double ray_dx = -sin(yaw_rad) * cos_pitch;
+    const double ray_dy = -sin(pitch_rad);
+    const double ray_dz = cos(yaw_rad) * cos_pitch;
+    const double eye_x = (double)player->x + 0.5;
+    const double eye_y = (double)player->y + 1.62;
+    const double eye_z = (double)player->z + 0.5;
+
+    short prev_x = player->x;
+    uint8_t prev_y = (uint8_t)player->y;
+    short prev_z = player->z;
+    uint8_t have_prev = false;
+
+    for (double distance = 0.0; distance <= 5.0; distance += 0.1) {
+      int bx_i = (int)floor(eye_x + ray_dx * distance);
+      int by_i = (int)floor(eye_y + ray_dy * distance);
+      int bz_i = (int)floor(eye_z + ray_dz * distance);
+
+      if (by_i < 0 || by_i > 255 || bx_i < -32768 || bx_i > 32767 || bz_i < -32768 || bz_i > 32767) {
+        continue;
+      }
+
+      short bx = (short)bx_i;
+      uint8_t by = (uint8_t)by_i;
+      short bz = (short)bz_i;
+      uint16_t ray_block = getBlockAt2(bx, by, bz, player->dimension);
+
+      if (*item == I_bucket && (ray_block == B_water || ray_block == B_lava)) {
+        return handleBucketUse(player, bx, by, bz, 1, count, item);
+      }
+
+      if (*item != I_bucket && !isReplaceableBlock(ray_block)) {
+        if (!have_prev) return true;
+        uint16_t fluid = *item == I_water_bucket ? B_water : B_lava;
+
+        if (is_in_safe_area(prev_x, prev_z, player->dimension)) {
+          sc_systemChat(player->client_fd, "§cCannot interact with blocks in protected spawn area", 54);
+          return true;
+        }
+        if (!canReplaceHeldItemWithOverflow(player, *count, I_bucket)) return true;
+        if (makeBlockChange(prev_x, prev_y, prev_z, fluid, player->dimension)) return true;
+        replaceHeldItemWithOverflow(player, count, item, I_bucket);
+        syncHeldItem(player, *count, *item);
+        return true;
+      }
+
+      if (isReplaceableBlock(ray_block)) {
+        prev_x = bx;
+        prev_y = by;
+        prev_z = bz;
+        have_prev = true;
+      }
+    }
+
+    return true;
+  }
+
+  uint16_t target = getBlockAt2(x, y, z, player->dimension);
+
+  if (*item == I_bucket) {
+    uint16_t filled_bucket = 0;
+    if (target == B_water) filled_bucket = I_water_bucket;
+    else if (target == B_lava) filled_bucket = I_lava_bucket;
+    else return false;
+
+    if (is_in_safe_area(x, z, player->dimension)) {
+      sc_systemChat(player->client_fd, "§cCannot interact with blocks in protected spawn area", 54);
+      return true;
+    }
+    if (!canReplaceHeldItemWithOverflow(player, *count, filled_bucket)) return true;
+    if (makeBlockChange(x, y, z, B_air, player->dimension)) return true;
+    replaceHeldItemWithOverflow(player, count, item, filled_bucket);
+    syncHeldItem(player, *count, *item);
+    return true;
+  }
+
+  uint16_t fluid = 0;
+  if (*item == I_water_bucket) fluid = B_water;
+  else if (*item == I_lava_bucket) fluid = B_lava;
+  else return false;
+
+  short fx = x, fz = z;
+  uint8_t fy = y;
+  if (!getFaceOffsetBlock(x, y, z, face, &fx, &fy, &fz)) return true;
+
+  if (!isReplaceableBlock(getBlockAt2(fx, fy, fz, player->dimension))) return true;
+  if (is_in_safe_area(fx, fz, player->dimension)) {
+    sc_systemChat(player->client_fd, "§cCannot interact with blocks in protected spawn area", 54);
+    return true;
+  }
+  if (!canReplaceHeldItemWithOverflow(player, *count, I_bucket)) return true;
+  if (makeBlockChange(fx, fy, fz, fluid, player->dimension)) return true;
+  replaceHeldItemWithOverflow(player, count, item, I_bucket);
+  syncHeldItem(player, *count, *item);
+  return true;
+}
+
 static uint8_t isPortalInteriorBlock(uint16_t block) {
   return isReplaceableBlock(block) || block == B_fire || block == B_nether_portal;
 }
@@ -2633,6 +2779,8 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     broadcastPlayerEquipment(player);
     return;
   }
+
+  if (handleBucketUse(player, x, y, z, face, count, item)) return;
 
   // Don't proceed with block placement if no coordinates were provided
   if (face == 255) return;
