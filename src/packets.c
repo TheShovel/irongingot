@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <ctype.h>
 
 #ifdef ESP_PLATFORM
   #include "lwip/sockets.h"
@@ -26,6 +27,18 @@
 #include "packets.h"
 #include "chunk_generator.h"
 #include "special_block.h"
+#include "creative_mode.h"
+
+// Case-insensitive string comparison for item lookup
+static int creative_strcasecmp(const char *s1, const char *s2) {
+  if (!s1 || !s2) return -1;
+  for (; *s1 && *s2; s1++, s2++) {
+    int c1 = tolower((unsigned char)*s1);
+    int c2 = tolower((unsigned char)*s2);
+    if (c1 != c2) return c1 - c2;
+  }
+  return *s1 - *s2;
+}
 
 static PlayerAppearance *findPlayerAppearanceByUuid(const uint8_t *uuid) {
   for (int i = 0; i < MAX_PLAYERS; i++) {
@@ -1670,6 +1683,58 @@ int cs_chat (int client_fd) {
     goto cleanup;
   }
 
+  if (!strncmp((char *)recv_buffer, "!creative", 9)) {
+    // Creative mode commands
+    if (!isCreativeModeEnabled()) {
+      sc_systemChat(client_fd, "§cCreative mode is not enabled on this server", 45);
+      goto cleanup;
+    }
+    
+    int arg_offset = 10;  // After "!creative "
+    while (arg_offset < 224 && recv_buffer[arg_offset] == ' ') arg_offset++;
+    
+    if (arg_offset >= 224 || recv_buffer[arg_offset] == '\0') {
+      // No arguments - toggle UI
+      toggleCreativeModeUI(client_fd);
+    } else if (!strncmp((char *)recv_buffer + arg_offset, "close", 5)) {
+      closeCreativeModeUI(client_fd);
+    } else if (!strncmp((char *)recv_buffer + arg_offset, "list", 4)) {
+      sendCreativeUIScreen(client_fd);
+    } else if (!strncmp((char *)recv_buffer + arg_offset, "next", 4)) {
+      int player_index = getClientIndex(client_fd);
+      if (player_index >= 0 && player_index < MAX_PLAYERS) {
+        uint16_t next_pos = creative_ui_states[player_index].scroll_position + 20;
+        creative_ui_states[player_index].scroll_position = next_pos;
+        sendCreativeItemList(client_fd, next_pos);
+      }
+    } else {
+      // Try to find and give item by name
+      char item_name[128];
+      size_t name_len = strlen((char *)recv_buffer + arg_offset);
+      
+      // Trim trailing whitespace
+      while (name_len > 0 && ((recv_buffer + arg_offset)[name_len - 1] == ' ' || 
+             (recv_buffer + arg_offset)[name_len - 1] == '\t' || 
+             (recv_buffer + arg_offset)[name_len - 1] == '\n' || 
+             (recv_buffer + arg_offset)[name_len - 1] == '\r')) {
+        name_len--;
+      }
+      
+      if (name_len > 127) name_len = 127;
+      strncpy(item_name, (char *)recv_buffer + arg_offset, name_len);
+      item_name[name_len] = '\0';
+      
+      // Search for item by name (case-insensitive)
+      uint16_t item_id = findCreativeItemByName(item_name);
+      if (item_id > 0) {
+        handleCreativeItemClick(client_fd, item_id);
+      } else {
+        sc_systemChat(client_fd, "§cItem not found. Use §f!creative list§c to see available items", 63);
+      }
+    }
+    goto cleanup;
+  }
+
   if (!strncmp((char *)recv_buffer, "!help", 5)) {
     // Send command guide
     const char help_msg[] = "§7Commands:\n"
@@ -1680,6 +1745,8 @@ int cs_chat (int client_fd) {
     "  !timeset <ticks> - Set world time (0=day, 12000=night)\n"
     "  !findbiome <name> [radius] - Find and teleport to nearest biome\n"
     "  !find biome <name> [radius] - Alias for !findbiome\n"
+    "  !creative - Toggle creative mode UI / !creative list - List all items\n"
+    "  !creative <item_name> - Give yourself an item (e.g., !creative oak_log)\n"
     "  !help - Show this help message";
     sc_systemChat(client_fd, (char *)help_msg, (uint16_t)sizeof(help_msg) - 1);
     goto cleanup;

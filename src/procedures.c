@@ -22,6 +22,7 @@
 #include "special_block.h"
 #include "thread_pool.h"
 #include "config.h"
+#include "creative_mode.h"
 
 // World spawn point (block coordinates)
 #define SPAWN_BLOCK_X 8
@@ -255,6 +256,7 @@ int reservePlayerData (int client_fd, uint8_t *uuid, char *name) {
         player_data[i].visited_z[j] = 32767;
       }
       loadPlayerAppearance(i, uuid, name);
+      initCreativeModeUI(i);  // Initialize creative mode UI for this player
       return 0;
     }
     // Search for unallocated player slots
@@ -275,6 +277,7 @@ int reservePlayerData (int client_fd, uint8_t *uuid, char *name) {
       memcpy(player_data[i].name, name, 16);
       resetPlayerData(&player_data[i]);
       loadPlayerAppearance(i, uuid, name);
+      initCreativeModeUI(i);  // Initialize creative mode UI for this player
       player_data_count ++;
       return 0;
     }
@@ -2033,6 +2036,16 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
     return;
   }
 
+  // Special case: punch fire to extinguish it
+  if (action == 0) {
+    uint16_t target_block = getBlockAt2(x, y, z, player->dimension);
+    if (target_block == B_fire) {
+      // Extinguish the fire
+      makeBlockChange(x, y, z, 0, player->dimension);
+      return;
+    }
+  }
+
   // Re-sync slot when player drops an item
   if (action == 3 || action == 4) {
     sc_setContainerSlot(
@@ -2153,66 +2166,84 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
   }
 }
 
-static uint8_t tryCreatePortal(short x, uint8_t y, short z, uint8_t face, uint8_t dimension) {
-  short fx = x, fz = z;
-  uint8_t fy = y;
+static uint8_t getFaceOffsetBlock(short x, uint8_t y, short z, uint8_t face, short *out_x, uint8_t *out_y, short *out_z) {
+  int fy = y;
+  *out_x = x;
+  *out_z = z;
 
   switch (face) {
-    case 2: fz = z - 1; break;
-    case 3: fz = z + 1; break;
-    case 4: fx = x - 1; break;
-    case 5: fx = x + 1; break;
+    case 0: fy = (int)y - 1; break;
+    case 1: fy = (int)y + 1; break;
+    case 2: *out_z = z - 1; break;
+    case 3: *out_z = z + 1; break;
+    case 4: *out_x = x - 1; break;
+    case 5: *out_x = x + 1; break;
     default: return 0;
   }
 
-  // Determine portal direction based on which face was clicked
-  // dx, dz: direction from the clicked block toward the interior
-  int8_t dx = 0, dz = 0;
-  if (face == 2 || face == 3) { dx = 1; dz = 0; }
-  else { dx = 0; dz = 1; }
+  if (fy < 0 || fy > 255) return 0;
+  *out_y = (uint8_t)fy;
+  return 1;
+}
 
-  // Check if there's obsidian to the north and south (or east and west)
-  int neg = 0, pos = 0;
-  for (int s = 1; s <= 23; s++) {
-    if (getBlockAt2(fx - dx * s, fy, fz - dz * s, dimension) == B_obsidian) { neg = s; break; }
-  }
-  if (neg == 0) return 0;
-  for (int s = 1; s <= 23; s++) {
-    if (getBlockAt2(fx + dx * s, fy, fz + dz * s, dimension) == B_obsidian) { pos = s; break; }
-  }
-  if (pos == 0) return 0;
+static uint8_t isPortalInteriorBlock(uint16_t block) {
+  return isReplaceableBlock(block) || block == B_fire || block == B_nether_portal;
+}
 
-  int width = neg + pos - 1;
-  if (width < 4 || width > 23) return 0;
+static uint8_t tryCreatePortalInPlane(short x, uint8_t y, short z, int8_t dx, int8_t dz, uint8_t dimension) {
+  for (int offset_w = 0; offset_w < 2; offset_w++) {
+    for (int offset_h = 0; offset_h < 3; offset_h++) {
+      int origin_x = x - dx * offset_w;
+      int origin_y = (int)y - offset_h;
+      int origin_z = z - dz * offset_w;
 
-  int down = 0, up = 0;
-  for (int s = 1; s <= 23; s++) {
-    if (getBlockAt2(fx, fy - s, fz, dimension) == B_obsidian) { down = s; break; }
-  }
-  if (down == 0) return 0;
-  for (int s = 1; s <= 23; s++) {
-    if (getBlockAt2(fx, fy + s, fz, dimension) == B_obsidian) { up = s; break; }
-  }
-  if (up == 0) return 0;
+      if (origin_y < 1 || origin_y + 3 > 255) continue;
 
-  int height = down + up - 1;
-  if (height < 5 || height > 23) return 0;
+      uint8_t valid = 1;
 
-  for (int h = -neg; h <= pos; h++) {
-    if (getBlockAt2(fx + dx * h, fy + up, fz + dz * h, dimension) != B_obsidian) return 0;
-    if (getBlockAt2(fx + dx * h, fy - down, fz + dz * h, dimension) != B_obsidian) return 0;
-  }
-  for (int v = -down; v <= up; v++) {
-    if (getBlockAt2(fx - dx * neg, fy + v, fz - dz * neg, dimension) != B_obsidian) return 0;
-    if (getBlockAt2(fx + dx * pos, fy + v, fz + dz * pos, dimension) != B_obsidian) return 0;
-  }
-  for (int w = -(neg - 1); w <= pos - 1; w++) {
-    for (int h = -(down - 1); h <= up - 1; h++) {
-      makeBlockChange(fx + dx * w, fy + h, fz + dz * w, B_nether_portal, dimension);
+      for (int w = -1; w <= 2 && valid; w++) {
+        if (getBlockAt2(origin_x + dx * w, origin_y - 1, origin_z + dz * w, dimension) != B_obsidian) valid = 0;
+        if (getBlockAt2(origin_x + dx * w, origin_y + 3, origin_z + dz * w, dimension) != B_obsidian) valid = 0;
+      }
+
+      for (int h = 0; h < 3 && valid; h++) {
+        if (getBlockAt2(origin_x - dx, origin_y + h, origin_z - dz, dimension) != B_obsidian) valid = 0;
+        if (getBlockAt2(origin_x + dx * 2, origin_y + h, origin_z + dz * 2, dimension) != B_obsidian) valid = 0;
+      }
+
+      for (int w = 0; w < 2 && valid; w++) {
+        for (int h = 0; h < 3; h++) {
+          if (!isPortalInteriorBlock(getBlockAt2(origin_x + dx * w, origin_y + h, origin_z + dz * w, dimension))) {
+            valid = 0;
+            break;
+          }
+        }
+      }
+
+      if (!valid) continue;
+
+      for (int w = 0; w < 2; w++) {
+        for (int h = 0; h < 3; h++) {
+          makeBlockChange(
+            (short)(origin_x + dx * w),
+            (uint8_t)(origin_y + h),
+            (short)(origin_z + dz * w),
+            B_nether_portal,
+            dimension
+          );
+        }
+      }
+
+      return 1;
     }
   }
 
-  return 1;
+  return 0;
+}
+
+static uint8_t tryCreatePortal(short x, uint8_t y, short z, uint8_t dimension) {
+  return tryCreatePortalInPlane(x, y, z, 1, 0, dimension) ||
+         tryCreatePortalInPlane(x, y, z, 0, 1, dimension);
 }
 
 void switchPlayerDimension(PlayerData *player) {
@@ -2555,7 +2586,10 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
 
   // Handle flint and steel - portal creation or fire placement
   if (*item == I_flint_and_steel) {
-    if (target == B_obsidian && tryCreatePortal(x, y, z, face, player->dimension)) {
+    short fx = x, fz = z;
+    uint8_t fy = y;
+    if (!getFaceOffsetBlock(x, y, z, face, &fx, &fy, &fz)) return;
+    if (target == B_obsidian && tryCreatePortal(fx, fy, fz, player->dimension)) {
       if (*count > 0) {
         *count -= 1;
         if (*count == 0) *item = 0;
@@ -2563,17 +2597,6 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
       broadcastPlayerEquipment(player);
       return;
-    }
-    short fx = x, fz = z;
-    uint8_t fy = y;
-    switch (face) {
-      case 0: fy = y - 1; break;
-      case 1: fy = y + 1; break;
-      case 2: fz = z - 1; break;
-      case 3: fz = z + 1; break;
-      case 4: fx = x - 1; break;
-      case 5: fx = x + 1; break;
-      default: break;
     }
     if (isReplaceableBlock(getBlockAt2(fx, fy, fz, player->dimension))) {
       makeBlockChange(fx, fy, fz, B_fire, player->dimension);
@@ -3818,6 +3841,12 @@ static void updatePlayerStateTask(void* arg) {
       else player->health = 0;
     }
     #ifdef ENABLE_CACTUS_DAMAGE
+    // Calculate fire damage (apply health change, packet sent separately)
+    if (block == B_fire) {
+      if (player->health > 1) player->health -= 1;
+      else player->health = 0;
+    }
+    
     // Calculate cactus damage (apply health change, packet sent separately)
     if (block == B_cactus ||
         getBlockAt2(player->x + 1, player->y, player->z, pdim) == B_cactus ||
