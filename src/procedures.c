@@ -2743,6 +2743,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       if (chest_idx < 0) return;
       memcpy(player->craft_items, &chest_idx, sizeof(chest_idx));
       player->flags |= 0x80;
+      sc_blockEvent(player->client_fd, x, y, z, 1, 1, B_chest);
       sc_openScreen(player->client_fd, 2, "Chest", 5);
       uint8_t *base = (uint8_t *)&block_changes[chest_idx + 1];
       for (int i = 0; i < 27; i++) {

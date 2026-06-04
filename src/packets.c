@@ -849,6 +849,17 @@ int sc_blockUpdate (int client_fd, int64_t x, int64_t y, int64_t z, uint16_t blo
   return 0;
 }
 
+// S->C Block Event (chest open/close, etc.)
+int sc_blockEvent (int client_fd, int64_t x, int64_t y, int64_t z, int action, int data, uint16_t block) {
+  startPacket(client_fd, 0x07);
+  writeUint64(client_fd, ((x & 0x3FFFFFF) << 38) | ((z & 0x3FFFFFF) << 12) | (y & 0xFFF));
+  writeVarInt(client_fd, action);
+  writeVarInt(client_fd, data);
+  writeVarInt(client_fd, block_palette[block]);
+  endPacket(client_fd);
+  return 0;
+}
+
 #ifdef ALLOW_DOORS
 // S->C Block Update with door state support
 int sc_blockUpdateDoor (int client_fd, int64_t x, int64_t y, int64_t z, uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge) {
@@ -1265,6 +1276,13 @@ int cs_closeContainer (int client_fd) {
   PlayerData *player;
   if (getPlayerData(client_fd, &player)) return 1;
 
+  #ifdef ALLOW_CHESTS
+  int chest_idx = -1;
+  if (window_id == 2) {
+    memcpy(&chest_idx, player->craft_items, sizeof(chest_idx));
+  }
+  #endif
+
   // return all items in crafting slots to the player
   // or, in the case of chests, simply clear the storage pointer
   for (uint8_t i = 0; i < 9; i ++) {
@@ -1278,6 +1296,16 @@ int cs_closeContainer (int client_fd) {
     // Unlock craft_items
     player->flags &= ~0x80;
   }
+
+  #ifdef ALLOW_CHESTS
+  if (chest_idx >= 0 && chest_idx < block_changes_count && block_changes[chest_idx].block == B_chest) {
+    sc_blockEvent(client_fd,
+      block_changes[chest_idx].x,
+      block_changes[chest_idx].y,
+      block_changes[chest_idx].z,
+      1, 0, B_chest);
+  }
+  #endif
 
   givePlayerItem(player, player->flagval_16, player->flagval_8);
   sc_setCursorItem(client_fd, 0, 0);
