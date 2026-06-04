@@ -2359,6 +2359,11 @@ void switchPlayerDimension(PlayerData *player) {
     else player->y = 80;
   }
 
+  // Fall damage is calculated from the last grounded Y. A dimension transfer is
+  // a teleport, so reset the baseline to avoid charging the height delta
+  // between the Nether portal platform and the Overworld exit position.
+  player->grounded_y = player->y;
+
   player->visited_next = 0;
   for (int j = 0; j < VISITED_HISTORY; j++) {
     player->visited_x[j] = 32767;
