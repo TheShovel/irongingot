@@ -2078,13 +2078,19 @@ void handleFluidMovement (short x, uint8_t y, short z, uint16_t fluid, uint16_t 
 }
 
 static void enqueueFluidUpdate (short x, uint8_t y, short z, uint16_t fluid, uint16_t block) {
-  int next = (fluid_queue_tail + 1) % FLUID_QUEUE_SIZE;
+  // De-dup: skip if the last enqueued entry is for the same position
+  int tail = fluid_queue_tail;
+  if (tail != fluid_queue_head) {
+    int prev = (tail - 1 + FLUID_QUEUE_SIZE) % FLUID_QUEUE_SIZE;
+    if (fluid_queue[prev].x == x && fluid_queue[prev].y == y && fluid_queue[prev].z == z) return;
+  }
+  int next = (tail + 1) % FLUID_QUEUE_SIZE;
   if (next == fluid_queue_head) return;
-  fluid_queue[fluid_queue_tail].x = x;
-  fluid_queue[fluid_queue_tail].y = y;
-  fluid_queue[fluid_queue_tail].z = z;
-  fluid_queue[fluid_queue_tail].fluid = fluid;
-  fluid_queue[fluid_queue_tail].block = block;
+  fluid_queue[tail].x = x;
+  fluid_queue[tail].y = y;
+  fluid_queue[tail].z = z;
+  fluid_queue[tail].fluid = fluid;
+  fluid_queue[tail].block = block;
   fluid_queue_tail = next;
 }
 

@@ -255,7 +255,7 @@ extern uint32_t server_ticks;
 
 // Fluid update queue for deferred processing
 #define FLUID_QUEUE_SIZE 65536
-#define FLUID_UPDATES_PER_TICK 12
+#define FLUID_UPDATES_PER_TICK 64
 
 typedef struct {
   short x;
