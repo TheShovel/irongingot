@@ -577,8 +577,16 @@ void spawnPlayer (PlayerData *player) {
   sc_setCenterChunk(player->client_fd, _x, _z);
 
   sc_chunkBatchStart(player->client_fd);
-  generate_chunk_data(_x, _z, player->dimension);
-  sc_chunkDataAndUpdateLight(player->client_fd, _x, _z, player->dimension);
+  // For non-overworld dimensions, send a 3×3 area so the portal (and any
+  // placed blocks in adjacent chunks) are visible immediately. Otherwise
+  // the client only sees the center chunk and can't place blocks nearby.
+  int r = (player->dimension == DIMENSION_OVERWORLD) ? 0 : 1;
+  for (int dz = -r; dz <= r; dz++) {
+    for (int dx = -r; dx <= r; dx++) {
+      generate_chunk_data(_x + dx, _z + dz, player->dimension);
+      sc_chunkDataAndUpdateLight(player->client_fd, _x + dx, _z + dz, player->dimension);
+    }
+  }
   sc_chunkBatchFinished(player->client_fd, 1);
 
   // Initialize visited chunks tracking
