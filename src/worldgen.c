@@ -653,6 +653,61 @@ static inline uint8_t isCaveSimple(int x, int y, int z, uint8_t height, uint8_t 
   return cave_density > threshold ? 1 : 0;
 }
 
+static uint16_t getMineshaftBlockAt(int x, int y, int z) {
+  if (y < 16 || y >= 64) return 0xFFFF;
+
+  int cx = div_floor(x, 16) * 16;
+  int cy = div_floor(y, 16) * 16;
+  int cz = div_floor(z, 16) * 16;
+
+  uint64_t chunk_key = splitmix64(((uint64_t)(uint32_t)cx * 73856093 ^ (uint64_t)(uint32_t)cz * 83492791) ^ world_seed);
+  if ((uint32_t)(chunk_key % 5) != 0) return 0xFFFF;
+
+  int target_cy = ((chunk_key >> 16) % 3) * 16 + 16;
+  if (cy != target_cy) return 0xFFFF;
+
+  uint64_t seed = splitmix64((chunk_key >> 32) ^ (uint64_t)(uint32_t)cy);
+
+  int dir = (seed >> 7) & 1;
+  int pos = (seed >> 8) & 0xF;
+  int y_off = ((seed >> 12) & 0xE) + 1;
+  if (y_off > 11) y_off = 11;
+
+  int lx = x - cx;
+  int ly = y - cy;
+  int lz = z - cz;
+
+  int step, dw;
+  if (dir == 0) { step = lx; dw = lz - pos; }
+  else          { step = lz; dw = lx - pos; }
+
+  if (step < 0 || step >= 16) return 0xFFFF;
+  if (dw < -2 || dw > 2) return 0xFFFF;
+
+  int dy = ly - y_off;
+  if (dy < 0 || dy >= 5) return 0xFFFF;
+
+  int support = (step % 5) == 2;
+  uint32_t dec = (uint32_t)(seed >> 16);
+  int has_torch = !support && ((dec >> (step * 2 + 1)) & 1);
+  int has_cobweb = !support && ((dec >> (step * 3 + 16)) & 3) == 0;
+
+  if (support && (dw == -2 || dw == 2)) {
+    return B_oak_fence;
+  }
+  if (dy == 0) return B_oak_planks;
+  if (dy == 1 && dw >= -1 && dw <= 1) {
+    if (dw == 0) {
+      if (has_torch) return B_torch;
+      if (has_cobweb) return B_cobweb;
+    }
+    return B_air;
+  }
+  if (dw == -2 || dw == 2) return B_oak_planks;
+  if (support && dy >= 4) return B_oak_planks;
+  return B_air;
+}
+
 
 uint16_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor anchor, ChunkFeature feature, uint8_t height) {
 
@@ -1668,6 +1723,10 @@ uint16_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor
     // Generate ore clumps using 3D noise for clustered veins
     uint16_t ore = getOreClumpAt(x, y, z, anchor.biome);
     if (ore != 0) return ore;
+
+    // Check for mineshaft blocks
+    uint16_t ms_block = getMineshaftBlockAt(x, y, z);
+    if (ms_block != 0xFFFF) return ms_block;
 
     // For everything else, fall back to stone
     return B_stone;

@@ -1567,7 +1567,8 @@ uint8_t isInstantlyMined (PlayerData *player, uint16_t block) {
     block == B_cornflower ||
     block == B_wither_rose ||
     block == B_lily_of_the_valley ||
-    block == B_lily_pad
+    block == B_lily_pad ||
+    block == B_torch
   );
 
 }
