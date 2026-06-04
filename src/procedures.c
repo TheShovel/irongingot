@@ -1510,6 +1510,11 @@ uint16_t getMiningResult (uint16_t held_item, uint16_t block) {
       ) return 0;
       break;
 
+    case B_obsidian:
+      // Only diamond pickaxe can mine obsidian
+      if (held_item != I_diamond_pickaxe) return 0;
+      break;
+
     case B_gravel:
       // 50% chance to drop flint instead of gravel
       if (fast_rand() % 2 == 0) return I_flint;
@@ -1538,6 +1543,9 @@ uint8_t isInstantlyMined (PlayerData *player, uint16_t block) {
     held_item == I_netherite_shovel ||
     held_item == I_golden_shovel
   );
+
+  if (block == B_obsidian)
+    return held_item == I_diamond_pickaxe;
 
   if (isLeafBlock(block))
     return held_item == I_shears;
@@ -2377,7 +2385,15 @@ static uint8_t handleBucketUse(PlayerData *player, short x, short y, short z, ui
   uint8_t fy = y;
   if (!getFaceOffsetBlock(x, y, z, face, &fx, &fy, &fz)) return true;
 
-  if (!isReplaceableBlock(getBlockAt2(fx, fy, fz, player->dimension))) return true;
+  uint16_t existing = getBlockAt2(fx, fy, fz, player->dimension);
+  // Water + lava = obsidian
+  if (fluid == B_water && existing >= B_lava && existing < B_lava + 4) {
+    fluid = B_obsidian;
+  } else if (fluid == B_lava && existing >= B_water && existing < B_water + 8) {
+    fluid = B_obsidian;
+  }
+
+  if (!isReplaceableBlock(existing)) return true;
   if (is_in_safe_area(fx, fz, player->dimension)) {
     sc_systemChat(player->client_fd, "§cCannot interact with blocks in protected spawn area", 54);
     return true;
