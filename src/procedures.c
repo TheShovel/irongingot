@@ -1010,6 +1010,7 @@ uint16_t getBlockChange (short x, uint8_t y, short z) {
     }
     // Skip chest inventory entries
     if (block_changes[i].block == B_chest) {
+      if (i + 14 >= block_changes_count) break;
       i += 14;
     }
   }
@@ -1071,7 +1072,7 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint16_t block, uint8_t di
   #define CLEAR_OLD_SPECIAL_ENTRIES(idx) \
     do { \
       if (block_changes[idx].block == B_chest) { \
-        for (int j = 1; j < 15; j++) block_changes[(idx) + j].block = 0xFF; \
+        for (int j = 1; j < 15 && (idx) + j < block_changes_count; j++) block_changes[(idx) + j].block = 0xFF; \
       } else if (is_door_block(block_changes[idx].block)) { \
         if ((idx) + 1 < block_changes_count) block_changes[(idx) + 1].block = 0xFF; \
         if ((idx) + 2 < block_changes_count) block_changes[(idx) + 2].block = 0xFF; \
@@ -1129,9 +1130,9 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint16_t block, uint8_t di
       return 0;
     }
     // Skip extra entries for special blocks during search
-    if (block_changes[i].block == B_chest) { i += 14; continue; }
+    if (block_changes[i].block == B_chest) { if (i + 14 >= block_changes_count) break; i += 14; continue; }
     #ifdef ALLOW_DOORS
-    if (is_door_block(block_changes[i].block)) { i += 2; continue; }
+    if (is_door_block(block_changes[i].block)) { if (i + 2 >= block_changes_count) break; i += 2; continue; }
     #endif
     if (is_stair_block(block_changes[i].block) || block_changes[i].block == B_furnace) { i += 1; }
   }
@@ -1191,13 +1192,7 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint16_t block, uint8_t di
     block_changes[base].dimension = dimension;
 
     if (block == B_chest) {
-      // Zero out the following 14 entries for item data
-      for (int j = 1; j < 15; j ++) {
-        block_changes[base + j].x = 0;
-        block_changes[base + j].y = 0;
-        block_changes[base + j].z = 0;
-        block_changes[base + j].block = 0;
-      }
+      memset(&block_changes[base + 1], 0, 14 * sizeof(BlockChange));
       special_block_set_state(x, y, z, block, oriented_encode_state(0));
     }
     #ifdef ALLOW_DOORS

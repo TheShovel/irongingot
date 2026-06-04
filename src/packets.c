@@ -712,14 +712,18 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
     ) continue;
 
     if (block_changes_snapshot[i].x < x || block_changes_snapshot[i].x >= x + 16) {
-      if (block_changes_snapshot[i].block == B_chest) i += 14;
-      else if (isStairBlock(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_furnace) i += 1;
+      if (block_changes_snapshot[i].block == B_chest) {
+        if (i + 14 >= block_changes_snapshot_count) continue;
+        i += 14;
+      } else if (isStairBlock(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_furnace) i += 1;
       else if (isDoorBlock(block_changes_snapshot[i].block)) i += 2;
       continue;
     }
     if (block_changes_snapshot[i].z < z || block_changes_snapshot[i].z >= z + 16) {
-      if (block_changes_snapshot[i].block == B_chest) i += 14;
-      else if (isStairBlock(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_furnace) i += 1;
+      if (block_changes_snapshot[i].block == B_chest) {
+        if (i + 14 >= block_changes_snapshot_count) continue;
+        i += 14;
+      } else if (isStairBlock(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_furnace) i += 1;
       else if (isDoorBlock(block_changes_snapshot[i].block)) i += 2;
       continue;
     }
@@ -771,6 +775,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
 
       if (block_changes_snapshot[i].block == B_chest) {
         sendOrientedUpdate(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].block, direction);
+        if (i + 14 >= block_changes_snapshot_count) continue;
         i += 14;
       } else {
         sendOrientedUpdate(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].block, direction);
@@ -995,7 +1000,9 @@ int cs_clickContainer (int client_fd) {
   if (mode == 4 && clicked_slot != -999) {
     // when using drop button, re-sync the respective slot
     uint8_t slot = clientSlotToServerSlot(window_id, clicked_slot);
-    sc_setContainerSlot(client_fd, window_id, clicked_slot, player->inventory_count[slot], player->inventory_items[slot]);
+    if (slot <= 40) {
+      sc_setContainerSlot(client_fd, window_id, clicked_slot, player->inventory_count[slot], player->inventory_items[slot]);
+    }
     apply_changes = false;
   } else if (mode == 0 && clicked_slot == -999) {
     // when clicking outside inventory, return the dropped item to the player
@@ -1026,6 +1033,7 @@ int cs_clickContainer (int client_fd) {
   for (int i = 0; i < changes_count; i ++) {
 
     slot = clientSlotToServerSlot(window_id, readUint16(client_fd));
+    if (slot > 67) continue; // skip out-of-bounds slots
     // slots outside of the inventory overflow into the crafting buffer
     if (slot > 40 && apply_changes) craft = true;
 
