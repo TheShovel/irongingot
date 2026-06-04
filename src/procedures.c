@@ -54,6 +54,50 @@ static int getPlayerIndexByPointer(PlayerData *player) {
   return (int)(player - player_data);
 }
 
+static uint8_t getConfiguredGameMode(void) {
+  if (config.gamemode < 0 || config.gamemode > 3) return GAMEMODE;
+  return (uint8_t)config.gamemode;
+}
+
+static uint8_t getAbilityFlagsForGameMode(uint8_t gamemode) {
+  switch (gamemode) {
+    case 1: return 0x0D; // invulnerable, may fly, instant build
+    case 3: return 0x07; // invulnerable, flying, may fly
+    default: return config.enable_flight ? 0x04 : 0x00;
+  }
+}
+
+uint8_t isPlayerNoclipEnabled(PlayerData *player) {
+  int player_index = getPlayerIndexByPointer(player);
+  if (player_index < 0) return 0;
+  return player_noclip[player_index] != 0;
+}
+
+void syncPlayerNoclipState(PlayerData *player) {
+  int player_index = getPlayerIndexByPointer(player);
+  if (player_index < 0 || player->client_fd == -1) return;
+
+  uint8_t gamemode = player_noclip[player_index] ? 3 : getConfiguredGameMode();
+  sc_gameEvent(player->client_fd, 3, (float)gamemode);
+  sc_playerAbilities(player->client_fd, getAbilityFlagsForGameMode(gamemode));
+  sc_playerInfoUpdateUpdateGamemode(player->client_fd, *player, gamemode);
+
+  // Synchronize position to force the client to refresh its state/collision
+  sc_synchronizePlayerPosition(player->client_fd,
+    (double)player->x + 0.5, (double)player->y, (double)player->z + 0.5,
+    (float)player->yaw * 180.0f / 127.0f, (float)player->pitch * 90.0f / 127.0f);
+
+  player->grounded_y = player->y;
+}
+
+void setPlayerNoclip(PlayerData *player, uint8_t enabled) {
+  int player_index = getPlayerIndexByPointer(player);
+  if (player_index < 0) return;
+
+  player_noclip[player_index] = enabled ? 1 : 0;
+  syncPlayerNoclipState(player);
+}
+
 static uint8_t isSafeSkinName(const char *name) {
   if (!name || !name[0]) return false;
   for (int i = 0; name[i] != '\0'; i++) {
@@ -255,6 +299,7 @@ int reservePlayerData (int client_fd, uint8_t *uuid, char *name) {
         player_data[i].visited_x[j] = 32767;
         player_data[i].visited_z[j] = 32767;
       }
+      player_noclip[i] = 0;
       loadPlayerAppearance(i, uuid, name);
       initCreativeModeUI(i);  // Initialize creative mode UI for this player
       return 0;
@@ -276,6 +321,7 @@ int reservePlayerData (int client_fd, uint8_t *uuid, char *name) {
       memcpy(player_data[i].uuid, uuid, 16);
       memcpy(player_data[i].name, name, 16);
       resetPlayerData(&player_data[i]);
+      player_noclip[i] = 0;
       loadPlayerAppearance(i, uuid, name);
       initCreativeModeUI(i);  // Initialize creative mode UI for this player
       player_data_count ++;
@@ -320,6 +366,7 @@ void handlePlayerDisconnect (int client_fd) {
     if (player_data[i].client_fd != client_fd) continue;
     // Mark the player as being offline
     player_data[i].client_fd = -1;
+    player_noclip[i] = 0;
     // Prepare leave message for broadcast
     uint8_t player_name_len = strlen(player_data[i].name);
     strcpy((char *)recv_buffer, player_data[i].name);
@@ -538,7 +585,7 @@ void spawnPlayer (PlayerData *player) {
         if (fh > 100) fh = 100;
         spawn_y = (float)(fh + 2);
       }
-      player->y = (uint8_t)spawn_y;
+      player->y = (int16_t)spawn_y;
     }
     spawn_yaw = player->yaw * 180 / 127;
     spawn_pitch = player->pitch * 90 / 127;
@@ -2346,7 +2393,7 @@ void switchPlayerDimension(PlayerData *player) {
     // floor that may not be loaded yet.)
     player->x = np_x;
     player->z = np_z;
-    player->y = (float)(np_h + 5);
+    player->y = (int16_t)(np_h + 5);
     // Recalculate center chunk from new position
     cx = div_floor(player->x, 16);
     cz = div_floor(player->z, 16);
@@ -2387,6 +2434,7 @@ void switchPlayerDimension(PlayerData *player) {
   }
   sc_setHeldItem(player->client_fd, player->hotbar);
   sc_setHealth(player->client_fd, player->health, player->hunger, player->saturation);
+  if (isPlayerNoclipEnabled(player)) syncPlayerNoclipState(player);
 
   sc_synchronizePlayerPosition(player->client_fd,
     (float)player->x + 0.5f, (float)player->y, (float)player->z + 0.5f,

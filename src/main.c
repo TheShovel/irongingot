@@ -452,12 +452,16 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
 
         PlayerData *player;
         if (getPlayerData(client_fd, &player)) break;
+        int player_index = (int)(player - player_data);
+        uint8_t noclip_enabled = player_index >= 0 && player_index < MAX_PLAYERS && player_noclip[player_index];
 
         uint8_t block_feet = getBlockAt(player->x, player->y, player->z);
         uint8_t swimming = block_feet >= B_water && block_feet < B_water + 8;
 
         // Handle fall damage
-        if (on_ground) {
+        if (noclip_enabled) {
+          player->grounded_y = player->y;
+        } else if (on_ground) {
           int16_t damage = player->grounded_y - player->y - 3;
           if (damage > 0 && (GAMEMODE == 0 || GAMEMODE == 2) && !swimming) {
             hurtEntity(client_fd, -1, D_fall, damage);
@@ -550,6 +554,7 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
         // Cast the values to short to get integer position
         short cx = x, cy = y, cz = z;
         if (x < 0) cx -= 1;
+        if (y < 0) cy -= 1;
         if (z < 0) cz -= 1;
         // Determine the player's chunk coordinates
         short _x = div_floor(cx, 16), _z = div_floor(cz, 16);
@@ -558,11 +563,11 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
         short dz = _z - div_floor(player->z, 16);
 
         // Prevent players from leaving the world
-        if (cy < 0) {
+        if (!noclip_enabled && cy < 0) {
           cy = 0;
           player->grounded_y = 0;
           sc_synchronizePlayerPosition(client_fd, cx, 0, cz, player->yaw * 180 / 127, player->pitch * 90 / 127);
-        } else if (cy > 255) {
+        } else if (!noclip_enabled && cy > 255) {
           cy = 255;
           sc_synchronizePlayerPosition(client_fd, cx, 255, cz, player->yaw * 180 / 127, player->pitch * 90 / 127);
         }
@@ -571,6 +576,7 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
         player->x = cx;
         player->y = cy;
         player->z = cz;
+        if (noclip_enabled) player->grounded_y = player->y;
 
         // Only update center chunk when crossing chunk borders.
         // Actual chunk streaming is handled asynchronously by chunk_streamer_worker.

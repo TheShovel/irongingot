@@ -436,13 +436,18 @@ int sc_updateTime (int client_fd, uint64_t ticks) {
   return 0;
 }
 
-// S->C Game Event 13 (Start waiting for level chunks)
-int sc_startWaitingForChunks (int client_fd) {
+// S->C Game Event
+int sc_gameEvent (int client_fd, uint8_t event, float value) {
   startPacket(client_fd, 0x22);
-  writeByte(client_fd, 13);
-  writeUint32(client_fd, 0);
+  writeByte(client_fd, event);
+  writeFloat(client_fd, value);
   endPacket(client_fd);
   return 0;
+}
+
+// S->C Game Event 13 (Start waiting for level chunks)
+int sc_startWaitingForChunks (int client_fd) {
+  return sc_gameEvent(client_fd, 13, 0.0f);
 }
 
 // S->C Chunk Batch Start (1.21.5+)
@@ -1294,6 +1299,24 @@ int sc_playerInfoUpdateAddPlayer (int client_fd, PlayerData player) {
   return 0;
 }
 
+// S->C Player Info Update, "Update Game Mode" action
+int sc_playerInfoUpdateUpdateGamemode (int client_fd, PlayerData player, uint8_t gamemode) {
+
+  startPacket(client_fd, 0x3F); // Packet ID
+
+  writeByte(client_fd, 0x04); // EnumSet: Update Game Mode
+  writeVarInt(client_fd, 1); // Player count
+
+  // Player UUID
+  send_all(client_fd, player.uuid, 16);
+  // Game Mode
+  writeVarInt(client_fd, gamemode);
+
+  endPacket(client_fd);
+
+  return 0;
+}
+
 // S->C Spawn Entity
 int sc_spawnEntity (
   int client_fd,
@@ -1735,6 +1758,35 @@ int cs_chat (int client_fd) {
     goto cleanup;
   }
 
+  if (!strncmp((char *)recv_buffer, "!noclip", 7) && (recv_buffer[7] == '\0' || recv_buffer[7] == ' ')) {
+    int arg_offset = 8;
+    while (arg_offset < 224 && recv_buffer[arg_offset] == ' ') arg_offset++;
+
+    uint8_t enabled = !isPlayerNoclipEnabled(player);
+    if (recv_buffer[arg_offset] != '\0') {
+      char *arg = (char *)recv_buffer + arg_offset;
+      if (!strncmp(arg, "on", 2) && (arg[2] == '\0' || arg[2] == ' ')) {
+        enabled = 1;
+      } else if (!strncmp(arg, "off", 3) && (arg[3] == '\0' || arg[3] == ' ')) {
+        enabled = 0;
+      } else {
+        const char usage[] = "§7Usage: !noclip [on|off]";
+        sc_systemChat(client_fd, (char *)usage, (uint16_t)sizeof(usage) - 1);
+        goto cleanup;
+      }
+    }
+
+    setPlayerNoclip(player, enabled);
+    if (enabled) {
+      const char msg[] = "§aNoclip enabled. Use §f!noclip off§a to return.";
+      sc_systemChat(client_fd, (char *)msg, (uint16_t)sizeof(msg) - 1);
+    } else {
+      const char msg[] = "§7Noclip disabled.";
+      sc_systemChat(client_fd, (char *)msg, (uint16_t)sizeof(msg) - 1);
+    }
+    goto cleanup;
+  }
+
   if (!strncmp((char *)recv_buffer, "!help", 5)) {
     // Send command guide
     const char help_msg[] = "§7Commands:\n"
@@ -1747,6 +1799,7 @@ int cs_chat (int client_fd) {
     "  !find biome <name> [radius] - Alias for !findbiome\n"
     "  !creative - Toggle creative mode UI / !creative list - List all items\n"
     "  !creative <item_name> - Give yourself an item (e.g., !creative oak_log)\n"
+    "  !noclip [on|off] - Toggle spectator-style noclip movement\n"
     "  !help - Show this help message";
     sc_systemChat(client_fd, (char *)help_msg, (uint16_t)sizeof(help_msg) - 1);
     goto cleanup;
@@ -1869,15 +1922,15 @@ int cs_chat (int client_fd) {
     // Clamp values
     if (tx < -30000000) tx = -30000000;
     if (tx > 30000000) tx = 30000000;
-    if (ty < 0) ty = 0;
-    if (ty > 255) ty = 255;
+    if (ty < -32768) ty = -32768;
+    if (ty > 32767) ty = 32767;
     if (tz < -30000000) tz = -30000000;
     if (tz > 30000000) tz = 30000000;
     // Update player position
     player->x = (short)tx;
-    player->y = (uint8_t)ty;
+    player->y = (int16_t)ty;
     player->z = (short)tz;
-    player->grounded_y = ty;
+    player->grounded_y = (int16_t)ty;
     // Send teleport to player
     sc_synchronizePlayerPosition(client_fd, (double)tx + 0.5, (double)ty, (double)tz + 0.5,
       (float)player->yaw * 180.0f / 127.0f, (float)player->pitch * 90.0f / 127.0f);

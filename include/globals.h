@@ -269,6 +269,7 @@ extern uint16_t favicon_len;  // length of the base64 string (excluding null ter
 #endif
 
 extern uint16_t client_count;
+extern uint8_t player_noclip[MAX_PLAYERS];
 
 typedef struct {
   short x;
@@ -285,7 +286,7 @@ typedef struct {
   char name[16];
   int client_fd;
   short x;
-  uint8_t y;
+  int16_t y;
   short z;
   short visited_x[VISITED_HISTORY];
   short visited_z[VISITED_HISTORY];
@@ -295,7 +296,7 @@ typedef struct {
   #endif
   int8_t yaw;
   int8_t pitch;
-  uint8_t grounded_y;
+  int16_t grounded_y;
   uint8_t health;
   uint8_t hunger;
   uint16_t saturation;
@@ -322,7 +323,7 @@ typedef struct {
   uint8_t dimension;
   uint8_t portal_valid;  // 0 = none, 1 = portal_ow fields track overworld entry
   short portal_ow_x;
-  uint8_t portal_ow_y;
+  int16_t portal_ow_y;
   short portal_ow_z;
 } PlayerData;
 

@@ -60,6 +60,7 @@ uint16_t favicon_len = 0;
 #endif
 
 uint16_t client_count;
+uint8_t player_noclip[MAX_PLAYERS];
 
 #ifdef INFINITE_BLOCK_CHANGES
 BlockChange *block_changes = NULL;
