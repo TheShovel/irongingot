@@ -1510,6 +1510,11 @@ uint16_t getMiningResult (uint16_t held_item, uint16_t block) {
       ) return 0;
       break;
 
+    case B_gravel:
+      // 50% chance to drop flint instead of gravel
+      if (fast_rand() % 2 == 0) return I_flint;
+      return I_gravel;
+
     default: break;
   }
 

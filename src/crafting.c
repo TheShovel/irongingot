@@ -231,6 +231,38 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
             *count = 1;
             return;
           }
+          // Flint and steel: iron ingot + flint (shapeless)
+          if (!identical) {
+            uint16_t other_item = 0;
+            for (uint8_t j = 0; j < 9; j++) {
+              if (j != first && player->craft_items[j]) {
+                other_item = player->craft_items[j];
+                break;
+              }
+            }
+            if (other_item == I_flint) {
+              *item = I_flint_and_steel;
+              *count = 1;
+              return;
+            }
+          }
+          break;
+        case I_flint:
+          // Flint and steel: flint + iron ingot (shapeless)
+          if (!identical) {
+            uint16_t other_item = 0;
+            for (uint8_t j = 0; j < 9; j++) {
+              if (j != first && player->craft_items[j]) {
+                other_item = player->craft_items[j];
+                break;
+              }
+            }
+            if (other_item == I_iron_ingot) {
+              *item = I_flint_and_steel;
+              *count = 1;
+              return;
+            }
+          }
           break;
 
         default: break;
