@@ -632,7 +632,7 @@ static inline uint8_t isCaveSimple(int x, int y, int z, uint8_t height, uint8_t 
   if (y > height - 4) return 0;
 
   // Don't generate caves below bedrock level
-  if (y < 6) return 0;
+  if (y < 5) return 0;
 
   // Use 3D noise with surface-like parameters for natural cave shapes
   double cave_scale = 0.04;  // Larger scale = bigger, smoother caves
@@ -1655,18 +1655,19 @@ uint16_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor
 
   // Starting at 4 blocks below terrain level, generate minerals and caves
   if (y <= height - 4) {
+    // Deep bedrock layer - now a 5-block thick floor at the bottom of the world
+    if (y >= 0 && y < 5) return B_bedrock;
+
     // Check for caves using surface-like noise for natural shapes
     if (isCaveSimple(x, y, z, height, anchor.biome)) {
-      // Cave found - return air
+      // Fill caves with lava below the lava level (Y=7)
+      if (y <= 7) return B_lava;
       return B_air;
     }
 
     // Generate ore clumps using 3D noise for clustered veins
     uint16_t ore = getOreClumpAt(x, y, z, anchor.biome);
     if (ore != 0) return ore;
-    
-    // Deep bedrock layer
-    if (y < 5) return B_bedrock;
 
     // For everything else, fall back to stone
     return B_stone;
@@ -1704,6 +1705,13 @@ uint16_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor
     
     // Water above the floor
     return B_water;
+  }
+
+  // Global lava level (like sea level) - fills caves and deep air pockets
+  if (y <= 7) {
+    // Occasional magma blocks at the bedrock floor
+    if (y == 5 && ((x ^ z) & 3) == 0) return B_magma_block;
+    return B_lava;
   }
 
   // For everything else, fall back to air
@@ -1792,7 +1800,6 @@ uint16_t getNetherBlockAt (int x, int y, int z) {
 }
 
 uint16_t getBlockAt2 (int x, int y, int z, uint8_t dimension) {
-  if (y < 0) return B_bedrock;
   uint16_t block_change = getBlockChange(x, y, z);
   if (block_change != 0xFF) return block_change;
   if (dimension == DIMENSION_NETHER) {
