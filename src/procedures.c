@@ -1103,6 +1103,12 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint16_t block, uint8_t di
       // Clear any old special block state entries
       CLEAR_OLD_SPECIAL_ENTRIES(i);
 
+      if (block == B_chest && block_changes[i].block != B_chest) {
+        block_changes[i].block = 0xFF;
+        if (is_base_block) special_block_clear(x, y, z);
+        continue;
+      }
+
       if (is_base_block) {
         block_changes[i].block = 0xFF;
         special_block_clear(x, y, z);
@@ -1117,6 +1123,7 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint16_t block, uint8_t di
         } else if (block == B_furnace) {
           special_block_set_state(x, y, z, block, furnace_encode_state(0, 0));
         } else if (block == B_chest) {
+          memset(&block_changes[i + 1], 0, 14 * sizeof(BlockChange));
           special_block_set_state(x, y, z, block, oriented_encode_state(0));
         }
       }

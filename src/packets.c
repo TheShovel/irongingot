@@ -620,11 +620,16 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
         uint16_t _pv = _pal[_j]; \
         if (_pv & 0x8000) { \
           uint8_t _t = _pv & 0x1FF; \
-          uint8_t _d = (_pv >> 9) & 3; \
-          uint8_t _h = (_pv >> 12) & 1; \
-          uint8_t _o = (_pv >> 13) & 1; \
-          uint8_t _u = (_pv >> 14) & 1; \
-          val = get_door_state_id(_t, _u, _o, _d, _h); \
+          if (_t == B_chest) { \
+            uint8_t _d = (_pv >> 9) & 3; \
+            val = get_oriented_state_id(_t, _d); \
+          } else { \
+            uint8_t _d = (_pv >> 9) & 3; \
+            uint8_t _h = (_pv >> 12) & 1; \
+            uint8_t _o = (_pv >> 13) & 1; \
+            uint8_t _u = (_pv >> 14) & 1; \
+            val = get_door_state_id(_t, _u, _o, _d, _h); \
+          } \
         } else { \
           val = block_palette[_pv]; \
         } \
@@ -830,12 +835,12 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
     sc_blockUpdate(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].block);
   }
 
-  // Send door updates for village-generated doors (not in block changes).
-  // Village doors in chunk sections have default "lower half" state, so both
-  // halves appear as lower.  We override them with proper upper/lower states.
+  // Send updates for village-generated doors and chests (not in block changes).
+  // Chunk data has packed values; correct state and special_block entries
+  // are applied here.
   #ifdef ALLOW_DOORS
-  int processed_village_doors[64][3];
-  int num_village_doors = 0;
+  int processed_village[64][3];
+  int num_village = 0;
   for (int i = 0; i < terrain_sections; i++) {
     int section_y = (dimension == DIMENSION_NETHER) ? i * 16 : i * 16;
     if (section_y > 200 || section_y + 16 < 60) continue;
@@ -843,7 +848,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
     for (int j = 0; j < 4096; j++) {
       uint16_t raw = section[j];
       uint16_t block_type = (raw & 0x8000) ? (raw & 0x1FF) : raw;
-      if (!isDoorBlock(block_type)) continue;
+      if (!isDoorBlock(block_type) && block_type != B_chest) continue;
 
       int address = (j & ~7) | (7 - (j & 7));
       int wx = x + (address & 15);
@@ -851,45 +856,59 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
       int wy = section_y + (address >> 8);
 
       int skip = 0;
-      for (int p = 0; p < num_village_doors; p++)
-        if (processed_village_doors[p][0] == wx &&
-            processed_village_doors[p][1] == wy &&
-            processed_village_doors[p][2] == wz) { skip = 1; break; }
+      for (int p = 0; p < num_village; p++)
+        if (processed_village[p][0] == wx &&
+            processed_village[p][1] == wy &&
+            processed_village[p][2] == wz) { skip = 1; break; }
       if (skip) continue;
 
       for (int k = 0; k < block_changes_snapshot_count && !skip; k++) {
         if (block_changes_snapshot[k].block == 0xFF) continue;
-        if (isDoorBlock(block_changes_snapshot[k].block) &&
+        if ((isDoorBlock(block_changes_snapshot[k].block) || block_changes_snapshot[k].block == B_chest) &&
             block_changes_snapshot[k].x == wx &&
             block_changes_snapshot[k].y == wy &&
             block_changes_snapshot[k].z == wz) skip = 1;
       }
       if (skip) continue;
 
-      // Read existing state or init default
-      if (!special_block_has_entry(wx, wy, wz)) {
-        uint16_t vs = door_encode_state(0, 0, 1);
-        special_block_set_state(wx, wy, wz, block_type, vs);
-        if (!special_block_has_entry(wx, wy + 1, wz))
-          special_block_set_state(wx, wy + 1, wz, block_type, vs);
-      }
-      // Send correct state to client (chunk data may have stale default)
-      uint16_t st = special_block_get_state(wx, wy, wz);
-      uint8_t open = door_get_open(st);
-      uint8_t hinge = door_get_hinge(st);
-      uint8_t dir = door_get_direction(st);
-      sendDoorUpdate(client_fd, wx, wy, wz, block_type, 0, open, dir, hinge);
-      sendDoorUpdate(client_fd, wx, wy + 1, wz, block_type, 1, open, dir, hinge);
+      if (block_type == B_chest) {
+        uint8_t direction = (raw >> 9) & 3;
+        if (!special_block_has_entry(wx, wy, wz))
+          special_block_set_state(wx, wy, wz, block_type, oriented_encode_state(direction));
+        uint16_t st = special_block_get_state(wx, wy, wz);
+        sendOrientedUpdate(client_fd, wx, wy, wz, block_type, oriented_get_direction(st));
+        if (num_village < 62) {
+          processed_village[num_village][0] = wx;
+          processed_village[num_village][1] = wy;
+          processed_village[num_village][2] = wz;
+          num_village++;
+        }
+      } else {
+        // Read existing state or init default
+        if (!special_block_has_entry(wx, wy, wz)) {
+          uint16_t vs = door_encode_state(0, 0, 1);
+          special_block_set_state(wx, wy, wz, block_type, vs);
+          if (!special_block_has_entry(wx, wy + 1, wz))
+            special_block_set_state(wx, wy + 1, wz, block_type, vs);
+        }
+        // Send correct state to client (chunk data may have stale default)
+        uint16_t st = special_block_get_state(wx, wy, wz);
+        uint8_t open = door_get_open(st);
+        uint8_t hinge = door_get_hinge(st);
+        uint8_t dir = door_get_direction(st);
+        sendDoorUpdate(client_fd, wx, wy, wz, block_type, 0, open, dir, hinge);
+        sendDoorUpdate(client_fd, wx, wy + 1, wz, block_type, 1, open, dir, hinge);
 
-      if (num_village_doors < 62) {
-        processed_village_doors[num_village_doors][0] = wx;
-        processed_village_doors[num_village_doors][1] = wy;
-        processed_village_doors[num_village_doors][2] = wz;
-        num_village_doors++;
-        processed_village_doors[num_village_doors][0] = wx;
-        processed_village_doors[num_village_doors][1] = wy + 1;
-        processed_village_doors[num_village_doors][2] = wz;
-        num_village_doors++;
+        if (num_village < 62) {
+          processed_village[num_village][0] = wx;
+          processed_village[num_village][1] = wy;
+          processed_village[num_village][2] = wz;
+          num_village++;
+          processed_village[num_village][0] = wx;
+          processed_village[num_village][1] = wy + 1;
+          processed_village[num_village][2] = wz;
+          num_village++;
+        }
       }
     }
   }

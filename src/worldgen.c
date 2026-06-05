@@ -818,6 +818,19 @@ static uint16_t getVillageBlockAt(int x, int y, int z) {
 
     if (dx == -2 || dx == 2 || dz == -2 || dz == 2) return wall;
 
+    // Chest at rel_y=1, ~50% of houses (hash from house center)
+    // Chest facing: north=0, south=1, west=2, east=3 (JSON property order)
+    if (rel_y == 1 && adx <= 1 && adz <= 1) {
+      uint64_t ck = splitmix64((uint64_t)(uint32_t)hx * 31337 ^ (uint64_t)(uint32_t)hz * 12345 ^ key);
+      if ((ck >> 16) & 1) {
+        int cd, cz;
+        int cfacing;
+        if ((ck >> 20) & 1) { cd = -1; cz = 0; cfacing = 3; }
+        else { cd = -1; cz = 1; cfacing = 3; }
+        if (dx == cd && dz == cz) return 0x8000 | B_chest | (cfacing << 9);
+      }
+    }
+
     return B_air;
   }
 
