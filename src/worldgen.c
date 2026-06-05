@@ -713,7 +713,7 @@ static uint16_t getVillageBlockAt(int x, int y, int z) {
   int vz = div_floor(z, 48);
 
   uint64_t key = splitmix64(((uint64_t)(uint32_t)vx * 1234567 ^ (uint64_t)(uint32_t)vz * 7654321) ^ world_seed);
-  if ((uint32_t)(key % 4) != 0) return 0xFFFF;
+  if ((uint32_t)(key % 8) != 0) return 0xFFFF;
 
   // Keep village center ≥18 blocks from either 48-block boundary so
   // houses (offset -15..+16, radius 3) stay within their own area

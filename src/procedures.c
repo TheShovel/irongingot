@@ -1973,6 +1973,7 @@ uint8_t handlePlayerEating (PlayerData *player, uint8_t just_check) {
     case I_cooked_mutton: food = 6; saturation = 4800; break;
     case I_rotten_flesh: food = 4; saturation = 0; break;
     case I_apple: food = 4; saturation = 1200; break;
+    case I_bread: food = 5; saturation = 3000; break;
     default: break;
   }
 
