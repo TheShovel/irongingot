@@ -364,6 +364,7 @@ void handlePlayerDisconnect (int client_fd) {
   // Search for a corresponding player in the player data array
   for (int i = 0; i < MAX_PLAYERS; i ++) {
     if (player_data[i].client_fd != client_fd) continue;
+    PlayerData leaving_player = player_data[i];
     // Mark the player as being offline
     player_data[i].client_fd = -1;
     player_noclip[i] = 0;
@@ -373,11 +374,13 @@ void handlePlayerDisconnect (int client_fd) {
     strcpy((char *)recv_buffer + player_name_len, " left the game");
     // Broadcast this player's leave to all other connected clients
     for (int j = 0; j < MAX_PLAYERS; j ++) {
+      if (player_data[j].client_fd == -1) continue;
       if (player_data[j].client_fd == client_fd) continue;
       if (player_data[j].flags & 0x20) continue;
       // Send chat message
       sc_systemChat(player_data[j].client_fd, (char *)recv_buffer, 14 + player_name_len);
-      // Remove leaving player's entity
+      // Remove leaving player from tab list and from the world entity list
+      sc_playerInfoRemovePlayer(player_data[j].client_fd, leaving_player);
       sc_removeEntity(player_data[j].client_fd, client_fd);
     }
     break;

@@ -1495,25 +1495,47 @@ int cs_closeContainer (int client_fd) {
   return 0;
 }
 
-// S->C Player Info Update, "Add Player" action
+// S->C Player Info Update: Add Player + listed/gamemode/latency.
 int sc_playerInfoUpdateAddPlayer (int client_fd, PlayerData player) {
   PlayerAppearance *appearance = findPlayerAppearanceByUuid(player.uuid);
 
-  startPacket(client_fd, 0x3F); // Packet ID
+  startPacket(client_fd, 0x3F); // Player Info Update
 
-  writeByte(client_fd, 0x01); // EnumSet: Add Player
+  // Action mask: Add Player | Update Game Mode | Update Listed | Update Latency.
+  // Modern clients do not show entries in the tab list until Update Listed=true
+  // has been sent for that profile.
+  writeByte(client_fd, 0x1D);
   writeVarInt(client_fd, 1); // Player count (1 per packet)
 
   // Player UUID
   send_all(client_fd, player.uuid, 16);
-  // Player name
+
+  // Add Player fields
   int player_name_len = (int)strlen(player.name);
   writeVarInt(client_fd, player_name_len);
   send_all(client_fd, player.name, player_name_len);
   writePlayerProfileProperties(client_fd, appearance);
 
+  // Update Game Mode fields
+  writeVarInt(client_fd, GAMEMODE);
+
+  // Update Listed fields
+  writeByte(client_fd, true);
+
+  // Update Latency fields
+  writeVarInt(client_fd, 0);
+
   endPacket(client_fd);
 
+  return 0;
+}
+
+// S->C Player Info Remove
+int sc_playerInfoRemovePlayer (int client_fd, PlayerData player) {
+  startPacket(client_fd, 0x3E); // Player Info Remove
+  writeVarInt(client_fd, 1);
+  send_all(client_fd, player.uuid, 16);
+  endPacket(client_fd);
   return 0;
 }
 

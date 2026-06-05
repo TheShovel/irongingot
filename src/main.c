@@ -361,13 +361,15 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
         // Send full client spawn sequence
         spawnPlayer(player);
 
-        // Register all existing players and spawn their entities (same dimension only)
+        // Register all existing players in the tab list. Only spawn player
+        // entities that are in the joining player's current dimension.
         for (int i = 0; i < MAX_PLAYERS; i ++) {
           if (player_data[i].client_fd == -1) continue;
-          // Note that this will also filter out the joining player
+          // Note that this will also filter out the joining player until the
+          // client sends Player Loaded and handlePlayerJoin registers them.
           if (player_data[i].flags & 0x20) continue;
-          if (player_data[i].dimension != player->dimension) continue;
           sc_playerInfoUpdateAddPlayer(client_fd, player_data[i]);
+          if (player_data[i].dimension != player->dimension) continue;
           sc_spawnEntityPlayer(client_fd, player_data[i]);
           sendPlayerMetadata(client_fd, &player_data[i]);
           sendPlayerEquipment(client_fd, &player_data[i]);

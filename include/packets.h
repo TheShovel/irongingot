@@ -55,6 +55,7 @@ int sc_blockUpdateDoor (int client_fd, int64_t x, int64_t y, int64_t z, uint8_t 
 int sc_openScreen (int client_fd, uint8_t window, const char *title, uint16_t length);
 int sc_acknowledgeBlockChange (int client_fd, int sequence);
 int sc_playerInfoUpdateAddPlayer (int client_fd, PlayerData player);
+int sc_playerInfoRemovePlayer (int client_fd, PlayerData player);
 int sc_playerInfoUpdateUpdateGamemode (int client_fd, PlayerData player, uint8_t gamemode);
 int sc_spawnEntity (int client_fd, int id, uint8_t *uuid, int type, double x, double y, double z, uint8_t yaw, uint8_t pitch);
 int sc_spawnEntityPlayer (int client_fd, PlayerData player);
