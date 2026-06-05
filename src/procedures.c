@@ -2775,6 +2775,26 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
           block_changes[base].x = x; block_changes[base].y = y; block_changes[base].z = z;
           block_changes[base].block = B_chest; block_changes[base].dimension = player->dimension;
           memset(&block_changes[base + 1], 0, 14 * sizeof(BlockChange));
+          // Populate with 3 random common items
+          uint8_t *_slot = (uint8_t *)&block_changes[base + 1];
+          uint32_t _loot_seed = (uint32_t)(x * 2743 ^ y * 7451 ^ z * 5659);
+          int _set = _loot_seed % 4;
+          static const uint16_t _items[4][3] = {
+            {134, 882, 912},   // oak_log, stone_pickaxe, bread
+            {36,  883, 857},   // oak_planks, stone_axe, apple
+            {35,  881, 939},   // cobblestone, stone_shovel, cooked_porkchop
+            {310, 905, 1066},  // torch, stick, cooked_beef
+          };
+          static const uint8_t _counts[4][3] = {
+            {4, 1, 3}, {6, 1, 2}, {5, 1, 2}, {3, 4, 3}
+          };
+          for (int _s = 0; _s < 3; _s++) {
+            uint16_t _id = _items[_set][_s];
+            uint8_t _cnt = _counts[_set][_s] + (_loot_seed >> (_s * 5)) % 3;
+            _slot[_s * 3 + 0] = _id & 0xFF;
+            _slot[_s * 3 + 1] = (_id >> 8) & 0xFF;
+            _slot[_s * 3 + 2] = _cnt;
+          }
           if (i >= block_changes_count) block_changes_count = i + 1;
           chest_idx = base;
           uint16_t st = special_block_get_state(x, y, z);

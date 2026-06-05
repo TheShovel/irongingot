@@ -818,11 +818,14 @@ static uint16_t getVillageBlockAt(int x, int y, int z) {
 
     if (dx == -2 || dx == 2 || dz == -2 || dz == 2) return wall;
 
-    // Chest at rel_y=1 at back-center position
+    // Chest at rel_y=1 at back-center position (~75% chance)
     // Chest facing: north=0, south=1, west=2, east=3 (JSON property order)
     if (rel_y == 1 && dx == -1 && dz == 0) {
-      fprintf(stderr, "[CHEST] Spawning chest at village (%d,%d,%d) hx=%d hz=%d\n", x, y, z, hx, hz);
-      return 0x8000 | B_chest | (3 << 9);
+      uint32_t _ch = (uint32_t)(x * 1013 ^ y * 3929 ^ z * 7027);
+      if ((_ch & 3) != 0) {
+        fprintf(stderr, "[CHEST] Spawning chest at village (%d,%d,%d) hx=%d hz=%d\n", x, y, z, hx, hz);
+        return 0x8000 | B_chest | (3 << 9);
+      }
     }
 
     return B_air;
