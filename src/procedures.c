@@ -2749,7 +2749,41 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
         chest_idx = i;
         break;
       }
-      if (chest_idx < 0) return;
+      if (chest_idx < 0) {
+        // Village chest — create block_changes entry on first interaction
+        pthread_mutex_lock(&block_changes_mutex);
+        int slots_needed = 15;
+        int last_real = -1;
+        for (int i = 0; i <= block_changes_count + slots_needed; i++) {
+          #ifdef INFINITE_BLOCK_CHANGES
+          if (i >= block_changes_capacity - slots_needed) {
+            if (!config.infinite_block_changes) break;
+            int new_cap = block_changes_capacity * 2;
+            if (new_cap <= block_changes_capacity) new_cap = block_changes_capacity + slots_needed + 1;
+            BlockChange *nb = (BlockChange *)realloc(block_changes, new_cap * sizeof(BlockChange));
+            if (!nb) break;
+            block_changes = nb;
+            for (int j = block_changes_capacity; j < new_cap; j++) block_changes[j].block = 0xFF;
+            block_changes_capacity = new_cap;
+          }
+          #else
+          if (i >= MAX_BLOCK_CHANGES) break;
+          #endif
+          if (i < block_changes_count && block_changes[i].block != 0xFF) { last_real = i; continue; }
+          if (i - last_real != slots_needed) continue;
+          int base = last_real + 1;
+          block_changes[base].x = x; block_changes[base].y = y; block_changes[base].z = z;
+          block_changes[base].block = B_chest; block_changes[base].dimension = player->dimension;
+          memset(&block_changes[base + 1], 0, 14 * sizeof(BlockChange));
+          if (i >= block_changes_count) block_changes_count = i + 1;
+          chest_idx = base;
+          uint16_t st = special_block_get_state(x, y, z);
+          block_changes[chest_idx + 14].y = oriented_get_direction(st);
+          break;
+        }
+        pthread_mutex_unlock(&block_changes_mutex);
+        if (chest_idx < 0) return;
+      }
       memcpy(player->craft_items, &chest_idx, sizeof(chest_idx));
       player->flags |= 0x80;
       sc_blockEvent(player->client_fd, x, y, z, 1, 1, B_chest);

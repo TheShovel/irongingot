@@ -664,6 +664,24 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
     ENCODE_SECTION(cached_sections[i], cached_biomes[i]);
   }
 
+  // Scan terrain sections for village-generated chests that need block entities
+  // in the chunk data packet (otherwise they render invisible).
+  int chest_count = 0;
+  int chest_wx[64], chest_wy[64], chest_wz[64];
+  for (int _s = 0; _s < terrain_sections && chest_count < 64; _s++) {
+    int section_y = (dimension == DIMENSION_NETHER) ? _s * 16 : _s * 16;
+    for (int _j = 0; _j < 4096 && chest_count < 64; _j++) {
+      uint16_t raw = cached_sections[_s][_j];
+      if ((raw & 0x8000) && (raw & 0x1FF) == B_chest) {
+        int addr = (_j & ~7) | (7 - (_j & 7));
+        chest_wx[chest_count] = x + (addr & 15);
+        chest_wz[chest_count] = z + ((addr >> 4) & 15);
+        chest_wy[chest_count] = section_y + (addr >> 8);
+        chest_count++;
+      }
+    }
+  }
+
   int chunk_data_size = data_offset;
 
   // 2. Build the full packet
@@ -677,7 +695,19 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
   writeVarInt(client_fd, chunk_data_size);
   send_all(client_fd, data_buf, chunk_data_size);
 
-  writeVarInt(client_fd, 0); // omit block entities
+  // Block entities section — needed for chests (and other tile entity blocks)
+  // to render correctly. Without it, chests appear invisible with only a hitbox.
+  writeVarInt(client_fd, chest_count);
+  for (int _be = 0; _be < chest_count; _be++) {
+    writeByte(client_fd, ((chest_wx[_be] & 15) << 4) | (chest_wz[_be] & 15));
+    writeByte(client_fd, (chest_wy[_be] >> 8) & 0xFF);
+    writeByte(client_fd, chest_wy[_be] & 0xFF);
+    writeVarInt(client_fd, 1); // block entity type ID for chest
+    // Anonymous network NBT: TAG_Compound type byte, then compound data (no name),
+    // terminated by TAG_End.
+    writeByte(client_fd, 0x0A); // TAG_Compound type
+    writeByte(client_fd, 0x00); // TAG_End — empty compound
+  }
 
   // Light data
   // Sky light mask: all sections + 2 border sections
