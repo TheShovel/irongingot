@@ -41,6 +41,7 @@ int sc_chunkBatchFinished (int client_fd, int batchSize);
 int sc_playerAbilities (int client_fd, uint8_t flags);
 int sc_updateTime (int client_fd, uint64_t ticks);
 int sc_setCenterChunk (int client_fd, int x, int y);
+void compute_section_block_light(const uint16_t section[4096], uint8_t light_out[2048]);
 int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension);
 int sc_keepAlive (int client_fd);
 int sc_setContainerSlot (int client_fd, int window_id, uint16_t slot, uint8_t count, uint16_t item);

@@ -23,6 +23,8 @@ static OctavePerlinNoiseSampler cave_noise;
 OctavePerlinNoiseSampler mountain_noise;
 // Ore clump noise for clustered ore generation
 static OctavePerlinNoiseSampler ore_clump_noise;
+static NetherNoise nether_noise;
+static int nether_noise_init = 0;
 static int gen_initialized = 0;
 static pthread_mutex_t worldgen_init_mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -333,6 +335,10 @@ void init_worldgen() {
     octave_init(&mountain_noise, (uint64_t)world_seed + 0x12345678, 5);
     // Ore clump noise for small scattered ore veins (2 octaves for localized blobs)
     octave_init(&ore_clump_noise, (uint64_t)world_seed + 0xABCDEF12, 2);
+    if (!nether_noise_init) {
+        setNetherSeed(&nether_noise, (uint64_t)world_seed);
+        nether_noise_init = 1;
+    }
     gen_initialized = 1;
     pthread_mutex_unlock(&worldgen_init_mutex);
 }
@@ -1977,10 +1983,15 @@ uint16_t getNetherBlockAt (int x, int y, int z) {
   int ceil_h = 235 + (int)(cn * 15.0);
   if (ceil_h < 220) ceil_h = 220;
   if (ceil_h > 255) ceil_h = 255;
-  // Lower netherrack body: Y 0..floor_h (bedrock at the very bottom, lava for
-  // Y <= 31, netherrack above). Mirrors buildNetherChunkSection.
+  // Lower netherrack body: Y 0..floor_h (bedrock at the very bottom, lava at
+  // Y=31, blackstone/netherrack below, netherrack above). Mirrors buildNetherChunkSection.
   if (y <= floor_h) {
-    if (y <= 31) return B_lava;
+    if (y == 31) return B_lava;
+    if (y < 31) {
+        uint32_t bh = (uint32_t)(x * 27281 ^ y * 47297 ^ z * 32423);
+        if (y < 28 && (bh & 0x1F) == 0) return B_blackstone;
+        return B_netherrack;
+    }
     return B_netherrack;
   }
   // Ceiling netherrack body: Y ceil_h..255.
@@ -2018,14 +2029,17 @@ static WORLDGEN_THREAD_LOCAL ChunkFeature chunk_features[256 / (CHUNK_SIZE * CHU
 static WORLDGEN_THREAD_LOCAL uint8_t chunk_section_height[16][16];
 
 uint8_t getChunkNetherBiome(short x, short z) {
-    uint32_t h = getChunkHash(x, z);
-    switch (h % 5) {
-        case 0: return W_nether_wastes;
-        case 1: return W_soul_sand_valley;
-        case 2: return W_crimson_forest;
-        case 3: return W_warped_forest;
-        case 4: return W_basalt_deltas;
-        default: return W_nether_wastes;
+    int bx = (int)x * 16 + 8;
+    int bz = (int)z * 16 + 8;
+    float ndel;
+    int cid = getNetherBiome(&nether_noise, bx >> 2, 0, bz >> 2, &ndel);
+    switch (cid) {
+        case nether_wastes:      return W_nether_wastes;
+        case soul_sand_valley:   return W_soul_sand_valley;
+        case crimson_forest:     return W_crimson_forest;
+        case warped_forest:      return W_warped_forest;
+        case basalt_deltas:      return W_basalt_deltas;
+        default:                 return W_nether_wastes;
     }
 }
 
@@ -2074,10 +2088,20 @@ uint16_t buildNetherChunkSection(int cx, int cy, int cz) {
                 }
                 // === Zone 2: Lower netherrack body (Y 16 to floor_h) ===
                 else if (y <= floor_h) {
-                    if (y <= 31) {
+                    if (y == 31) {
+                        // Lava ocean with occasional air pockets
                         double n = octave_sample(&detail_noise, x * 0.03, y * 0.05, z * 0.03);
-                        block = (n > 0.3) ? B_lava : B_netherrack;
+                        block = (n > 0.4) ? B_lava : B_air;
+                    } else if (y < 31) {
+                        // Below lava: netherrack with blackstone, gilded_blackstone deeper
+                        block = B_netherrack;
+                        uint32_t bh = (uint32_t)(x * 27281 ^ y * 47297 ^ z * 32423);
+                        if (y < 28) {
+                            if ((bh & 0x1F) == 0) block = B_blackstone;
+                            else if ((bh & 0xFF) == 0xDE) block = B_gilded_blackstone;
+                        }
                     } else {
+                        // Y 32 to floor_h: netherrack with caves
                         block = B_netherrack;
                         if (y < floor_h - 2) {
                             double cave = octave_sample(&cave_noise, x * 0.03, y * 0.03, z * 0.03);
@@ -2151,12 +2175,6 @@ uint16_t buildNetherChunkSection(int cx, int cy, int cz) {
                     }
                 }
 
-                // Gravel patches on floor
-                if (block == B_air && y == floor_h + 1) {
-                    double gravel = octave_sample(&detail_noise, x * 0.03 + 4000.0, 0, z * 0.03 + 4000.0);
-                    if (gravel > 0.6) block = B_gravel;
-                }
-
                 // Basalt columns rising from floor
                 if (block == B_air && y > floor_h + 1 && y < floor_h + 30) {
                     double col = octave_sample(&detail_noise, x * 0.05 + 5000.0, 0, z * 0.05 + 5000.0);
@@ -2176,6 +2194,54 @@ uint16_t buildNetherChunkSection(int cx, int cy, int cz) {
                 }
 
                 chunk_section[index] = block;
+            }
+        }
+    }
+
+    // === Huge fungi generation (crimson/warped forests) ===
+    if (biome == W_crimson_forest || biome == W_warped_forest) {
+        uint16_t stem = (biome == W_crimson_forest) ? B_crimson_stem : B_warped_stem;
+        uint16_t wart = (biome == W_crimson_forest) ? B_nether_wart_block : B_warped_wart_block;
+        for (int dz = 0; dz < 16; dz++) {
+            for (int dx = 0; dx < 16; dx++) {
+                int fx = cx + dx;
+                int fz = cz + dz;
+                double fn = octave_sample(&surface_noise, fx * 0.015, 0, fz * 0.015);
+                int fh = 80 + (int)(fn * 15.0);
+                if (fh < 65) fh = 65; if (fh > 100) fh = 100;
+                int base_y = fh + 1;
+                if (base_y + 3 > cy + 16 || base_y < cy) continue;
+                uint32_t fhash = (uint32_t)(fx * 1013 ^ fz * 7027);
+                if ((fhash & 0x1F) != 0) continue;
+                int height = 4 + ((fhash >> 5) & 3);
+                if (base_y + height + 1 > cy + 16) height = cy + 15 - base_y;
+                if (height < 3) continue;
+                // Stem
+                for (int h = 0; h < height; h++) {
+                    int sy = base_y + h - cy;
+                    if (sy < 0 || sy >= 16) continue;
+                    int addr = dx + (dz << 4) + (sy << 8);
+                    int idx = (addr & ~7) | (7 - (addr & 7));
+                    if (chunk_section[idx] == B_air) chunk_section[idx] = stem;
+                }
+                int cap_bot = base_y + height - 2 - cy;
+                int cap_top = base_y + height - cy;
+                // Cap: two layers, 3x3 with inward taper
+                for (int cdy = cap_bot; cdy <= cap_top; cdy++) {
+                    if (cdy < 0 || cdy >= 16) continue;
+                    int radius = (cdy == cap_bot) ? 2 : 1;
+                    for (int cdz = -radius; cdz <= radius; cdz++) {
+                        for (int cdx = -radius; cdx <= radius; cdx++) {
+                            int adx = dx + cdx; int adz = dz + cdz;
+                            if (adx < 0 || adx >= 16 || adz < 0 || adz >= 16) continue;
+                            uint32_t ch = (uint32_t)((fx + cdx) * 7211 ^ (fz + cdz) * 5237);
+                            int addr = adx + (adz << 4) + (cdy << 8);
+                            int idx = (addr & ~7) | (7 - (addr & 7));
+                            if (chunk_section[idx] != B_air) continue;
+                            chunk_section[idx] = ((ch & 0x1F) == 0) ? B_shroomlight : wart;
+                        }
+                    }
+                }
             }
         }
     }

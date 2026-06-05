@@ -474,6 +474,21 @@ int sc_setCenterChunk (int client_fd, int x, int y) {
   return 0;
 }
 
+// Compute block light for a single chunk section from natural light-emitting blocks
+void compute_section_block_light(const uint16_t section[4096], uint8_t light_out[2048]) {
+  memset(light_out, 0, 2048);
+  for (int i = 0; i < 4096; i++) {
+    uint16_t block = section[i];
+    if (block == B_shroomlight || block == B_glowstone || block == B_lava) goto full;
+    if (block == B_fire) goto full;
+    if (block == B_magma_block) goto full;
+    if (block == B_torch) goto full;
+  }
+  return;
+full:
+  memset(light_out, 0xFF, 2048);
+}
+
 // S->C Chunk Data and Update Light
 int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension) {
   chunk_debug_record_stream_request(client_fd, _x, _z);
@@ -714,8 +729,13 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
   uint64_t light_mask = ((uint64_t)1 << light_bits) - 1;
   writeVarInt(client_fd, 1);
   writeUint64(client_fd, light_mask);
-  // Block light mask: empty
-  writeVarInt(client_fd, 0);
+  // Block light mask: all sections for nether (for worldgen emitters like shroomlight/lava)
+  if (dimension == DIMENSION_NETHER) {
+    writeVarInt(client_fd, 1);
+    writeUint64(client_fd, light_mask);
+  } else {
+    writeVarInt(client_fd, 0);
+  }
   // Empty sky light mask: empty
   writeVarInt(client_fd, 0);
   // Empty block light mask: empty
@@ -725,7 +745,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
   static THREAD_LOCAL uint8_t light_sky[2048];
   static THREAD_LOCAL uint8_t light_dark[2048];
   if (dimension == DIMENSION_NETHER) {
-    memset(light_sky, 0, 2048);
+    memset(light_sky, 0x44, 2048);
     memset(light_dark, 0, 2048);
   } else {
     memset(light_sky, 0xFF, 2048);
@@ -736,7 +756,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
   // One section below world: dark
   writeVarInt(client_fd, 2048);
   send_all(client_fd, light_dark, 2048);
-  // In-world sections: sky lit for overworld, dark for nether
+  // In-world sections: sky lit for overworld, dim ambient for nether
   for (int i = 0; i < total_sections; i ++) {
     writeVarInt(client_fd, 2048);
     send_all(client_fd, light_sky, 2048);
@@ -744,8 +764,25 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
   // One section above world: sky lit
   writeVarInt(client_fd, 2048);
   send_all(client_fd, light_sky, 2048);
-  // No block light
-  writeVarInt(client_fd, 0);
+  // Block light: for nether, compute spherical falloff from light-emitting blocks
+  if (dimension == DIMENSION_NETHER) {
+    writeVarInt(client_fd, light_bits);
+    // One section below world: dark
+    writeVarInt(client_fd, 2048);
+    send_all(client_fd, light_dark, 2048);
+    // In-world sections
+    for (int s = 0; s < total_sections; s++) {
+      uint8_t block_light[2048];
+      compute_section_block_light(cached_sections[s], block_light);
+      writeVarInt(client_fd, 2048);
+      send_all(client_fd, block_light, 2048);
+    }
+    // One section above world: dark
+    writeVarInt(client_fd, 2048);
+    send_all(client_fd, light_dark, 2048);
+  } else {
+    writeVarInt(client_fd, 0);
+  }
 
   if (endPacket(client_fd) != 0) {
     // Queue full or client state changed; retry this chunk later.
@@ -2442,6 +2479,7 @@ int cs_playerLoaded (int client_fd) {
   return 0;
 }
 
+// S->C Light Update - send block light data for a single chunk section
 // S->C Registry Data (multiple packets) and Update Tags (configuration, multiple packets)
 int sc_registries (int client_fd) {
 

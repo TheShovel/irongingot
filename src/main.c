@@ -355,28 +355,30 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
         // Send full client spawn sequence
         spawnPlayer(player);
 
-        // Register all existing players and spawn their entities
+        // Register all existing players and spawn their entities (same dimension only)
         for (int i = 0; i < MAX_PLAYERS; i ++) {
           if (player_data[i].client_fd == -1) continue;
           // Note that this will also filter out the joining player
           if (player_data[i].flags & 0x20) continue;
+          if (player_data[i].dimension != player->dimension) continue;
           sc_playerInfoUpdateAddPlayer(client_fd, player_data[i]);
           sc_spawnEntityPlayer(client_fd, player_data[i]);
           sendPlayerMetadata(client_fd, &player_data[i]);
           sendPlayerEquipment(client_fd, &player_data[i]);
         }
 
-        // Send information about all other entities (mobs):
+        // Send information about all other entities (mobs) in the same dimension:
         // Use a random number for the first half of the UUID
         uint8_t uuid[16];
         uint32_t r = fast_rand();
         memcpy(uuid, &r, 4);
         // Zero out the remaining bytes to ensure valid UUIDs
         memset(uuid + 4, 0, 12);
-        // Send allocated living mobs, use ID for second half of UUID
+        // Send allocated living mobs in the same dimension, use ID for second half of UUID
         for (int i = 0; i < MAX_MOBS; i ++) {
           if (mob_data[i].type == 0) continue;
           if ((mob_data[i].data & 31) == 0) continue;
+          if (mob_data[i].dimension != player->dimension) continue;
           memcpy(uuid + 4, &i, 4);
           // For more info on the arguments here, see the spawnMob function
           sc_spawnEntity(
@@ -511,11 +513,12 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
             yaw = player->yaw * 180 / 127;
             pitch = player->pitch * 90 / 127;
           }
-          // Send current position data to all connected players
+          // Send current position data to all connected players in the same dimension
           for (int i = 0; i < MAX_PLAYERS; i ++) {
             if (player_data[i].client_fd == -1) continue;
             if (player_data[i].flags & 0x20) continue;
             if (player_data[i].client_fd == client_fd) continue;
+            if (player_data[i].dimension != player->dimension) continue;
             // Find the client state for this player
             uint8_t target_in_play = 0;
             for (int k = 0; k < MAX_PLAYERS; k ++) {

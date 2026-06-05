@@ -374,6 +374,7 @@ typedef struct {
   // Middle 1 bit: sheep sheared, unused for other mobs
   // Upper 2 bits: panic timer
   uint8_t data;
+  uint8_t dimension;
 } MobData;
 
 #ifdef ALLOW_DOORS

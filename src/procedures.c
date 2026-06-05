@@ -803,6 +803,7 @@ void broadcastMobMetadata (int client_fd, int entity_id) {
 
       if (client_fd == -1) continue;
       if (player->flags & 0x20) continue;
+      if (player->dimension != mob->dimension) continue;
       // Check client state
       uint8_t target_in_play = 0;
       for (int k = 0; k < MAX_PLAYERS; k ++) {
@@ -3298,7 +3299,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
 
 }
 
-void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health) {
+void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health, uint8_t dimension) {
 
   for (int i = 0; i < MAX_MOBS; i ++) {
     // Look for type 0 (unallocated)
@@ -3310,6 +3311,7 @@ void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health) {
     mob_data[i].y = (double)y;
     mob_data[i].z = (double)z + 0.5;
     mob_data[i].data = health & 31;
+    mob_data[i].dimension = dimension;
 
     // Forge a UUID from a random number and the mob's index
     uint8_t uuid[16];
@@ -3319,9 +3321,10 @@ void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health) {
     // Zero out the remaining bytes to ensure valid UUIDs
     memset(uuid + 8, 0, 8);
 
-    // Broadcast entity creation to all players
+    // Broadcast entity creation to all players in the same dimension
     for (int j = 0; j < MAX_PLAYERS; j ++) {
       if (player_data[j].client_fd == -1) continue;
+      if (player_data[j].dimension != dimension) continue;
       sc_spawnEntity(
         player_data[j].client_fd,
         -2 - i, // Use negative IDs to avoid conflicts with player IDs
@@ -3358,6 +3361,9 @@ static uint8_t countMobsNearPlayer (PlayerData *player) {
 
 // Spawn friendly mobs behind the player on grass/snow blocks
 static void spawnMobsAroundPlayer (PlayerData *player) {
+
+  // Don't spawn mobs in the Nether
+  if (player->dimension == DIMENSION_NETHER) return;
 
   // Passive mob types: Chicken(25), Cow(28), Pig(95), Sheep(106)
   static const uint8_t passive_types[] = { 25, 28, 95, 106 };
@@ -3455,7 +3461,7 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
     uint8_t type = passive_types[fast_rand() % num_passive_types];
 
     // Spawn mobs with 10 HP.
-    spawnMob(type, spawn_x, surface_y + 1, spawn_z, 10);
+    spawnMob(type, spawn_x, surface_y + 1, spawn_z, 10, player->dimension);
   }
 
   // Spawn hostile mobs (zombies) only at night
@@ -3495,7 +3501,7 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
       uint8_t type = hostile_types[fast_rand() % num_hostile_types];
 
       // Zombies spawn with 20 HP
-      spawnMob(type, spawn_x, surface_y + 1, spawn_z, 10);
+      spawnMob(type, spawn_x, surface_y + 1, spawn_z, 10, player->dimension);
     }
   }
 
@@ -4110,6 +4116,7 @@ void handleServerTick (int64_t time_since_last_tick) {
         fabs(new_y - old_y) > 0.0001) {
       for (int j = 0; j < MAX_PLAYERS; j ++) {
         if (player_data[j].client_fd == -1) continue;
+        if (player_data[j].dimension != mob_data[i].dimension) continue;
         // Find the client state for this player
         uint8_t target_in_play = 0;
         for (int k = 0; k < MAX_PLAYERS; k ++) {
