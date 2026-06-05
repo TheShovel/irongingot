@@ -31,7 +31,7 @@
 
 ClientState client_states[MAX_PLAYERS];
 
-THREAD_LOCAL uint8_t packet_buffer[MAX_PACKET_LEN];
+THREAD_LOCAL uint8_t *packet_buffer = NULL;
 THREAD_LOCAL int packet_buffer_offset = 0;
 THREAD_LOCAL int packet_mode = false;
 

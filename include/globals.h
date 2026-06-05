@@ -193,7 +193,7 @@
 
 // If defined, prints per-second chunk stream diagnostics.
 // Useful to debug chunk spam/backpressure and packet queue stalls.
-#define DEV_LOG_CHUNK_STREAM_STATS
+// #define DEV_LOG_CHUNK_STREAM_STATS
 // If defined together with DEV_LOG_CHUNK_STREAM_STATS, also logs each
 // chunk enqueue result (very noisy).
 // #define DEV_LOG_CHUNK_STREAM_VERBOSE
@@ -236,7 +236,7 @@ extern ClientState client_states[MAX_PLAYERS];
 
 // Maximum length of a single packet (including chunk data)
 #define MAX_PACKET_LEN 1048576
-extern THREAD_LOCAL uint8_t packet_buffer[MAX_PACKET_LEN];
+extern THREAD_LOCAL uint8_t *packet_buffer;
 extern THREAD_LOCAL int packet_buffer_offset;
 extern THREAD_LOCAL int packet_mode;
 

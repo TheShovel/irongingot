@@ -284,9 +284,6 @@ int initSerializer () {
       if (block_changes[i].block == 0xFF) continue;
 
       if (block_changes[i].block == B_chest) {
-        fprintf(stderr, "[MIGRATE] chest at (%d,%d,%d) idx=%d has_entry=%d\n",
-          block_changes[i].x, block_changes[i].y, block_changes[i].z, i,
-          special_block_has_entry(block_changes[i].x, block_changes[i].y, block_changes[i].z));
         if (i + 14 < block_changes_count &&
             !special_block_has_entry(block_changes[i].x, block_changes[i].y, block_changes[i].z)) {
           uint8_t dir = block_changes[i + 14].y;

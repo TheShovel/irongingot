@@ -35,6 +35,7 @@
 
 #include "globals.h"
 #include "tools.h"
+#include "thread_utils.h"
 #include "varnum.h"
 #include "packets.h"
 #include "worldgen.h"
@@ -224,7 +225,12 @@ static void* chunk_streamer_worker(void* arg) {
 static void init_chunk_streamer(void) {
   initChunkRetryTable();
   chunk_streamer_running = 1;
-  pthread_create(&chunk_streamer_thread, NULL, chunk_streamer_worker, NULL);
+  int ret = create_server_thread_with_stack(&chunk_streamer_thread, IRONGINGOT_CHUNK_THREAD_STACK_SIZE, chunk_streamer_worker, NULL);
+  if (ret != 0) {
+    fprintf(stderr, "ERROR: Failed to start chunk streamer thread: %s\n", strerror(ret));
+    chunk_streamer_running = 0;
+    exit(1);
+  }
   printf("Chunk streamer thread started\n");
 }
 
@@ -406,7 +412,8 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
 
     case 0x0A:
       if (state == STATE_PLAY) {
-        readVarInt(client_fd);
+        // Chunk Batch Received: desired chunks per tick (float)
+        readFloat(client_fd);
       }
       break;
 

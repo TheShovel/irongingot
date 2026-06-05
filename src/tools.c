@@ -25,6 +25,7 @@
 #include "varnum.h"
 #include "procedures.h"
 #include "tools.h"
+#include "thread_utils.h"
 #include <zlib.h>
 #include <stdlib.h>
 
@@ -67,6 +68,17 @@ void set_queue_limits(size_t send_limit, size_t chunk_limit) {
 }
 
 static ssize_t send_all_no_disconnect (int client_fd, const void *buf, ssize_t len);
+
+static int ensure_packet_buffer(void) {
+  if (packet_buffer != NULL) return 0;
+  packet_buffer = (uint8_t *)malloc(MAX_PACKET_LEN);
+  if (packet_buffer == NULL) {
+    perror("Failed to allocate packet buffer");
+    packet_buffer_offset = 0;
+    return -1;
+  }
+  return 0;
+}
 
 static ClientState* get_client_state_by_fd(int client_fd) {
   for (int i = 0; i < MAX_PLAYERS; i++) {
@@ -464,6 +476,7 @@ ssize_t recv_all (int client_fd, void *buf, size_t n, uint8_t require_first) {
 ssize_t send_all (int client_fd, const void *buf, ssize_t len) {
   // If we are in packet mode, buffer the data instead of sending it
   if (packet_mode) {
+    if (ensure_packet_buffer() != 0) return -1;
     if (packet_buffer_offset + len > MAX_PACKET_LEN) {
       printf("ERROR: Packet buffer overflow (%d + %zd > %d)\n", packet_buffer_offset, (size_t)len, MAX_PACKET_LEN);
       return -1;
@@ -563,6 +576,10 @@ void startPacket (int client_fd, int packet_id) {
   packet_buffer_offset = 0;
   packet_mode = true;
   current_packet_id = packet_id;
+  if (ensure_packet_buffer() != 0) {
+    current_packet_id = -1;
+    return;
+  }
   writeVarInt(-1, packet_id);
 }
 
@@ -571,6 +588,11 @@ int endPacket (int client_fd) {
   int packet_id = current_packet_id;
   current_packet_id = -1;
   uint8_t is_chunk_packet = packet_id == 0x27;
+
+  if (packet_buffer == NULL) {
+    packet_buffer_offset = 0;
+    return 1;
+  }
 
   int threshold = getCompressionThreshold(client_fd);
   int uncompressed_len = packet_buffer_offset;
@@ -733,7 +755,18 @@ void init_packet_sender_workers (void) {
   if (sender_workers_running) return;
   sender_workers_running = 1;
   for (intptr_t i = 0; i < MAX_PLAYERS; i++) {
-    pthread_create(&sender_threads[i], NULL, packet_sender_worker, (void *)i);
+    int ret = create_server_thread(&sender_threads[i], packet_sender_worker, (void *)i);
+    if (ret != 0) {
+      fprintf(stderr, "ERROR: Failed to start packet sender thread %ld: %s\n", (long)i, strerror(ret));
+      sender_workers_running = 0;
+      for (intptr_t j = 0; j < i; j++) {
+        pthread_mutex_lock(&client_states[j].send_mutex);
+        pthread_cond_broadcast(&client_states[j].send_cond);
+        pthread_mutex_unlock(&client_states[j].send_mutex);
+        pthread_join(sender_threads[j], NULL);
+      }
+      exit(1);
+    }
   }
 }
 

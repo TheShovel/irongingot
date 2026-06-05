@@ -8,6 +8,7 @@
 #endif
 
 #include "thread_pool.h"
+#include "thread_utils.h"
 
 // Worker thread function
 static void* worker_thread_func(void* arg) {
@@ -93,7 +94,7 @@ int thread_pool_init(ThreadPool* pool, int num_threads) {
 
   // Create worker threads
   for (int i = 0; i < num_threads; i++) {
-    if (pthread_create(&pool->threads[i], NULL, worker_thread_func, pool) != 0) {
+    if (create_server_thread_with_stack(&pool->threads[i], IRONGINGOT_POOL_THREAD_STACK_SIZE, worker_thread_func, pool) != 0) {
       // Cleanup on failure
       pool->shutdown = 1;
       pthread_cond_broadcast(&pool->cond);

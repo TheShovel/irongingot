@@ -506,9 +506,18 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
   // Grows as needed to handle large chunks
   static THREAD_LOCAL uint8_t *data_buf = NULL;
   static THREAD_LOCAL size_t data_buf_capacity = 0;
-  static THREAD_LOCAL uint16_t cached_sections[20][4096];
-  static THREAD_LOCAL uint8_t cached_biomes[20];
+  static THREAD_LOCAL uint16_t (*cached_sections)[4096] = NULL;
+  static THREAD_LOCAL uint8_t *cached_biomes = NULL;
   int data_offset = 0;
+
+  if (cached_sections == NULL) {
+    cached_sections = malloc(20 * sizeof(*cached_sections));
+    if (cached_sections == NULL) return 1;
+  }
+  if (cached_biomes == NULL) {
+    cached_biomes = malloc(20 * sizeof(*cached_biomes));
+    if (cached_biomes == NULL) return 1;
+  }
 
   // Ensure buffer is large enough
   if (data_buf == NULL || data_buf_capacity < 32768) {
@@ -742,8 +751,16 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
   writeVarInt(client_fd, 0);
 
   // Sky light arrays
-  static THREAD_LOCAL uint8_t light_sky[2048];
-  static THREAD_LOCAL uint8_t light_dark[2048];
+  static THREAD_LOCAL uint8_t *light_sky = NULL;
+  static THREAD_LOCAL uint8_t *light_dark = NULL;
+  if (light_sky == NULL) {
+    light_sky = malloc(2048);
+    if (light_sky == NULL) return 1;
+  }
+  if (light_dark == NULL) {
+    light_dark = malloc(2048);
+    if (light_dark == NULL) return 1;
+  }
   if (dimension == DIMENSION_NETHER) {
     memset(light_sky, 0x44, 2048);
     memset(light_dark, 0, 2048);

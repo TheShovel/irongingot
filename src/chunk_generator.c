@@ -9,6 +9,7 @@
 #include "tools.h"
 #include "chunk_generator.h"
 #include "thread_pool.h"
+#include "thread_utils.h"
 
 // Simple chunk cache - stores generated chunk section data
 // Size is determined by config.chunk_cache_size
@@ -361,7 +362,18 @@ void init_chunk_generator() {
   if (worker_thread_count > MAX_CHUNK_GENERATOR_WORKERS) worker_thread_count = MAX_CHUNK_GENERATOR_WORKERS;
 
   for (intptr_t i = 0; i < worker_thread_count; i++) {
-    pthread_create(&worker_threads[i], NULL, chunk_generator_worker, (void *)i);
+    int ret = create_server_thread_with_stack(&worker_threads[i], IRONGINGOT_CHUNK_THREAD_STACK_SIZE, chunk_generator_worker, (void *)i);
+    if (ret != 0) {
+      fprintf(stderr, "ERROR: Failed to start chunk generator thread %ld: %s\n", (long)i, strerror(ret));
+      running = 0;
+      pthread_mutex_lock(&request_mutex);
+      pthread_cond_broadcast(&request_cond);
+      pthread_mutex_unlock(&request_mutex);
+      for (intptr_t j = 0; j < i; j++) {
+        pthread_join(worker_threads[j], NULL);
+      }
+      exit(1);
+    }
   }
   printf(
     "Chunk generator threads started (%d workers, cache size: %d chunks)\n",
