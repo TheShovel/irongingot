@@ -575,7 +575,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
     uint16_t _first = _sd[0]; \
     uint8_t _uniform = 1; \
     for (int _j = 1; _j < 4096; _j++) { if (_sd[_j] != _first) { _uniform = 0; break; } } \
-    if (_uniform) { \
+    if (_uniform && !(_first & 0x8000)) { \
       uint16_t _bc = (_first == 0) ? 0 : 4096; \
       data_buf[data_offset++] = _bc >> 8; \
       data_buf[data_offset++] = _bc & 0xFF; \
@@ -587,16 +587,25 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
         val >>= 7; \
       } \
     } else { \
-      uint16_t _pal[256]; \
+      uint16_t _pal[288]; \
       uint16_t _palidx[277]; \
       int _psize = 0; \
       memset(_palidx, 0xFF, sizeof(_palidx)); \
       for (int _j = 0; _j < 4096; _j++) { \
         uint16_t _b = _sd[_j]; \
-        if (_palidx[_b] == 0xFFFF) { _palidx[_b] = _psize; _pal[_psize++] = _b; } \
+        if (_b & 0x8000) { \
+          int _found = 0; \
+          for (int _k = 0; _k < _psize; _k++) { if (_pal[_k] == _b) { _found = 1; break; } } \
+          if (!_found) _pal[_psize++] = _b; \
+        } else { \
+          if (_b < 277 && _palidx[_b] == 0xFFFF) { _palidx[_b] = _psize; _pal[_psize++] = _b; } \
+        } \
       } \
       uint16_t _bc = 0; \
-      for (int _j = 0; _j < 4096; _j++) if (_sd[_j] != 0) _bc++; \
+      for (int _j = 0; _j < 4096; _j++) { \
+        uint16_t _b = _sd[_j]; \
+        if ((_b & 0x8000) ? (_b & 0x1FF) : _b) _bc++; \
+      } \
       data_buf[data_offset++] = _bc >> 8; \
       data_buf[data_offset++] = _bc & 0xFF; \
       data_buf[data_offset++] = 8; \
@@ -608,7 +617,17 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
       } \
       ENSURE_SPACE(_psize * 3 + 4096); \
       for (int _j = 0; _j < _psize; _j++) { \
-        val = block_palette[_pal[_j]]; \
+        uint16_t _pv = _pal[_j]; \
+        if (_pv & 0x8000) { \
+          uint8_t _t = _pv & 0x1FF; \
+          uint8_t _d = (_pv >> 9) & 3; \
+          uint8_t _h = (_pv >> 12) & 1; \
+          uint8_t _o = (_pv >> 13) & 1; \
+          uint8_t _u = (_pv >> 14) & 1; \
+          val = get_door_state_id(_t, _u, _o, _d, _h); \
+        } else { \
+          val = block_palette[_pv]; \
+        } \
         while (1) { \
           if ((val & ~SEGMENT_BITS) == 0) { data_buf[data_offset++] = val; break; } \
           data_buf[data_offset++] = (val & SEGMENT_BITS) | CONTINUE_BIT; \
@@ -616,7 +635,16 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
         } \
       } \
       ENSURE_SPACE(4096); \
-      for (int _j = 0; _j < 4096; _j++) data_buf[data_offset++] = _palidx[_sd[_j]]; \
+      for (int _j = 0; _j < 4096; _j++) { \
+        uint16_t _b = _sd[_j]; \
+        if (_b & 0x8000) { \
+          int _idx; \
+          for (_idx = 0; _idx < _psize; _idx++) { if (_pal[_idx] == _b) break; } \
+          data_buf[data_offset++] = (uint8_t)_idx; \
+        } else { \
+          data_buf[data_offset++] = _palidx[_b]; \
+        } \
+      } \
     } \
     data_buf[data_offset++] = 0; \
     data_buf[data_offset++] = _biome; \
@@ -802,6 +830,71 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
     sc_blockUpdate(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].block);
   }
 
+  // Send door updates for village-generated doors (not in block changes).
+  // Village doors in chunk sections have default "lower half" state, so both
+  // halves appear as lower.  We override them with proper upper/lower states.
+  #ifdef ALLOW_DOORS
+  int processed_village_doors[64][3];
+  int num_village_doors = 0;
+  for (int i = 0; i < terrain_sections; i++) {
+    int section_y = (dimension == DIMENSION_NETHER) ? i * 16 : i * 16;
+    if (section_y > 200 || section_y + 16 < 60) continue;
+    uint16_t *section = cached_sections[i];
+    for (int j = 0; j < 4096; j++) {
+      uint16_t raw = section[j];
+      uint16_t block_type = (raw & 0x8000) ? (raw & 0x1FF) : raw;
+      if (!isDoorBlock(block_type)) continue;
+
+      int address = (j & ~7) | (7 - (j & 7));
+      int wx = x + (address & 15);
+      int wz = z + ((address >> 4) & 15);
+      int wy = section_y + (address >> 8);
+
+      int skip = 0;
+      for (int p = 0; p < num_village_doors; p++)
+        if (processed_village_doors[p][0] == wx &&
+            processed_village_doors[p][1] == wy &&
+            processed_village_doors[p][2] == wz) { skip = 1; break; }
+      if (skip) continue;
+
+      for (int k = 0; k < block_changes_snapshot_count && !skip; k++) {
+        if (block_changes_snapshot[k].block == 0xFF) continue;
+        if (isDoorBlock(block_changes_snapshot[k].block) &&
+            block_changes_snapshot[k].x == wx &&
+            block_changes_snapshot[k].y == wy &&
+            block_changes_snapshot[k].z == wz) skip = 1;
+      }
+      if (skip) continue;
+
+      // Read existing state or init default
+      if (!special_block_has_entry(wx, wy, wz)) {
+        uint16_t vs = door_encode_state(0, 0, 1);
+        special_block_set_state(wx, wy, wz, block_type, vs);
+        if (!special_block_has_entry(wx, wy + 1, wz))
+          special_block_set_state(wx, wy + 1, wz, block_type, vs);
+      }
+      // Send correct state to client (chunk data may have stale default)
+      uint16_t st = special_block_get_state(wx, wy, wz);
+      uint8_t open = door_get_open(st);
+      uint8_t hinge = door_get_hinge(st);
+      uint8_t dir = door_get_direction(st);
+      sendDoorUpdate(client_fd, wx, wy, wz, block_type, 0, open, dir, hinge);
+      sendDoorUpdate(client_fd, wx, wy + 1, wz, block_type, 1, open, dir, hinge);
+
+      if (num_village_doors < 62) {
+        processed_village_doors[num_village_doors][0] = wx;
+        processed_village_doors[num_village_doors][1] = wy;
+        processed_village_doors[num_village_doors][2] = wz;
+        num_village_doors++;
+        processed_village_doors[num_village_doors][0] = wx;
+        processed_village_doors[num_village_doors][1] = wy + 1;
+        processed_village_doors[num_village_doors][2] = wz;
+        num_village_doors++;
+      }
+    }
+  }
+  #endif
+
   freeBlockChangesSnapshot(block_changes_snapshot);
 
   return 0;
@@ -865,23 +958,7 @@ int sc_blockEvent (int client_fd, int64_t x, int64_t y, int64_t z, int action, i
 int sc_blockUpdateDoor (int client_fd, int64_t x, int64_t y, int64_t z, uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge) {
   startPacket(client_fd, 0x08);
   writeUint64(client_fd, ((x & 0x3FFFFFF) << 38) | ((z & 0x3FFFFFF) << 12) | (y & 0xFFF));
-
-  // Calculate door block state ID
-  // Minecraft door block states:
-  // - half: "lower" (0) or "upper" (1)
-  // - open: false (0) or true (1)
-  // - facing: north (0), south (1), west (2), east (3)
-  // - hinge: "left" (0) or "right" (1)
-  // Base palette ID + state offset
-  uint16_t base_id = block_palette[block];
-
-  // Door state encoding (simplified - using state ID offsets)
-  // Each door type has 16 states (2 halves * 2 open * 4 directions * 2 hinges)
-  // For simplicity, we'll use: base_id + (is_upper * 8) + (open * 4) + (direction * 1) + (hinge * 0)
-  // This is a simplified mapping - actual Minecraft uses a different formula
-  uint16_t state_id = base_id + (is_upper << 3) + (open << 2) + (direction << 1) + hinge;
-
-  writeVarInt(client_fd, state_id);
+  writeVarInt(client_fd, get_door_state_id(block, is_upper, open, direction, hinge));
   endPacket(client_fd);
   return 0;
 }

@@ -201,20 +201,19 @@ uint8_t is_oriented_block(uint16_t block) {
  */
 
 uint16_t get_door_state_id(uint16_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge) {
-    uint16_t base_id = block_palette[block];
     /*
-     * Door state offsets:
-     *   facing: north=0, east=48, south=16, west=32
-     *   hinge right: +4
-     *   open: -2
-     *   upper half: -8
+     * Use registry-generated lookup table.
+     * State layout: facing(n,s,w,e) x half(upper,lower) x hinge(left,right) x open(true,false), powered=false
+     * Internal direction: 0=north, 1=east, 2=south, 3=west
+     * Table facing order: 0=north, 1=south, 2=west, 3=east
+     * half in table: 0=upper, 1=lower
+     * open in table: 0=true(opened), 1=false(closed)
      */
-    static const int16_t facing_off[4] = {0, 48, 16, 32};
-    int16_t offset = facing_off[direction];
-    if (hinge)  offset += 4;
-    if (open)   offset -= 2;
-    if (is_upper) offset -= 8;
-    return base_id + (uint16_t)offset;
+    static const uint8_t table_facing[4] = {0, 3, 1, 2};  // internal(n,e,s,w) → table(n,s,w,e)
+    uint8_t tf = table_facing[direction];
+    uint8_t idx = tf * 8 + (1 - is_upper) * 4 + hinge * 2 + (1 - open);
+    uint8_t row = door_block_to_row[block];
+    return door_state_rows[row][idx];
 }
 
 uint16_t get_stair_state_id(uint16_t block, uint8_t half, uint8_t direction) {

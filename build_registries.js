@@ -246,6 +246,9 @@ async function extractItemsAndBlocks() {
   const trapdoorStateTables = {};
   // Stair state lookup tables: { name: [8 state IDs] }
   const stairStateTables = {};
+  // Door state lookup tables: { name: [32 state IDs] }
+  // Iteration order: facing(n,s,w,e) x half(upper,lower) x hinge(left,right) x open(true,false), powered=false
+  const doorStateTables = {};
 
   for (const entry of sortedBlocks) {
     const defaultState = entry[1].states.find((c) => c.default);
@@ -307,6 +310,35 @@ async function extractItemsAndBlocks() {
       }
       stairStateTables[name] = stairRow;
     }
+
+    // Extract door state IDs for lookup table generation
+    if (entry[0].endsWith("_door")) {
+      const name = entry[0].replace("minecraft:", "");
+      const facingOrder = ["north", "south", "west", "east"];
+      const halfOrder = ["upper", "lower"];
+      const hingeOrder = ["left", "right"];
+      const openOrder = [true, false];
+      const doorRow = [];
+      for (const f of facingOrder) {
+        for (const h of halfOrder) {
+          for (const hi of hingeOrder) {
+            for (const o of openOrder) {
+              const st = entry[1].states.find(
+                (s) =>
+                  s.properties.facing === f &&
+                  s.properties.half === h &&
+                  s.properties.hinge === hi &&
+                  s.properties.open === String(o) &&
+                  s.properties.powered === "false",
+              );
+              doorRow.push(st ? st.id : 0);
+            }
+          }
+        }
+      }
+      doorStateTables[name] = doorRow;
+    }
+
     // Include "snowy" variants of blocks as well
     if ("properties" in defaultState && "snowy" in defaultState.properties) {
       const snowyState = entry[1].states.find((c) => c.properties.snowy);
@@ -396,6 +428,7 @@ async function extractItemsAndBlocks() {
     blockRegistry,
     trapdoorStateTables,
     stairStateTables,
+    doorStateTables,
   };
 }
 
@@ -667,6 +700,20 @@ async function convert() {
     }
   }
 
+  // Build door state table and block-to-row mapping
+  // Map palette INDEX to row index in door_state_rows
+  const doorRowMap = [];
+  for (let i = 0; i < paletteEntries.length; i++) doorRowMap.push(0);
+  const doorRows = [];
+  for (let paletteIdx = 0; paletteIdx < paletteEntries.length; paletteIdx++) {
+    const name = paletteEntries[paletteIdx];
+    const row = itemsAndBlocks.doorStateTables[name];
+    if (row && row.length === 32) {
+      doorRowMap[paletteIdx] = doorRows.length;
+      doorRows.push(row);
+    }
+  }
+
   const sourceCode = `\\
 #include <stdint.h>
 #include "registries.h"
@@ -714,6 +761,15 @@ extern const uint16_t stair_state_rows[][8];
 const uint8_t stair_block_to_row[] = { ${stairRowMap.join(", ")} };
 const uint16_t stair_state_rows[${stairRows.length}][8] = {
   ${stairRows.map((r) => `{ ${r.join(", ")} }`).join(",\n  ")}
+};
+
+// Door state IDs: [block_palette_index][32 states]
+// State layout: facing(n,s,w,e) x half(upper,lower) x hinge(left,right) x open(true,false), powered=false
+extern const uint8_t door_block_to_row[];
+extern const uint16_t door_state_rows[][32];
+const uint8_t door_block_to_row[] = { ${doorRowMap.join(", ")} };
+const uint16_t door_state_rows[${doorRows.length}][32] = {
+  ${doorRows.map((r) => `{ ${r.join(", ")} }`).join(",\n  ")}
 };`;
 
   const headerCode = `
@@ -738,6 +794,10 @@ extern const uint16_t trapdoor_state_rows[][16];
 // Stair state lookup (generated from registry data)
 extern const uint8_t stair_block_to_row[${paletteEntries.length}];
 extern const uint16_t stair_state_rows[][8];
+
+// Door state lookup (generated from registry data)
+extern const uint8_t door_block_to_row[${paletteEntries.length}];
+extern const uint16_t door_state_rows[][32];
 
 // Block identifiers
 ${Object.keys(itemsAndBlocks.palette)

@@ -708,8 +708,129 @@ static uint16_t getMineshaftBlockAt(int x, int y, int z) {
   return B_air;
 }
 
+static uint16_t getVillageBlockAt(int x, int y, int z) {
+  int vx = div_floor(x, 48);
+  int vz = div_floor(z, 48);
+
+  uint64_t key = splitmix64(((uint64_t)(uint32_t)vx * 1234567 ^ (uint64_t)(uint32_t)vz * 7654321) ^ world_seed);
+  if ((uint32_t)(key % 4) != 0) return 0xFFFF;
+
+  // Keep village center ≥18 blocks from either 48-block boundary so
+  // houses (offset -15..+16, radius 3) stay within their own area
+  int cx = vx * 48 + 18 + (int)((key >> 8) % 11);
+  int cz = vz * 48 + 18 + (int)((key >> 16) % 11);
+
+  int num_houses = 3 + (int)((key >> 24) % 4);
+
+  // Pre-compute house positions with minimum 8-block spacing
+  int hx_list[8], hz_list[8];
+  int placed = 0;
+  for (int i = 0; i < num_houses && placed < 8; i++) {
+    uint64_t hkey = splitmix64(key ^ (uint64_t)i * 31337);
+    int hx = cx + (int)(hkey & 31) - 15;
+    int hz = cz + (int)((hkey >> 8) & 31) - 15;
+
+    int ok = 1;
+    for (int j = 0; j < placed; j++) {
+      int dx = hx_list[j] - hx; if (dx < 0) dx = -dx;
+      int dz = hz_list[j] - hz; if (dz < 0) dz = -dz;
+      if (dx < 8 && dz < 8) { ok = 0; break; }
+    }
+    if (ok) { hx_list[placed] = hx; hz_list[placed] = hz; placed++; }
+  }
+
+  for (int i = 0; i < placed; i++) {
+    int hx = hx_list[i];
+    int hz = hz_list[i];
+
+    int dx = x - hx;
+    int dz = z - hz;
+    int adx = dx < 0 ? -dx : dx;
+    int adz = dz < 0 ? -dz : dz;
+    if (adx > 3 || adz > 3) continue;
+
+    int house_height = getHeightAt(hx, hz);
+    if (house_height < 63) continue;
+
+    int rel_y = y - house_height;
+    if (rel_y < 0 || rel_y > 4) continue;
+
+    // Check biome at house center (not per-block) so houses aren't cut off at
+    // biome or chunk borders
+    uint8_t house_biome = getChunkBiome(div_floor(hx, 32), div_floor(hz, 32));
+    switch (house_biome) {
+      case W_plains: case W_forest: case W_sunflower_plains:
+      case W_desert: case W_savanna:
+      case W_taiga: case W_snowy_taiga: case W_old_growth_pine_taiga:
+      case W_birch_forest: case W_flower_forest:
+        break;
+      default:
+        return 0xFFFF;
+    }
+
+    uint16_t wall = B_oak_planks;
+    uint16_t roof = B_oak_planks;
+    uint16_t pillar = B_oak_log;
+    uint16_t roof_slab = B_oak_slab;
+    uint16_t door = B_oak_door;
+    switch (house_biome) {
+      case W_desert:
+        wall = B_sandstone; roof = B_sandstone; pillar = B_sandstone; roof_slab = B_cut_sandstone; break;
+      case W_savanna:
+        wall = B_acacia_planks; roof = B_acacia_planks; pillar = B_acacia_log; roof_slab = B_acacia_slab;
+        door = B_acacia_door; break;
+      case W_taiga: case W_old_growth_pine_taiga:
+        wall = B_spruce_planks; roof = B_spruce_planks; pillar = B_spruce_log; roof_slab = B_spruce_slab;
+        door = B_spruce_door; break;
+      case W_snowy_taiga:
+        wall = B_spruce_planks; roof = B_snow_block; pillar = B_spruce_log; roof_slab = B_spruce_slab;
+        door = B_spruce_door; break;
+      case W_birch_forest:
+        wall = B_birch_planks; roof = B_birch_planks; pillar = B_birch_log; roof_slab = B_birch_slab;
+        door = B_birch_door; break;
+    }
+
+    // Roof with 1-block overhang (7x7); outer ring uses slabs for a border
+    if (rel_y == 4) {
+      if (adx == 3 || adz == 3) return roof_slab;
+      return roof;
+    }
+
+    // Floor/walls: 5x5 footprint
+    if (adx > 2 || adz > 2) continue;
+
+    if (rel_y == 0) return wall;
+
+    if ((dx == 2 || dx == -2) && (dz == 2 || dz == -2)) return pillar;
+
+    if (dx == 2 && dz == 0 && rel_y >= 1 && rel_y <= 2) {
+      uint16_t pd = 0x8000 | door;
+      pd |= (1 << 9);
+      if (rel_y == 2) pd |= (1 << 14);
+      return pd;
+    }
+
+    if (rel_y == 2) {
+      if (dx == -2 && dz == 0) return B_glass;
+      if (dx == 0 && (dz == -2 || dz == 2)) return B_glass;
+      if (dx == 2 && (dz == -1 || dz == 1)) return B_glass;
+    }
+
+    if (dx == -2 || dx == 2 || dz == -2 || dz == 2) return wall;
+
+    return B_air;
+  }
+
+  return 0xFFFF;
+}
+
 
 uint16_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor anchor, ChunkFeature feature, uint8_t height) {
+
+  if (y >= 60 && y <= 200) {
+    uint16_t vb = getVillageBlockAt(x, y, z);
+    if (vb != 0xFFFF) return vb;
+  }
 
   if (y >= 64 && y >= height) switch (anchor.biome) {
     case W_plains: { // Generate oak trees and grass in plains
@@ -1872,7 +1993,9 @@ uint16_t getBlockAt2 (int x, int y, int z, uint8_t dimension) {
     .hash = getChunkHash(anchor_x, anchor_z),
     .biome = getChunkBiome(anchor_x, anchor_z)
   };
-  return getTerrainAt(x, y, z, anchor);
+  uint16_t block = getTerrainAt(x, y, z, anchor);
+  if (block & 0x8000) return block & 0x1FF;
+  return block;
 }
 
 uint16_t getBlockAt (int x, int y, int z) {

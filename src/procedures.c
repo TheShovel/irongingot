@@ -2767,7 +2767,8 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       short door_z = z;
 
       // Check if this is the upper half by looking for a door at y-1
-      uint16_t block_below = getBlockChange(x, y - 1, z);
+      // Use getBlockAt2 so village doors (not in block_changes) are found
+      uint16_t block_below = getBlockAt2(x, y - 1, z, player->dimension);
       if (isDoorBlock(block_below)) {
         // This is the upper half, use lower half's position for state
         door_y = y - 1;
@@ -2784,7 +2785,8 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       special_block_set_state(door_x, door_y, door_z, target, state);
       
       // Also update upper half's state in the special block table
-      uint16_t above = getBlockChange(door_x, door_y + 1, door_z);
+      // Use getBlockAt2 so village door upper halves are detected
+      uint16_t above = getBlockAt2(door_x, door_y + 1, door_z, player->dimension);
       if (isDoorBlock(above)) {
         special_block_set_state(door_x, door_y + 1, door_z, above, state);
       }
