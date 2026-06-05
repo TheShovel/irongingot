@@ -2583,13 +2583,20 @@ void switchPlayerDimension(PlayerData *player) {
     init_worldgen();
     np_x = (int)player->x;
     np_z = (int)player->z;
+    // Sample floor height instead of ceiling height
     double floor_n = octave_sample(&surface_noise, (double)np_x * 0.015, 0, (double)np_z * 0.015);
-    np_h = 80 + (int)(floor_n * 15.0);
-    if (np_h < 65) np_h = 65;
-    if (np_h > 100) np_h = 100;
-    player->y = (float)(np_h + 2);
-    printf("NETHER SPAWN: bx=%d bz=%d floor_n=%f floor_h=%d player_y=%d\n",
-      np_x, np_z, floor_n, np_h, (int)player->y);
+    int floor_h = 60 + (int)(floor_n * 35.0);
+    if (floor_h < 35) floor_h = 35;
+    if (floor_h > 95) floor_h = 95;
+
+    // Ensure we are above the lava sea (Y=50)
+    if (floor_h < 64) floor_h = 64;
+
+    np_h = floor_h;
+    player->y = (float)(floor_h + 1);
+
+    printf("NETHER SPAWN: bx=%d bz=%d floor_h=%d np_h=%d player_y=%d\n",
+      np_x, np_z, floor_h, np_h, (int)player->y);
   }
 
   sc_respawn(player->client_fd, new_dim);
