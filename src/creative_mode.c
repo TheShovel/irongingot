@@ -6,6 +6,7 @@
 #include "procedures.h"
 #include "packets.h"
 #include "config.h"
+#include "tools.h"
 
 // Creative UI state for all players
 CreativeUIState creative_ui_states[MAX_PLAYERS];
@@ -529,4 +530,11 @@ void closeCreativeModeUI(int client_fd) {
   
   creative_ui_states[player_index].ui_visible = 0;
   sc_systemChat(client_fd, "§7Creative mode UI closed", 25);
+}
+
+// Returns a random item ID from the creative item list
+uint16_t getRandomCreativeItem(void) {
+  uint16_t count = getCreativeItemCount();
+  if (count == 0) return 0;
+  return creative_items[fast_rand() % count].item_id;
 }

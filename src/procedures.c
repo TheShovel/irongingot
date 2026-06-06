@@ -1653,6 +1653,7 @@ uint8_t isPassableBlock (uint16_t block) {
     block == B_fern ||
     block == B_dead_bush ||
     block == B_bush ||
+    block == B_seagrass ||
     block == B_torch ||
     isSaplingBlock(block) ||
     block == B_dandelion ||
@@ -2000,6 +2001,26 @@ uint8_t handlePlayerEating (PlayerData *player, uint8_t just_check) {
     case I_rotten_flesh: food = 4; saturation = 0; break;
     case I_apple: food = 4; saturation = 1200; break;
     case I_bread: food = 5; saturation = 3000; break;
+    case I_baked_potato: food = 5; saturation = 3000; break;
+    case I_carrot: food = 3; saturation = 1800; break;
+    case I_potato: food = 1; saturation = 300; break;
+    case I_poisonous_potato: food = 2; saturation = 600; break;
+    case I_golden_carrot: food = 6; saturation = 7200; break;
+    case I_cooked_cod: food = 5; saturation = 3000; break;
+    case I_cooked_salmon: food = 6; saturation = 4800; break;
+    case I_cooked_rabbit: food = 5; saturation = 3000; break;
+    case I_rabbit: food = 3; saturation = 900; break;
+    case I_cod: food = 2; saturation = 200; break;
+    case I_salmon: food = 2; saturation = 200; break;
+    case I_tropical_fish: food = 1; saturation = 100; break;
+    case I_pufferfish: food = 1; saturation = 100; break;
+    case I_beetroot: food = 1; saturation = 600; break;
+    case I_melon_slice: food = 2; saturation = 600; break;
+    case I_pumpkin_pie: food = 8; saturation = 2400; break;
+    case I_cookie: food = 2; saturation = 200; break;
+    case I_mushroom_stew: food = 6; saturation = 3600; break;
+    case I_beetroot_soup: food = 6; saturation = 3600; break;
+    case I_rabbit_stew: food = 10; saturation = 6000; break;
     default: break;
   }
 
@@ -3773,6 +3794,28 @@ void interactEntity (int entity_id, int interactor_id) {
       broadcastMobMetadata(-1, entity_id);
 
       break;
+
+    case E_VILLAGER: // Villager
+      if (player->inventory_items[player->hotbar] == I_emerald) {
+        // Take the emerald
+        player->inventory_count[player->hotbar]--;
+        if (player->inventory_count[player->hotbar] == 0) {
+          player->inventory_items[player->hotbar] = 0;
+        }
+        syncHeldItem(player, player->inventory_count[player->hotbar], player->inventory_items[player->hotbar]);
+
+        // Give a random item
+        uint16_t random_item = getRandomCreativeItem();
+        givePlayerItem(player, random_item, 1);
+
+        // Swing arm animation for all nearby players
+        for (int i = 0; i < MAX_PLAYERS; i ++) {
+          if (player_data[i].client_fd == -1) continue;
+          if (player_data[i].flags & 0x20) continue;
+          sc_entityAnimation(player_data[i].client_fd, interactor_id, 0);
+        }
+      }
+      break;
   }
 }
 
@@ -4433,6 +4476,26 @@ static void updatePlayerStateTask(void* arg) {
         case I_rotten_flesh: food = 4; saturation = 0; break;
         case I_apple: food = 4; saturation = 1200; break;
         case I_bread: food = 5; saturation = 3000; break;
+        case I_baked_potato: food = 5; saturation = 3000; break;
+        case I_carrot: food = 3; saturation = 1800; break;
+        case I_potato: food = 1; saturation = 300; break;
+        case I_poisonous_potato: food = 2; saturation = 600; break;
+        case I_golden_carrot: food = 6; saturation = 7200; break;
+        case I_cooked_cod: food = 5; saturation = 3000; break;
+        case I_cooked_salmon: food = 6; saturation = 4800; break;
+        case I_cooked_rabbit: food = 5; saturation = 3000; break;
+        case I_rabbit: food = 3; saturation = 900; break;
+        case I_cod: food = 2; saturation = 200; break;
+        case I_salmon: food = 2; saturation = 200; break;
+        case I_tropical_fish: food = 1; saturation = 100; break;
+        case I_pufferfish: food = 1; saturation = 100; break;
+        case I_beetroot: food = 1; saturation = 600; break;
+        case I_melon_slice: food = 2; saturation = 600; break;
+        case I_pumpkin_pie: food = 8; saturation = 2400; break;
+        case I_cookie: food = 2; saturation = 200; break;
+        case I_mushroom_stew: food = 6; saturation = 3600; break;
+        case I_beetroot_soup: food = 6; saturation = 3600; break;
+        case I_rabbit_stew: food = 10; saturation = 6000; break;
         default: break;
       }
 

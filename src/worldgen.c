@@ -1964,10 +1964,18 @@ uint16_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor
         if (floor_hash < 150) return B_gravel;
         return B_dirt;
       }
+    } else {
+      // Water above the floor - with underwater vegetation
+      uint8_t water_depth = 63 - y;
+      uint8_t veg_hash = (anchor.hash >> (x + z)) & 255;
+      
+      // Seagrass on the sea/lake floor (first water layer above sand/gravel)
+      if (y == height + 3 && veg_hash < 40 && water_depth >= 1) {
+        return B_seagrass;
+      }
+      
+      return B_water;
     }
-    
-    // Water above the floor
-    return B_water;
   }
 
   // Global lava level (like sea level) - fills caves and deep air pockets

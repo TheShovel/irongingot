@@ -28,6 +28,7 @@ void closeCreativeModeUI(int client_fd);
 uint8_t isCreativeModeEnabled(void);
 uint16_t getCreativeItemCount(void);
 uint16_t findCreativeItemByName(const char *name);
+uint16_t getRandomCreativeItem(void);
 
 extern CreativeUIState creative_ui_states[MAX_PLAYERS];
 
