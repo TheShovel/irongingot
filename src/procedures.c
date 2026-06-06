@@ -799,6 +799,8 @@ void broadcastMobMetadata (int client_fd, int entity_id) {
 
       break;
 
+
+
     default: return;
   }
 
@@ -1680,6 +1682,11 @@ uint8_t isPassableSpawnBlock (uint16_t block) {
         return 0;
     }
     return isPassableBlock(block);
+}
+
+// Checks if a block is water
+uint8_t isWaterBlock(uint16_t block) {
+    return (block >= B_water && block < B_water + 8);
 }
 
 // Checks whether the given block can be replaced by another block
@@ -3428,11 +3435,16 @@ void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health, uint8_
     // Assign it the input parameters with sub-block centering
     mob_data[i].type = type;
     mob_data[i].x = (double)x + 0.5;
-    mob_data[i].y = (double)y;
+    mob_data[i].y = (double)y;  // Land mobs at integer Y, fish handled separately
     mob_data[i].z = (double)z + 0.5;
     mob_data[i].data = health & 31;
     mob_data[i].anger_timer = 0;
     mob_data[i].dimension = dimension;
+    // Initialize movement to 0
+    mob_data[i].move_dx = 0;
+    mob_data[i].move_dz = 0;
+    mob_data[i].move_dy = 0;
+    mob_data[i].move_timer = 0;
 
     // Forge a UUID from a random number and the mob's index
     uint8_t uuid[16];
@@ -3537,7 +3549,23 @@ static uint8_t getNetherSpawnSurfaceY (short x, short z) {
   return 0;
 }
 
-#define E_VILLAGER 134
+// Find a suitable Y position for fish spawning (in water, with at least 1 water block above)
+static uint8_t getWaterSpawnY(short x, short z, uint8_t dimension) {
+  for (int y = TERRAIN_BASE_HEIGHT + 10; y >= 30; y--) {
+    uint16_t block = getBlockAt2(x, y, z, dimension);
+    uint16_t block_above = getBlockAt2(x, y + 1, z, dimension);
+    
+    // We want the fish to spawn in water with at least 1 water block above
+    if (isWaterBlock(block) && isWaterBlock(block_above)) {
+      // Make sure there's at least one more water or air block above for swimming room
+      uint16_t block_above2 = getBlockAt2(x, y + 2, z, dimension);
+      if (isWaterBlock(block_above2) || block_above2 == B_air) {
+        return (uint8_t)y;
+      }
+    }
+  }
+  return 0;
+}
 
 static void getRandomSpawnOffset(int min_dist, int spawn_range, int16_t *out_dx, int16_t *out_dz) {
 
@@ -3640,9 +3668,71 @@ static void spawnVillageVillagers(PlayerData *player) {
 
 // Spawn mobs around the player. Overworld gets passive mobs and nighttime zombies;
 // Nether gets zombified piglins at any time of day.
+static void spawnFishInWater(PlayerData *player) {
+  if (player->dimension != DIMENSION_OVERWORLD) return;
+
+  int max_mobs = config.mob_spawn_max_per_player;
+  int spawn_range = config.mob_spawn_range;
+  int min_dist = config.mob_spawn_min_distance;
+
+  // Count existing fish near this player
+  uint8_t existing_fish = 0;
+  for (int i = 0; i < MAX_MOBS; i++) {
+    if (mob_data[i].type == 0) continue;
+    if ((mob_data[i].data & 31) == 0) continue; // Skip dead mobs
+    if (mob_data[i].dimension != player->dimension) continue;
+    // Check if this is a fish
+    if (mob_data[i].type != E_COD && mob_data[i].type != E_SALMON && 
+        mob_data[i].type != E_PUFFERFISH && mob_data[i].type != E_TROPICAL_FISH) continue;
+    double dx = fabs(mob_data[i].x - player->x);
+    double dz = fabs(mob_data[i].z - player->z);
+    uint16_t dist = (uint16_t)(dx + dz);
+    if (dist <= (unsigned int)spawn_range) existing_fish++;
+  }
+
+  // Limit fish count (use up to half of mob slots for fish)
+  uint8_t max_fish = max_mobs / 2;
+  if (existing_fish >= max_fish) return;
+
+  // Fish types
+  static const uint8_t fish_types[] = { E_COD, E_SALMON, E_TROPICAL_FISH };
+  static const uint8_t num_fish_types = 3;
+
+  uint8_t fish_to_spawn = 1 + (fast_rand() % 2); // Spawn 1-2 fish
+  if (fish_to_spawn > max_fish - existing_fish) 
+    fish_to_spawn = max_fish - existing_fish;
+
+  for (uint8_t s = 0; s < fish_to_spawn; s++) {
+    int16_t offset_x, offset_z;
+    getRandomSpawnOffset(min_dist, spawn_range, &offset_x, &offset_z);
+    short spawn_x = player->x + offset_x;
+    short spawn_z = player->z + offset_z;
+
+    uint8_t spawn_y = getWaterSpawnY(spawn_x, spawn_z, player->dimension);
+    if (spawn_y == 0) continue; // No valid water position found
+
+    uint8_t type = fish_types[fast_rand() % num_fish_types];
+    // Fish spawn with 3 HP (they're small)
+    // Fish need to be higher in water, so spawn at spawn_y + 1
+    spawnMob(type, spawn_x, spawn_y + 1, spawn_z, 3, player->dimension);
+    
+    // Find the fish we just spawned and adjust its Y to float in water
+    for (int j = 0; j < MAX_MOBS; j++) {
+      if (mob_data[j].type == type && 
+          mob_data[j].x == (double)spawn_x + 0.5 && 
+          mob_data[j].z == (double)spawn_z + 0.5 &&
+          mob_data[j].y == (double)(spawn_y + 1)) {
+        mob_data[j].y = (double)(spawn_y + 1) + 0.5; // Float at center of water block
+        break;
+      }
+    }
+  }
+}
+
 static void spawnMobsAroundPlayer (PlayerData *player) {
 
   spawnVillageVillagers(player);
+  spawnFishInWater(player);
 
   // Passive mob types: Chicken(25), Cow(28), Pig(95), Sheep(106)
   static const uint8_t passive_types[] = { 25, 28, 95, 106 };
@@ -3968,6 +4058,10 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
           case 28: givePlayerItem(player, I_beef, 1 + (fast_rand() % 3)); break;
           case 95: givePlayerItem(player, I_porkchop, 1 + (fast_rand() % 3)); break;
           case 106: givePlayerItem(player, I_mutton, 1 + (fast_rand() & 1)); break;
+          case E_COD: givePlayerItem(player, I_cod, 1); break;
+          case E_SALMON: givePlayerItem(player, I_salmon, 1); break;
+          case E_PUFFERFISH: givePlayerItem(player, I_pufferfish, 1); break;
+          case E_TROPICAL_FISH: givePlayerItem(player, I_tropical_fish, 1); break;
           case 145: givePlayerItem(player, I_rotten_flesh, (fast_rand() % 3)); break;
           case 148:
             givePlayerItem(player, I_rotten_flesh, fast_rand() % 3);
@@ -4134,12 +4228,19 @@ void handleServerTick (int64_t time_since_last_tick) {
       continue;
     }
 
+    uint8_t is_fish = (
+      mob_data[i].type == E_COD ||
+      mob_data[i].type == E_SALMON ||
+      mob_data[i].type == E_PUFFERFISH ||
+      mob_data[i].type == E_TROPICAL_FISH
+    );
     uint8_t passive = (
       mob_data[i].type == 25 || // Chicken
       mob_data[i].type == 28 || // Cow
       mob_data[i].type == 95 || // Pig
       mob_data[i].type == 106 || // Sheep
-      mob_data[i].type == E_VILLAGER // Villager
+      mob_data[i].type == E_VILLAGER || // Villager
+      is_fish
     );
     // Mob "panic" timer, set to 3 after being hit
     // Currently has no effect on hostile mobs
@@ -4200,8 +4301,121 @@ void handleServerTick (int64_t time_since_last_tick) {
 
     // Movement increment per tick (sub-block movement for smoothness)
     double move_amount = 0.05;  // Move 0.05 blocks per tick for smooth walking
-
-    if (roaming) { // Passive/neutral roaming movement handling
+    
+    // Fish-specific swimming behavior
+    if (is_fish) {
+      // Fish swim faster and can move vertically in water
+      move_amount = 0.08;  // Fish swim faster
+      
+      // Check if fish is in water
+      int fish_block_x = mobBlockCoord(old_x);
+      int fish_block_y = mobBlockCoord(old_y);
+      int fish_block_z = mobBlockCoord(old_z);
+      uint16_t fish_block = getBlockAt2(fish_block_x, fish_block_y, fish_block_z, mob_data[i].dimension);
+      uint8_t in_water = isWaterBlock(fish_block);
+      
+      // If fish is out of water, try to jump back in
+      if (!in_water) {
+        // Look for water in a 3x3x3 area around the fish
+        uint8_t found_water = 0;
+        for (int dx = -1; dx <= 1 && !found_water; dx++) {
+          for (int dy = -1; dy <= 1 && !found_water; dy++) {
+            for (int dz = -1; dz <= 1 && !found_water; dz++) {
+              uint16_t nearby = getBlockAt2(fish_block_x + dx, fish_block_y + dy, fish_block_z + dz, mob_data[i].dimension);
+              if (isWaterBlock(nearby)) {
+                found_water = 1;
+                // Move towards water
+                new_x += dx * move_amount * 2;
+                new_y += dy * move_amount * 2;
+                new_z += dz * move_amount * 2;
+                break;
+              }
+            }
+          }
+        }
+        
+        // Fish out of water take damage
+        if (!found_water && server_ticks % 10 == 0) {
+          hurtEntity(entity_id, -1, D_generic, 1);
+        }
+      }
+      
+      // Fish movement - more frequent direction changes and vertical movement
+      if (mob_data[i].move_timer <= 0) {
+        // Pick a random 3D direction
+        uint32_t dir_rand = fast_rand();
+        
+        // Reset previous movement
+        mob_data[i].move_dx = 0;
+        mob_data[i].move_dz = 0;
+        
+        // Horizontal movement (X or Z axis)
+        if ((dir_rand >> 2) & 1) {
+          if ((dir_rand >> 1) & 1) {
+            mob_data[i].move_dx = move_amount;
+            mob_data[i].yaw_store = 192;
+          } else {
+            mob_data[i].move_dx = -move_amount;
+            mob_data[i].yaw_store = 64;
+          }
+        } else {
+          if ((dir_rand >> 1) & 1) {
+            mob_data[i].move_dz = move_amount;
+            mob_data[i].yaw_store = 0;
+          } else {
+            mob_data[i].move_dz = -move_amount;
+            mob_data[i].yaw_store = 128;
+          }
+        }
+        
+        // Vertical movement - fish can swim up and down (30% chance)
+        if ((dir_rand & 7) < 3) { // 3/8 chance for vertical movement
+          if (dir_rand & 1) {
+            mob_data[i].move_dy = move_amount * 0.5; // Swim up
+          } else {
+            mob_data[i].move_dy = -move_amount * 0.5; // Swim down
+          }
+        } else {
+          mob_data[i].move_dy = 0;
+        }
+        
+        // Fish change direction more often (20-60 ticks)
+        int min_ticks = (int)(1.0f * TICKS_PER_SECOND);
+        int max_ticks = (int)(3.0f * TICKS_PER_SECOND);
+        mob_data[i].move_timer = min_ticks + (fast_rand() % (max_ticks - min_ticks + 1));
+      }
+      
+      // Apply movement
+      new_x += mob_data[i].move_dx;
+      new_z += mob_data[i].move_dz;
+      new_y += mob_data[i].move_dy;
+      
+      // Decrement movement timer
+      if (mob_data[i].move_timer > 0) mob_data[i].move_timer--;
+      
+      // Find water surface level - the topmost water block
+      int ws_fish_block_x = mobBlockCoord(new_x);
+      int ws_fish_block_z = mobBlockCoord(new_z);
+      int water_surface = 0;
+      // Scan from above down to find the top water block
+      for (int y = 255; y >= mobBlockCoord(new_y) - 10; y--) {
+        uint16_t block = getBlockAt2(ws_fish_block_x, y, ws_fish_block_z, mob_data[i].dimension);
+        uint16_t block_above = getBlockAt2(ws_fish_block_x, y + 1, ws_fish_block_z, mob_data[i].dimension);
+        // Water surface is a water block with non-water (or air) above it
+        if (isWaterBlock(block) && !isWaterBlock(block_above)) {
+          water_surface = y;
+          break;
+        }
+      }
+      
+      // Fish must stay at least 1 block below the water surface
+      if (water_surface > 0) {
+        double max_y = (double)water_surface - 1.0; // At least 1 block under surface
+        if (new_y > max_y) new_y = max_y;
+      }
+      // Also clamp to prevent swimming too far from spawn depth
+      if (new_y < old_y - 2.0) new_y = old_y - 2.0;
+    } else if (roaming) { // Passive/neutral roaming movement handling
 
       // Check if we need to pick a new direction or start resting
       if (mob_data[i].move_timer <= 0) {
@@ -4314,10 +4528,49 @@ void handleServerTick (int64_t time_since_last_tick) {
 
     // Collision + one-block step-up. Check the intended horizontal move before
     // cancelling individual axes; otherwise mobs never get a chance to climb.
-    new_y = old_y;
+    // Fish keep their vertical movement, land mobs start at old_y
+    if (!is_fish) {
+      new_y = old_y;
+    }
     uint8_t stepped_up = false;
 
-    if (!canMobOccupyPosition(new_x, old_y, new_z, mob_data[i].dimension)) {
+    // Fish can move through water blocks
+    if (is_fish) {
+      // Simplified collision for fish - check if the new position has water nearby
+      int fish_block_x = mobBlockCoord(new_x);
+      int fish_block_y = mobBlockCoord(new_y);
+      int fish_block_z = mobBlockCoord(new_z);
+      
+      // Check a 3x3x2 area around the fish for water
+      uint8_t has_water = 0;
+      for (int dx = -1; dx <= 1; dx++) {
+        for (int dy = 0; dy <= 1; dy++) {
+          for (int dz = -1; dz <= 1; dz++) {
+            uint16_t block = getBlockAt2(fish_block_x + dx, fish_block_y + dy, fish_block_z + dz, mob_data[i].dimension);
+            if (isWaterBlock(block)) {
+              has_water = 1;
+              break;
+            }
+          }
+          if (has_water) break;
+        }
+        if (has_water) break;
+      }
+      
+      // Also check that the position isn't inside a solid block
+      uint16_t fish_block = getBlockAt2(fish_block_x, fish_block_y, fish_block_z, mob_data[i].dimension);
+      uint16_t fish_block_above = getBlockAt2(fish_block_x, fish_block_y + 1, fish_block_z, mob_data[i].dimension);
+      
+      if (!has_water || (!isPassableBlock(fish_block) && !isWaterBlock(fish_block))) {
+        // Can't move to position without water or inside solid block
+        new_x = old_x;
+        new_y = old_y;
+        new_z = old_z;
+        if (roaming) mob_data[i].move_timer = 0;
+      }
+    }
+
+    if (!is_fish && !canMobOccupyPosition(new_x, old_y, new_z, mob_data[i].dimension)) {
       if (canMobStepTo(new_x, old_y + 1.0, new_z, mob_data[i].dimension)) {
         new_y = old_y + 1.0;
         stepped_up = true;
@@ -4346,7 +4599,8 @@ void handleServerTick (int64_t time_since_last_tick) {
       }
     }
 
-    if (!stepped_up &&
+    // Fish don't fall - they float in water
+    if (!is_fish && !stepped_up &&
         !hasMobFloorBelow(new_x, new_y, new_z, mob_data[i].dimension) &&
         canMobOccupyPosition(new_x, old_y - 1.0, new_z, mob_data[i].dimension)) {
       new_y = old_y - 1.0;

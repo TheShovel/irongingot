@@ -210,6 +210,14 @@
 #define STATE_CONFIGURATION 4
 #define STATE_PLAY 5
 
+// Entity type identifiers
+#define E_VILLAGER 134
+// Fish entity IDs for protocol 772 (1.21.8)
+#define E_COD 26
+#define E_SALMON 105
+#define E_PUFFERFISH 102
+#define E_TROPICAL_FISH 131
+
 typedef struct OutPacket OutPacket;
 
 typedef struct {
@@ -368,6 +376,7 @@ typedef struct {
   // Movement direction (persisted across ticks for smoother walking)
   double move_dx;
   double move_dz;
+  double move_dy;  // Vertical movement for swimming/flying
   int move_timer;  // How many ticks to keep moving in this direction
   int anger_timer; // Hostile-neutral mobs attack while this is positive
   uint8_t yaw_store;  // Consistent yaw while walking
