@@ -847,16 +847,17 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
 
     #ifdef ALLOW_DOORS
     if (isDoorBlock(block_changes_snapshot[i].block)) {
+      // Skip upper half of doors - they are sent together with lower half
+      uint16_t lower_state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y - 1, block_changes_snapshot[i].z);
+      if (lower_state != 0) {
+        // This is an upper half (lower half exists below), skip it
+        // Still need to skip state entries
+        if (i + 2 < block_changes_snapshot_count) i += 2;
+        continue;
+      }
+
       // Bounds check: ensure i+1 and i+2 are valid indices
       if (i + 2 >= block_changes_snapshot_count) continue;
-
-      // Verify that i+1 is the upper half of this door
-      if (block_changes_snapshot[i + 1].x != block_changes_snapshot[i].x ||
-          block_changes_snapshot[i + 1].y != block_changes_snapshot[i].y + 1 ||
-          block_changes_snapshot[i + 1].z != block_changes_snapshot[i].z) continue;
-
-      // Verify that i+2 is the state entry
-      if (block_changes_snapshot[i + 2].block != 0 || block_changes_snapshot[i + 2].z != block_changes_snapshot[i].z) continue;
 
       // Read state from the unified special block table
       uint16_t state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z);
@@ -866,8 +867,13 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
 
       // Send door with proper state (both halves)
       sendDoorUpdate(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].block, 0, open, direction, hinge);
-      sendDoorUpdate(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y + 1, block_changes_snapshot[i].z, block_changes_snapshot[i + 1].block, 1, open, direction, hinge);
-      // Skip the next two entries (upper half and state data)
+      // Check if upper half exists in special block table
+      uint16_t upper_state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y + 1, block_changes_snapshot[i].z);
+      if (upper_state != 0) {
+        // Upper half exists, send it
+        sendDoorUpdate(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y + 1, block_changes_snapshot[i].z, block_changes_snapshot[i].block, 1, open, direction, hinge);
+      }
+      // Skip the next two entries (state data for this door half)
       i += 2;
       continue;
     }

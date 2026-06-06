@@ -212,6 +212,7 @@
 
 // Entity type identifiers
 #define E_VILLAGER 134
+#define E_PIGLIN 96
 // Fish entity IDs for protocol 772 (1.21.8)
 #define E_COD 26
 #define E_SALMON 105

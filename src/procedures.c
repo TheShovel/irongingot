@@ -3149,12 +3149,15 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       ) &&
       isReplaceableBlock(getBlockAt2(x, y, z, player->dimension))
     ) {
-      // Apply server-side block change (this will place both halves and set default state)
+      // Apply server-side block change for door - makeBlockChange handles both halves
       if (makeBlockChange(x, y, z, block, player->dimension)) return;
 
       // Update the door state with the correct direction in the unified special block table
+      // makeBlockChange already set state for lower half, but we need to update it with direction
+      // and set state for upper half
       uint16_t state = door_encode_state(0, 0, direction);  // closed, hinge left, direction
       special_block_set_state(x, y, z, block, state);
+      special_block_set_state(x, y + 1, z, block, state);
 
       // Send door updates with proper state to all players
       for (int j = 0; j < MAX_PLAYERS; j++) {
@@ -3758,6 +3761,7 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
 
 
   if (player->dimension == DIMENSION_NETHER) {
+    // Spawn piglins
     uint8_t piglins_to_spawn = (fast_rand() % slots_left) + 1;
     if (piglins_to_spawn > slots_left / 2) piglins_to_spawn = slots_left / 2;
     if (piglins_to_spawn < 1) piglins_to_spawn = 1;
@@ -3768,6 +3772,23 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
       short spawn_x = player->x + offset_x;
       short spawn_z = player->z + offset_z;
 
+      uint8_t surface_y = getNetherSpawnSurfaceY(spawn_x, spawn_z);
+      if (surface_y == 0) continue;
+
+      // Regular Piglin (96) spawns in the Nether
+      spawnMob(E_PIGLIN, spawn_x, surface_y + 1, spawn_z, 16, player->dimension);
+    }
+
+    // Also spawn zombified piglins
+    uint8_t zombie_piglins_to_spawn = (fast_rand() % slots_left) + 1;
+    if (zombie_piglins_to_spawn > slots_left / 4) zombie_piglins_to_spawn = slots_left / 4;
+    if (zombie_piglins_to_spawn < 1) zombie_piglins_to_spawn = 1;
+
+    for (uint8_t s = 0; s < zombie_piglins_to_spawn; s ++) {
+      int16_t offset_x, offset_z;
+      getRandomSpawnOffset(min_dist, spawn_range, &offset_x, &offset_z);
+      short spawn_x = player->x + offset_x;
+      short spawn_z = player->z + offset_z;
 
       uint8_t surface_y = getNetherSpawnSurfaceY(spawn_x, spawn_z);
       if (surface_y == 0) continue;
@@ -3906,6 +3927,35 @@ void interactEntity (int entity_id, int interactor_id) {
         }
       }
       break;
+
+    case E_PIGLIN: // Piglin
+      // Check if piglin is angry (uses anger_timer)
+      if (mob->anger_timer > 0) {
+        // Angry piglins refuse trades
+        break;
+      }
+      
+      // Piglins trade gold ingots for random items (same as villagers)
+      if (player->inventory_items[player->hotbar] == I_gold_ingot) {
+        // Take the gold ingot
+        player->inventory_count[player->hotbar]--;
+        if (player->inventory_count[player->hotbar] == 0) {
+          player->inventory_items[player->hotbar] = 0;
+        }
+        syncHeldItem(player, player->inventory_count[player->hotbar], player->inventory_items[player->hotbar]);
+
+        // Give a random creative item (same as villagers)
+        uint16_t random_item = getRandomCreativeItem();
+        givePlayerItem(player, random_item, 1);
+
+        // Swing arm animation for all nearby players
+        for (int i = 0; i < MAX_PLAYERS; i ++) {
+          if (player_data[i].client_fd == -1) continue;
+          if (player_data[i].flags & 0x20) continue;
+          sc_entityAnimation(player_data[i].client_fd, interactor_id, 0);
+        }
+      }
+      break;
   }
 }
 
@@ -4011,6 +4061,15 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
 
     // Set the mob's panic timer
     mob->data |= (3 << 6);
+    // Make passive mobs run instantly when hit
+    if (mob->type == 25 || mob->type == 28 || mob->type == 95 || 
+        mob->type == 106 || mob->type == E_VILLAGER ||
+        mob->type == E_COD || mob->type == E_SALMON ||
+        mob->type == E_PUFFERFISH || mob->type == E_TROPICAL_FISH) {
+      mob->move_timer = 0; // Force immediate direction change
+      mob->move_dx = 0;   // Clear current movement
+      mob->move_dz = 0;
+    }
 
     // Hitting one zombified piglin angers nearby zombified piglins, but keep
     // the alert radius modest so one hit does not pull mobs from far away.
@@ -4041,6 +4100,11 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
         }
       }
     }
+    
+    // Piglins get angry when hit by a player
+    if (attacker_id > 0 && mob->type == E_PIGLIN) {
+      mob->anger_timer = 40; // 2 seconds of anger (40 ticks at 20 TPS)
+    }
 
     // Process health change on the server
     if (mob_health <= damage) {
@@ -4062,6 +4126,9 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
           case E_SALMON: givePlayerItem(player, I_salmon, 1); break;
           case E_PUFFERFISH: givePlayerItem(player, I_pufferfish, 1); break;
           case E_TROPICAL_FISH: givePlayerItem(player, I_tropical_fish, 1); break;
+          case E_PIGLIN: 
+            givePlayerItem(player, getRandomCreativeItem(), 1);
+            break;
           case 145: givePlayerItem(player, I_rotten_flesh, (fast_rand() % 3)); break;
           case 148:
             givePlayerItem(player, I_rotten_flesh, fast_rand() % 3);
@@ -4257,12 +4324,17 @@ void handleServerTick (int64_t time_since_last_tick) {
 
     if (mob_data[i].anger_timer > 0) mob_data[i].anger_timer --;
 
-    uint8_t neutral_roaming = (mob_data[i].type == 148 && mob_data[i].anger_timer <= 0);
+    uint8_t neutral_roaming = (
+      (mob_data[i].type == 148 && mob_data[i].anger_timer <= 0) ||
+      (mob_data[i].type == E_PIGLIN && mob_data[i].anger_timer <= 0)
+    );
     uint8_t roaming = passive || neutral_roaming;
 
     // Process panic timer (no early continue - mobs move every tick now)
-    if (roaming && panic && server_ticks % (uint32_t)TICKS_PER_SECOND == 0) {
-      mob_data[i].data -= (1 << 6);
+    // Decrement every 2 seconds for longer panic duration
+    if (roaming && panic && server_ticks % (2 * (uint32_t)TICKS_PER_SECOND) == 0) {
+      // Properly decrement panic timer (2 bits at positions 6-7)
+      mob_data[i].data = (mob_data[i].data & ~(3 << 6)) | ((panic - 1) << 6);
     }
 
     // Find the player closest to this mob
@@ -4430,27 +4502,66 @@ void handleServerTick (int64_t time_since_last_tick) {
           // Was resting, now pick a new direction to walk in
           uint32_t dir_rand = fast_rand();
 
-          // Move by a fraction of a block on the X or Z axis
-          // Yaw is set to face in the direction of motion
-          if ((dir_rand >> 2) & 1) {
-            if ((dir_rand >> 1) & 1) {
-              mob_data[i].move_dx = move_amount;
-              mob_data[i].move_dz = 0;
-              mob_data[i].yaw_store = 192;
+          if (panic && closest_player != NULL) {
+            // Panicking: RUN from the closest player
+            double dx = mob_data[i].x - closest_player->x;
+            double dz = mob_data[i].z - closest_player->z;
+            double len = sqrt(dx * dx + dz * dz);
+            if (len > 0.001) {
+              // Normalize and set direction away from player - RUN at 0.2 blocks/tick
+              mob_data[i].move_dx = (dx / len) * 0.2;
+              mob_data[i].move_dz = (dz / len) * 0.2;
+              // Calculate yaw from flee direction
+              double angle = atan2(dz, dx) * 256.0 / (2.0 * 3.14159265358979);
+              mob_data[i].yaw_store = (uint8_t)(((int)(angle + 0.5) - 75) & 255);
             } else {
-              mob_data[i].move_dx = -move_amount;
-              mob_data[i].move_dz = 0;
-              mob_data[i].yaw_store = 64;
+              // Player is very close, pick random direction to RUN
+              if ((dir_rand >> 2) & 1) {
+                if ((dir_rand >> 1) & 1) {
+                  mob_data[i].move_dx = 0.2;
+                  mob_data[i].move_dz = 0;
+                  mob_data[i].yaw_store = 192;
+                } else {
+                  mob_data[i].move_dx = -0.2;
+                  mob_data[i].move_dz = 0;
+                  mob_data[i].yaw_store = 64;
+                }
+              } else {
+                if ((dir_rand >> 1) & 1) {
+                  mob_data[i].move_dx = 0;
+                  mob_data[i].move_dz = 0.2;
+                  mob_data[i].yaw_store = 0;
+                } else {
+                  mob_data[i].move_dx = 0;
+                  mob_data[i].move_dz = -0.2;
+                  mob_data[i].yaw_store = 128;
+                }
+              }
             }
           } else {
-            if ((dir_rand >> 1) & 1) {
-              mob_data[i].move_dx = 0;
-              mob_data[i].move_dz = move_amount;
-              mob_data[i].yaw_store = 0;
+            // Normal random movement
+            // Move by a fraction of a block on the X or Z axis
+            // Yaw is set to face in the direction of motion
+            if ((dir_rand >> 2) & 1) {
+              if ((dir_rand >> 1) & 1) {
+                mob_data[i].move_dx = move_amount;
+                mob_data[i].move_dz = 0;
+                mob_data[i].yaw_store = 192;
+              } else {
+                mob_data[i].move_dx = -move_amount;
+                mob_data[i].move_dz = 0;
+                mob_data[i].yaw_store = 64;
+              }
             } else {
-              mob_data[i].move_dx = 0;
-              mob_data[i].move_dz = -move_amount;
-              mob_data[i].yaw_store = 128;
+              if ((dir_rand >> 1) & 1) {
+                mob_data[i].move_dx = 0;
+                mob_data[i].move_dz = move_amount;
+                mob_data[i].yaw_store = 0;
+              } else {
+                mob_data[i].move_dx = 0;
+                mob_data[i].move_dz = -move_amount;
+                mob_data[i].yaw_store = 128;
+              }
             }
           }
 
@@ -4459,9 +4570,9 @@ void handleServerTick (int64_t time_since_last_tick) {
           int max_ticks = (int)(4.0f * TICKS_PER_SECOND);
           mob_data[i].move_timer = min_ticks + (fast_rand() % (max_ticks - min_ticks + 1));
 
-          // If panicking, shorter rest periods and keep moving
+          // If panicking, change direction extremely frequently for crazy running
           if (panic) {
-            mob_data[i].move_timer /= 2;
+            mob_data[i].move_timer = 5 + (fast_rand() % 11); // 5-15 ticks (~0.25-0.75 seconds)
           }
         }
       }
