@@ -578,6 +578,22 @@ static uint16_t getOreSeedAt(int x, int y, int z, uint8_t biome) {
     if (ore_density > 0.75 && (ore_hash & 0x1F) == 0) return B_diamond_ore;
     if (ore_density > 0.70 && (ore_hash & 0x3F) == 0) return B_gold_ore;
   }
+
+  // Emerald: rare cave-level ore, more common in mountain-like biomes.
+  if (y >= 8 && y < 48) {
+    uint8_t mountain_biome = (
+      biome == W_windswept_hills ||
+      biome == W_windswept_forest ||
+      biome == W_stony_peaks ||
+      biome == W_jagged_peaks ||
+      biome == W_frozen_peaks ||
+      biome == W_snowy_slopes ||
+      biome == W_grove
+    );
+    if (mountain_biome) {
+      if (ore_density > 0.60 && (ore_hash & 0x0F) == 0) return B_emerald_ore;
+    } else if (ore_density > 0.74 && (ore_hash & 0x3F) == 0) return B_emerald_ore;
+  }
   
   // Iron: mid-level (Y 16-48), very common
   if (y >= 16 && y < 48) {
@@ -714,6 +730,18 @@ static uint16_t getMineshaftBlockAt(int x, int y, int z) {
   return B_air;
 }
 
+static uint8_t isVillageHouseBiome(uint8_t biome) {
+  switch (biome) {
+    case W_plains: case W_forest: case W_sunflower_plains:
+    case W_desert: case W_savanna:
+    case W_taiga: case W_snowy_taiga: case W_old_growth_pine_taiga:
+    case W_birch_forest: case W_flower_forest:
+      return 1;
+    default:
+      return 0;
+  }
+}
+
 static uint16_t getVillageBlockAt(int x, int y, int z) {
   int vx = div_floor(x, 48);
   int vz = div_floor(z, 48);
@@ -764,15 +792,7 @@ static uint16_t getVillageBlockAt(int x, int y, int z) {
     // Check biome at house center (not per-block) so houses aren't cut off at
     // biome or chunk borders
     uint8_t house_biome = getChunkBiome(div_floor(hx, 32), div_floor(hz, 32));
-    switch (house_biome) {
-      case W_plains: case W_forest: case W_sunflower_plains:
-      case W_desert: case W_savanna:
-      case W_taiga: case W_snowy_taiga: case W_old_growth_pine_taiga:
-      case W_birch_forest: case W_flower_forest:
-        break;
-      default:
-        return 0xFFFF;
-    }
+    if (!isVillageHouseBiome(house_biome)) return 0xFFFF;
 
     uint16_t wall = B_oak_planks;
     uint16_t roof = B_oak_planks;
@@ -837,6 +857,54 @@ static uint16_t getVillageBlockAt(int x, int y, int z) {
   }
 
   return 0xFFFF;
+}
+
+uint8_t getVillageHousePositions(int x, int z, short *house_x, short *house_z, uint8_t max_houses) {
+
+  if (house_x == NULL || house_z == NULL || max_houses == 0) return 0;
+
+  int vx = div_floor(x, 48);
+  int vz = div_floor(z, 48);
+
+  uint64_t key = splitmix64(((uint64_t)(uint32_t)vx * 1234567 ^ (uint64_t)(uint32_t)vz * 7654321) ^ world_seed);
+  if ((uint32_t)(key % 8) != 0) return 0;
+
+  int cx = vx * 48 + 18 + (int)((key >> 8) % 11);
+  int cz = vz * 48 + 18 + (int)((key >> 16) % 11);
+  int num_houses = 3 + (int)((key >> 24) % 4);
+
+  int hx_list[8], hz_list[8];
+  int placed = 0;
+  for (int i = 0; i < num_houses && placed < 8; i++) {
+    uint64_t hkey = splitmix64(key ^ (uint64_t)i * 31337);
+    int hx = cx + (int)(hkey & 31) - 15;
+    int hz = cz + (int)((hkey >> 8) & 31) - 15;
+
+    int ok = 1;
+    for (int j = 0; j < placed; j++) {
+      int dx = hx_list[j] - hx; if (dx < 0) dx = -dx;
+      int dz = hz_list[j] - hz; if (dz < 0) dz = -dz;
+      if (dx < 8 && dz < 8) { ok = 0; break; }
+    }
+    if (ok) { hx_list[placed] = hx; hz_list[placed] = hz; placed++; }
+  }
+
+  uint8_t count = 0;
+  for (int i = 0; i < placed && count < max_houses; i++) {
+    int hx = hx_list[i];
+    int hz = hz_list[i];
+    int house_height = getHeightAt(hx, hz);
+    if (house_height < 63) continue;
+
+    uint8_t house_biome = getChunkBiome(div_floor(hx, 32), div_floor(hz, 32));
+    if (!isVillageHouseBiome(house_biome)) continue;
+
+    house_x[count] = (short)hx;
+    house_z[count] = (short)hz;
+    count++;
+  }
+
+  return count;
 }
 
 
@@ -2002,7 +2070,8 @@ uint16_t getTerrainAt (int x, int y, int z, ChunkAnchor anchor) {
 
 }
 
-// Simplified nether block lookup (no caves/ores/glowstone — enough for block interaction queries)
+// Nether block lookup used by gameplay systems. Keep this in sync with
+// buildNetherChunkSection() for blocks players can interact with.
 uint16_t getNetherBlockAt (int x, int y, int z) {
   if (y < 0) return B_bedrock;
   if (y > 255) return B_air;
@@ -2082,6 +2151,41 @@ uint16_t getNetherBlockAt (int x, int y, int z) {
                   return ((ch & 0x1F) == 0) ? B_shroomlight : wart;
               }
           }
+      }
+  }
+
+  // Surface decorations must match buildNetherChunkSection(). Without this,
+  // the client can see soul sand/soil while mining lookup reports air.
+  if (y == floor_h + 1 && !is_lake) {
+      uint16_t block = B_air;
+      double soul_threshold = 0.5;
+      if (biome == W_soul_sand_valley) soul_threshold = 0.2;
+      double soul = octave_sample(&detail_noise, x * 0.02 + 3000.0, 0, z * 0.02 + 3000.0);
+      if (soul > soul_threshold) {
+          uint32_t sh = (uint32_t)(x * 31337 + z * 74747);
+          block = (sh & 1) ? B_soul_sand : B_soul_soil;
+      }
+      if (biome == W_soul_sand_valley || biome == W_basalt_deltas) {
+          double magma = octave_sample(&detail_noise, x * 0.04 + 7000.0, 0, z * 0.04 + 7000.0);
+          if (magma > 0.65) block = B_magma_block;
+      }
+      if (biome == W_nether_wastes) {
+          double gravel = octave_sample(&detail_noise, x * 0.03 + 11000.0, 0, z * 0.03 + 11000.0);
+          if (gravel > 0.75) block = B_gravel;
+      }
+      if (block != B_air) return block;
+  }
+
+  // Basalt columns are also generated as air-space decorations.
+  if (y > floor_h + 1 && y < floor_h + 40 && !is_lake) {
+      double col_threshold = 0.75;
+      if (biome == W_basalt_deltas) col_threshold = 0.55;
+      else if (biome == W_soul_sand_valley) col_threshold = 0.65;
+      double col = octave_sample(&detail_noise, x * 0.05 + 5000.0, 0, z * 0.05 + 5000.0);
+      if (col > col_threshold) {
+          double col_h_n = octave_sample(&surface_noise, x * 0.015 + 6000.0, 0, z * 0.015 + 6000.0);
+          int col_h = 5 + (int)((col_h_n + 1.0) * 15.0);
+          if (y - floor_h <= col_h) return B_basalt;
       }
   }
 

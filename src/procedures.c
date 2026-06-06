@@ -460,7 +460,10 @@ uint8_t serverSlotToClientSlot (int window_id, uint8_t slot) {
     if (slot >= 9 && slot <= 35) return slot;
     if (slot == 40) return 45;
     if (slot >= 36 && slot <= 39) return 44 - slot;
-    if (slot >= 41 && slot <= 44) return slot - 40;
+    if (slot == 41) return 1;
+    if (slot == 42) return 2;
+    if (slot == 44) return 3;
+    if (slot == 45) return 4;
 
   } else if (window_id == 12) { // crafting table
 
@@ -1495,6 +1498,7 @@ uint16_t getMiningResult (uint16_t held_item, uint16_t block) {
     case B_gold_ore:
     case B_redstone_ore:
     case B_diamond_ore:
+    case B_emerald_ore:
       // Check if player is holding an iron (or better) pickaxe
       if (
         held_item != I_iron_pickaxe &&
@@ -1526,6 +1530,12 @@ uint16_t getMiningResult (uint16_t held_item, uint16_t block) {
       if (fast_rand() % 2 == 0) return I_flint;
       return I_gravel;
 
+    case B_soul_sand:
+      return I_soul_sand;
+
+    case B_soul_soil:
+      return I_soul_soil;
+
     default: break;
   }
 
@@ -1552,6 +1562,18 @@ uint8_t isInstantlyMined (PlayerData *player, uint16_t block) {
 
   if (block == B_obsidian)
     return held_item == I_diamond_pickaxe;
+
+  if (
+    block == B_soul_sand ||
+    block == B_soul_soil
+  ) return (
+    held_item == I_wooden_shovel ||
+    held_item == I_stone_shovel ||
+    held_item == I_iron_shovel ||
+    held_item == I_diamond_shovel ||
+    held_item == I_netherite_shovel ||
+    held_item == I_golden_shovel
+  );
 
   if (isLeafBlock(block))
     return held_item == I_shears;
@@ -2159,6 +2181,65 @@ void playPickupAnimation (PlayerData *player, uint16_t item, double x, double y,
 }
 #endif
 
+static void clearConnectedNetherPortal(short start_x, uint8_t start_y, short start_z, uint8_t dimension) {
+
+  if (getBlockAt2(start_x, start_y, start_z, dimension) != B_nether_portal) return;
+
+  typedef struct {
+    short x;
+    uint8_t y;
+    short z;
+  } PortalNode;
+
+  PortalNode queue[128];
+  uint8_t head = 0;
+  uint8_t tail = 0;
+
+  queue[tail++] = (PortalNode){start_x, start_y, start_z};
+  makeBlockChange(start_x, start_y, start_z, 0, dimension);
+
+  while (head < tail) {
+    PortalNode node = queue[head++];
+
+    static const int8_t offsets[6][3] = {
+      { 1, 0, 0 }, { -1, 0, 0 },
+      { 0, 1, 0 }, { 0, -1, 0 },
+      { 0, 0, 1 }, { 0, 0, -1 }
+    };
+
+    for (uint8_t i = 0; i < 6; i ++) {
+      int ny = (int)node.y + offsets[i][1];
+      if (ny < 0 || ny > 255) continue;
+
+      short nx = node.x + offsets[i][0];
+      short nz = node.z + offsets[i][2];
+      if (getBlockAt2(nx, (uint8_t)ny, nz, dimension) != B_nether_portal) continue;
+
+      makeBlockChange(nx, (uint8_t)ny, nz, 0, dimension);
+      if (tail < sizeof(queue) / sizeof(queue[0])) {
+        queue[tail++] = (PortalNode){nx, (uint8_t)ny, nz};
+      }
+    }
+  }
+
+}
+
+static void clearNearbyNetherPortal(short x, short y, short z, uint8_t dimension) {
+
+  for (short dx = -2; dx <= 2; dx ++) {
+    for (short dz = -2; dz <= 2; dz ++) {
+      for (short dy = -4; dy <= 4; dy ++) {
+        int ny = (int)y + dy;
+        if (ny < 0 || ny > 255) continue;
+        if (getBlockAt2(x + dx, (uint8_t)ny, z + dz, dimension) == B_nether_portal) {
+          clearConnectedNetherPortal(x + dx, (uint8_t)ny, z + dz, dimension);
+        }
+      }
+    }
+  }
+
+}
+
 void handlePlayerAction (PlayerData *player, int action, short x, short y, short z) {
 
   // Check spawn protection for block-breaking actions
@@ -2201,7 +2282,11 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
   // In creative, only the "start mining" action is sent
   // No additional verification is performed, the block is simply removed
   if (action == 0 && GAMEMODE == 1) {
+    uint16_t block = getBlockAt2(x, y, z, player->dimension);
     makeBlockChange(x, y, z, 0, player->dimension);
+    if (block == B_obsidian || block == B_nether_portal) {
+      clearNearbyNetherPortal(x, y, z, player->dimension);
+    }
     return;
   }
 
@@ -2212,6 +2297,10 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
 
   // Don't continue if the block change failed
   if (makeBlockChange(x, y, z, 0, player->dimension)) return;
+
+  if (block == B_obsidian || block == B_nether_portal) {
+    clearNearbyNetherPortal(x, y, z, player->dimension);
+  }
 
   uint16_t held_item = player->inventory_items[player->hotbar];
   uint16_t item = getMiningResult(held_item, block);
@@ -3321,6 +3410,7 @@ void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health, uint8_
     mob_data[i].y = (double)y;
     mob_data[i].z = (double)z + 0.5;
     mob_data[i].data = health & 31;
+    mob_data[i].anger_timer = 0;
     mob_data[i].dimension = dimension;
 
     // Forge a UUID from a random number and the mob's index
@@ -3361,6 +3451,7 @@ static uint8_t countMobsNearPlayer (PlayerData *player) {
   for (int i = 0; i < MAX_MOBS; i ++) {
     if (mob_data[i].type == 0) continue;
     if ((mob_data[i].data & 31) == 0) continue; // Skip dead mobs
+    if (mob_data[i].dimension != player->dimension) continue;
     double dx = fabs(mob_data[i].x - player->x);
     double dz = fabs(mob_data[i].z - player->z);
     uint16_t dist = (uint16_t)(dx + dz);
@@ -3369,11 +3460,168 @@ static uint8_t countMobsNearPlayer (PlayerData *player) {
   return count;
 }
 
-// Spawn friendly mobs behind the player on grass/snow blocks
+static int mobBlockCoord (double v) {
+  return (int)floor(v);
+}
+
+static uint8_t canMobOccupyPosition (double x, double y, double z, uint8_t dimension) {
+  const double radius = 0.3;
+  int min_x = mobBlockCoord(x - radius);
+  int max_x = mobBlockCoord(x + radius);
+  int min_z = mobBlockCoord(z - radius);
+  int max_z = mobBlockCoord(z + radius);
+  int min_y = mobBlockCoord(y);
+  int max_y = mobBlockCoord(y + 1.8);
+
+  for (int bx = min_x; bx <= max_x; bx ++) {
+    for (int bz = min_z; bz <= max_z; bz ++) {
+      for (int by = min_y; by <= max_y; by ++) {
+        if (!isPassableBlock(getBlockAt2(bx, by, bz, dimension))) return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+static uint8_t hasMobFloorBelow (double x, double y, double z, uint8_t dimension) {
+  const double radius = 0.3;
+  int min_x = mobBlockCoord(x - radius);
+  int max_x = mobBlockCoord(x + radius);
+  int min_z = mobBlockCoord(z - radius);
+  int max_z = mobBlockCoord(z + radius);
+  int below_y = mobBlockCoord(y - 0.05);
+
+  for (int bx = min_x; bx <= max_x; bx ++) {
+    for (int bz = min_z; bz <= max_z; bz ++) {
+      if (!isPassableBlock(getBlockAt2(bx, below_y, bz, dimension))) return true;
+    }
+  }
+
+  return false;
+}
+
+static uint8_t canMobStepTo (double x, double y, double z, uint8_t dimension) {
+  return canMobOccupyPosition(x, y, z, dimension) && hasMobFloorBelow(x, y, z, dimension);
+}
+
+static uint8_t getNetherSpawnSurfaceY (short x, short z) {
+  for (int y = 120; y >= 5; y --) {
+    uint16_t surface_block = getBlockAt2(x, y, z, DIMENSION_NETHER);
+    if (surface_block == B_air || surface_block == B_lava || surface_block == B_fire) continue;
+    if (!isPassableSpawnBlock(getBlockAt2(x, y + 1, z, DIMENSION_NETHER))) continue;
+    if (!isPassableSpawnBlock(getBlockAt2(x, y + 2, z, DIMENSION_NETHER))) continue;
+    return (uint8_t)y;
+  }
+  return 0;
+}
+
+#define E_VILLAGER 134
+
+static void getRandomSpawnOffset(int min_dist, int spawn_range, int16_t *out_dx, int16_t *out_dz) {
+
+  int dist_range = spawn_range - min_dist;
+  if (dist_range <= 0) dist_range = 1;
+
+  int dist = min_dist + (fast_rand() % dist_range);
+  if (dist < 1) dist = 1;
+
+  // Pick one of eight directions, with a small perpendicular spread.
+  static const int8_t dir_x[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
+  static const int8_t dir_z[8] = { -1, -1, 0, 1, 1, 1, 0, -1 };
+  uint8_t dir = fast_rand() & 7;
+  int8_t side_offset = (int8_t)(fast_rand() % 11) - 5;
+  int8_t side_x = -dir_z[dir];
+  int8_t side_z = dir_x[dir];
+
+  *out_dx = dir_x[dir] * dist + side_x * side_offset;
+  *out_dz = dir_z[dir] * dist + side_z * side_offset;
+
+}
+
+static void spawnVillageVillagers(PlayerData *player) {
+
+  if (player->dimension != DIMENSION_OVERWORLD) return;
+
+  short house_x[72], house_z[72];
+  uint8_t house_count = 0;
+
+  // Villages are keyed by 48x48 cells, while houses can sit near a cell edge.
+  // Scan adjacent cells so standing in a visible village still finds its houses.
+  for (int dz = -1; dz <= 1; dz ++) {
+    for (int dx = -1; dx <= 1; dx ++) {
+      short tmp_x[8], tmp_z[8];
+      uint8_t found = getVillageHousePositions(player->x + dx * 48, player->z + dz * 48, tmp_x, tmp_z, 8);
+      for (uint8_t i = 0; i < found && house_count < 72; i ++) {
+        double px = (double)player->x + 0.5;
+        double pz = (double)player->z + 0.5;
+        double hx = (double)tmp_x[i] + 0.5;
+        double hz = (double)tmp_z[i] + 0.5;
+        double dist_x = hx - px;
+        double dist_z = hz - pz;
+        if (dist_x * dist_x + dist_z * dist_z > 80.0 * 80.0) continue;
+        house_x[house_count] = tmp_x[i];
+        house_z[house_count] = tmp_z[i];
+        house_count++;
+      }
+    }
+  }
+
+  if (house_count == 0) return;
+
+  uint8_t existing = 0;
+  for (int i = 0; i < MAX_MOBS; i ++) {
+    if (mob_data[i].type != E_VILLAGER) continue;
+    if ((mob_data[i].data & 31) == 0) continue;
+    if (mob_data[i].dimension != DIMENSION_OVERWORLD) continue;
+
+    for (uint8_t h = 0; h < house_count; h ++) {
+      double dx = mob_data[i].x - ((double)house_x[h] + 0.5);
+      double dz = mob_data[i].z - ((double)house_z[h] + 0.5);
+      if (dx * dx + dz * dz <= 24.0 * 24.0) {
+        existing++;
+        break;
+      }
+    }
+  }
+
+  uint8_t target = house_count > 12 ? 12 : house_count;
+  if (existing >= target) return;
+
+  uint8_t start = fast_rand() % house_count;
+  for (uint8_t n = 0; n < house_count && existing < target; n ++) {
+    uint8_t h = (start + n) % house_count;
+    uint8_t occupied = false;
+
+    for (int i = 0; i < MAX_MOBS; i ++) {
+      if (mob_data[i].type != E_VILLAGER) continue;
+      if ((mob_data[i].data & 31) == 0) continue;
+      if (mob_data[i].dimension != DIMENSION_OVERWORLD) continue;
+      double dx = mob_data[i].x - ((double)house_x[h] + 0.5);
+      double dz = mob_data[i].z - ((double)house_z[h] + 0.5);
+      double dy = fabs(mob_data[i].y - (double)(getHeightAt(house_x[h], house_z[h]) + 1));
+      if (dx * dx + dz * dz < 9.0 && dy < 4.0) {
+        occupied = true;
+        break;
+      }
+    }
+    if (occupied) continue;
+
+    uint8_t y = getHeightAt(house_x[h], house_z[h]) + 1;
+    if (!isPassableSpawnBlock(getBlockAt2(house_x[h], y, house_z[h], DIMENSION_OVERWORLD))) continue;
+    if (!isPassableSpawnBlock(getBlockAt2(house_x[h], y + 1, house_z[h], DIMENSION_OVERWORLD))) continue;
+
+    spawnMob(E_VILLAGER, house_x[h], y, house_z[h], 20, DIMENSION_OVERWORLD);
+    existing++;
+  }
+
+}
+
+// Spawn mobs around the player. Overworld gets passive mobs and nighttime zombies;
+// Nether gets zombified piglins at any time of day.
 static void spawnMobsAroundPlayer (PlayerData *player) {
 
-  // Don't spawn mobs in the Nether
-  if (player->dimension == DIMENSION_NETHER) return;
+  spawnVillageVillagers(player);
 
   // Passive mob types: Chicken(25), Cow(28), Pig(95), Sheep(106)
   static const uint8_t passive_types[] = { 25, 28, 95, 106 };
@@ -3396,62 +3644,39 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
   // Determine if it's night (world_time >= 12000)
   uint8_t is_night = (world_time >= 12000);
 
-  // Determine the direction "behind" the player using yaw.
-  // yaw is -128..127 mapping to -180..180 degrees.
-  // We compute the forward direction vector, then negate it for "behind".
-  // Instead of trigonometry, use the integer yaw-to-direction mapping
-  // that the Minecraft protocol uses for movement packets:
-  //   yaw values map to 8 directions on the XZ plane.
-  // Forward direction (where player is facing):
-  //   yaw  -128..-96  => dx= 0, dz=-1  (North, -Z)
-  //   yaw   -96..-64  => dx= 1, dz=-1  (North-East)
-  //   yaw   -64..-32  => dx= 1, dz= 0  (East, +X)
-  //   yaw   -32..  0  => dx= 1, dz= 1  (South-East)
-  //   yaw     0.. 32  => dx= 0, dz= 1  (South, +Z)
-  //   yaw    32.. 64  => dx=-1, dz= 1  (South-West)
-  //   yaw    64.. 96  => dx=-1, dz= 0  (West, -X)
-  //   yaw    96..127  => dx=-1, dz=-1  (North-West)
-  int8_t fwd_dx, fwd_dz;
-  int8_t yaw = player->yaw;
-  if (yaw < -96)      { fwd_dx =  0; fwd_dz = -1; }
-  else if (yaw < -64) { fwd_dx =  1; fwd_dz = -1; }
-  else if (yaw < -32) { fwd_dx =  1; fwd_dz =  0; }
-  else if (yaw <   0) { fwd_dx =  1; fwd_dz =  1; }
-  else if (yaw <  32) { fwd_dx =  0; fwd_dz =  1; }
-  else if (yaw <  64) { fwd_dx = -1; fwd_dz =  1; }
-  else if (yaw <  96) { fwd_dx = -1; fwd_dz =  0; }
-  else                { fwd_dx = -1; fwd_dz = -1; }
 
-  // Behind = opposite of forward
-  int8_t behind_dx = -fwd_dx;
-  int8_t behind_dz = -fwd_dz;
 
-  // Perpendicular direction for lateral offset
-  int8_t side_dx = -behind_dz;
-  int8_t side_dz = behind_dx;
+  if (player->dimension == DIMENSION_NETHER) {
+    uint8_t piglins_to_spawn = (fast_rand() % slots_left) + 1;
+    if (piglins_to_spawn > slots_left / 2) piglins_to_spawn = slots_left / 2;
+    if (piglins_to_spawn < 1) piglins_to_spawn = 1;
+
+    for (uint8_t s = 0; s < piglins_to_spawn; s ++) {
+      int16_t offset_x, offset_z;
+      getRandomSpawnOffset(min_dist, spawn_range, &offset_x, &offset_z);
+      short spawn_x = player->x + offset_x;
+      short spawn_z = player->z + offset_z;
+
+
+      uint8_t surface_y = getNetherSpawnSurfaceY(spawn_x, spawn_z);
+      if (surface_y == 0) continue;
+
+      // Zombified Piglin(148) spawns in the Nether regardless of time of day.
+      spawnMob(148, spawn_x, surface_y + 1, spawn_z, 10, player->dimension);
+    }
+
+    return;
+  }
 
   // Try to spawn mobs in random positions behind the player
   uint8_t to_spawn = (fast_rand() % slots_left) + 1; // Spawn 1 to slots_left
   for (uint8_t s = 0; s < to_spawn; s ++) {
 
-    // Pick a random distance behind the player
-    int dist_range = spawn_range - min_dist;
-    if (dist_range <= 0) dist_range = 1;
-    uint8_t dist = (uint8_t)min_dist + (fast_rand() % dist_range);
+    int16_t offset_x, offset_z;
+    getRandomSpawnOffset(min_dist, spawn_range, &offset_x, &offset_z);
+    short spawn_x = player->x + offset_x;
+    short spawn_z = player->z + offset_z;
 
-    // Random offset perpendicular to behind direction
-    int8_t side_offset = (int8_t)(fast_rand() % 11) - 5; // -5 to +5
-
-    short spawn_x = player->x + behind_dx * dist + side_dx * side_offset;
-    short spawn_z = player->z + behind_dz * dist + side_dz * side_offset;
-
-    // Verify this position is actually BEHIND the player using dot product.
-    // Vector from player to spawn point:
-    int16_t vec_x = spawn_x - player->x;
-    int16_t vec_z = spawn_z - player->z;
-    // Dot product with forward direction — if positive, it's in front:
-    int16_t dot = vec_x * fwd_dx + vec_z * fwd_dz;
-    if (dot >= 0) continue; // Spawn point is in front or perpendicular, skip
 
     // Get the surface height at this position
     uint8_t surface_y = getHeightAt(spawn_x, spawn_z);
@@ -3483,19 +3708,11 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
     int hostile_range = 2; // Zombies spawn within 2 blocks
 
     for (uint8_t s = 0; s < hostile_to_spawn; s ++) {
-      int dist_range = hostile_range - min_dist;
-      if (dist_range <= 0) dist_range = 1;
-      uint8_t dist = (uint8_t)min_dist + (fast_rand() % dist_range);
+      int16_t offset_x, offset_z;
+      getRandomSpawnOffset(min_dist, hostile_range, &offset_x, &offset_z);
+      short spawn_x = player->x + offset_x;
+      short spawn_z = player->z + offset_z;
 
-      int8_t side_offset = (int8_t)(fast_rand() % 11) - 5;
-
-      short spawn_x = player->x + behind_dx * dist + side_dx * side_offset;
-      short spawn_z = player->z + behind_dz * dist + side_dz * side_offset;
-
-      int16_t vec_x = spawn_x - player->x;
-      int16_t vec_z = spawn_z - player->z;
-      int16_t dot = vec_x * fwd_dx + vec_z * fwd_dz;
-      if (dot >= 0) continue;
 
       uint8_t surface_y = getHeightAt(spawn_x, spawn_z);
       if (surface_y == 0) continue;
@@ -3510,7 +3727,7 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
 
       uint8_t type = hostile_types[fast_rand() % num_hostile_types];
 
-      // Zombies spawn with 20 HP
+      // Zombies spawn with 10 HP
       spawnMob(type, spawn_x, surface_y + 1, spawn_z, 10, player->dimension);
     }
   }
@@ -3618,6 +3835,10 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
         // Killed by being in lava
         strcpy((char *)recv_buffer + player_name_len, " tried to swim in lava");
         recv_buffer[player_name_len + 22] = '\0';
+      } else if (damage_type == D_hot_floor) {
+        // Killed by standing on magma
+        strcpy((char *)recv_buffer + player_name_len, " discovered the floor was lava");
+        recv_buffer[player_name_len + 31] = '\0';
       } else if (attacker_id < -1) {
         // Killed by a mob
         strcpy((char *)recv_buffer + player_name_len, " was slain by a mob");
@@ -3658,6 +3879,22 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
     // Set the mob's panic timer
     mob->data |= (3 << 6);
 
+    // Hitting one zombified piglin angers nearby zombified piglins, but keep
+    // the alert radius modest so one hit does not pull mobs from far away.
+    if (attacker_id > 0 && mob->type == 148) {
+      const double piglin_alert_range = 12.0;
+      for (int i = 0; i < MAX_MOBS; i ++) {
+        if (mob_data[i].type != 148) continue;
+        if ((mob_data[i].data & 31) == 0) continue;
+        if (mob_data[i].dimension != mob->dimension) continue;
+        double dx = mob_data[i].x - mob->x;
+        double dz = mob_data[i].z - mob->z;
+        if (dx * dx + dz * dz > piglin_alert_range * piglin_alert_range) continue;
+        mob_data[i].anger_timer = 30 * TICKS_PER_SECOND;
+        mob_data[i].move_timer = 0;
+      }
+    }
+
     // Push zombies back 2 blocks when hit by a player
     if (attacker_id > 0 && mob->type == 145) {
       PlayerData *attacker;
@@ -3689,6 +3926,10 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
           case 95: givePlayerItem(player, I_porkchop, 1 + (fast_rand() % 3)); break;
           case 106: givePlayerItem(player, I_mutton, 1 + (fast_rand() & 1)); break;
           case 145: givePlayerItem(player, I_rotten_flesh, (fast_rand() % 3)); break;
+          case 148:
+            givePlayerItem(player, I_rotten_flesh, fast_rand() % 3);
+            if ((fast_rand() & 3) == 0) givePlayerItem(player, I_gold_ingot, 1);
+            break;
           default: break;
         }
       }
@@ -3762,6 +4003,9 @@ void handleServerTick (int64_t time_since_last_tick) {
       uint16_t block = getBlockAt2(player->x, player->y, player->z, pdim);
       if (block >= B_lava && block < B_lava + 4) {
         hurtEntity(player->client_fd, -1, D_lava, 8);
+      }
+      if (!(player->flags & 0x04) && getBlockAt2(player->x, player->y - 1, player->z, pdim) == B_magma_block) {
+        hurtEntity(player->client_fd, -1, D_hot_floor, 1);
       }
       #ifdef ENABLE_CACTUS_DAMAGE
       if (block == B_cactus ||
@@ -3851,21 +4095,29 @@ void handleServerTick (int64_t time_since_last_tick) {
       mob_data[i].type == 25 || // Chicken
       mob_data[i].type == 28 || // Cow
       mob_data[i].type == 95 || // Pig
-      mob_data[i].type == 106 // Sheep
+      mob_data[i].type == 106 || // Sheep
+      mob_data[i].type == E_VILLAGER // Villager
     );
     // Mob "panic" timer, set to 3 after being hit
     // Currently has no effect on hostile mobs
     uint8_t panic = (mob_data[i].data >> 6) & 3;
 
-    // Burn hostile mobs if above ground during sunlight
-    if (!passive && (world_time < 13000 || world_time > 23460) && mob_data[i].y > 48) {
+    // Burn overworld zombies if above ground during sunlight.
+    // Nether mobs should not burn based on overworld time of day.
+    if (mob_data[i].dimension == DIMENSION_OVERWORLD && mob_data[i].type == 145 &&
+        (world_time < 13000 || world_time > 23460) && mob_data[i].y > 48) {
       hurtEntity(entity_id, -1, D_on_fire, 2);
     }
 
     uint32_t r = fast_rand();
 
+    if (mob_data[i].anger_timer > 0) mob_data[i].anger_timer --;
+
+    uint8_t neutral_roaming = (mob_data[i].type == 148 && mob_data[i].anger_timer <= 0);
+    uint8_t roaming = passive || neutral_roaming;
+
     // Process panic timer (no early continue - mobs move every tick now)
-    if (passive && panic && server_ticks % (uint32_t)TICKS_PER_SECOND == 0) {
+    if (roaming && panic && server_ticks % (uint32_t)TICKS_PER_SECOND == 0) {
       mob_data[i].data -= (1 << 6);
     }
 
@@ -3874,6 +4126,7 @@ void handleServerTick (int64_t time_since_last_tick) {
     double closest_dist_double = 2147483647.0;
     for (int j = 0; j < MAX_PLAYERS; j ++) {
       if (player_data[j].client_fd == -1) continue;
+      if (player_data[j].dimension != mob_data[i].dimension) continue;
       double dx = mob_data[i].x - player_data[j].x;
       double dz = mob_data[i].z - player_data[j].z;
       double curr_dist = dx * dx + dz * dz; // Squared distance
@@ -3905,7 +4158,7 @@ void handleServerTick (int64_t time_since_last_tick) {
     // Movement increment per tick (sub-block movement for smoothness)
     double move_amount = 0.05;  // Move 0.05 blocks per tick for smooth walking
 
-    if (passive) { // Passive mob movement handling
+    if (roaming) { // Passive/neutral roaming movement handling
 
       // Check if we need to pick a new direction or start resting
       if (mob_data[i].move_timer <= 0) {
@@ -3972,13 +4225,12 @@ void handleServerTick (int64_t time_since_last_tick) {
       double dist_to_player = sqrt(closest_dist_double);
       double y_diff = fabs(old_y - closest_player->y);
 
-      // Vision range - zombies can see and chase up to 16 blocks
-      int zombie_vision_range = 16;
-      // Attack range - zombies attack when within 2 blocks
-      int zombie_attack_range = 2;
+      // Zombified piglins should not acquire/chase from as far away as zombies.
+      double vision_range = mob_data[i].type == 148 ? 10.0 : 16.0;
+      double attack_range = mob_data[i].type == 148 ? 2.0 : 3.0;
 
       // If we're within attack range, hurt the player
-      if (dist_to_player < 3.0 && y_diff < 2.0) {
+      if (dist_to_player < attack_range && y_diff < 2.0) {
         // Attack cooldown check - zombies can't attack more than once per second
         if (mob_data[i].move_timer <= 0) {
           // Only attack if the player is still connected
@@ -3993,7 +4245,7 @@ void handleServerTick (int64_t time_since_last_tick) {
       if (mob_data[i].move_timer > 0) mob_data[i].move_timer--;
 
       // Only move towards player if within vision range
-      if (dist_to_player > zombie_vision_range) {
+      if (dist_to_player > vision_range) {
         continue;
       }
 
@@ -4017,77 +4269,51 @@ void handleServerTick (int64_t time_since_last_tick) {
 
     }
 
-    // Get block coordinates for collision detection
-    int block_x = (int)new_x;
-    int block_y = (int)new_y;
-    int block_z = (int)new_z;
+    // Collision + one-block step-up. Check the intended horizontal move before
+    // cancelling individual axes; otherwise mobs never get a chance to climb.
+    new_y = old_y;
+    uint8_t stepped_up = false;
 
-    // Holds the block that the mob is moving into
-    uint16_t block = getBlockAt(block_x, block_y, block_z);
-    // Holds the block above the target block, i.e. the "head" block
-    uint16_t block_above = getBlockAt(block_x, block_y + 1, block_z);
-
-    // Validate movement on X axis
-    int old_block_x = (int)old_x;
-    int old_block_z = (int)old_z;
-
-    if (block_x != old_block_x && (
-      !isPassableBlock(getBlockAt(block_x, block_y + 1, old_block_z)) ||
-      (
-        !isPassableBlock(getBlockAt(block_x, block_y, old_block_z)) &&
-        !isPassableBlock(getBlockAt(block_x, block_y + 2, old_block_z))
-      )
-    )) {
-      new_x = old_x;
-      block_x = old_block_x;
-      block = getBlockAt(block_x, block_y, block_z);
-      block_above = getBlockAt(block_x, block_y + 1, block_z);
-      // Reset timer when blocked so passive mobs pick a new direction
-      if (passive) mob_data[i].move_timer = 0;
-    }
-    // Validate movement on Z axis
-    if (block_z != old_block_z && (
-      !isPassableBlock(getBlockAt(old_block_x, block_y + 1, block_z)) ||
-      (
-        !isPassableBlock(getBlockAt(old_block_x, block_y, block_z)) &&
-        !isPassableBlock(getBlockAt(old_block_x, block_y + 2, block_z))
-      )
-    )) {
-      new_z = old_z;
-      block_z = old_block_z;
-      block = getBlockAt(block_x, block_y, block_z);
-      block_above = getBlockAt(block_x, block_y + 1, block_z);
-      // Reset timer when blocked so passive mobs pick a new direction
-      if (passive) mob_data[i].move_timer = 0;
-    }
-    // Validate diagonal movement
-    if (block_x != old_block_x && block_z != old_block_z && (
-      !isPassableBlock(block_above) ||
-      (
-        !isPassableBlock(block) &&
-        !isPassableBlock(getBlockAt(block_x, block_y + 2, block_z))
-      )
-    )) {
-      // We know that movement along just one axis is fine thanks to the
-      // checks above, pick one based on proximity.
-      double dist_x = fabs(old_x - closest_player->x);
-      double dist_z = fabs(old_z - closest_player->z);
-      if (dist_x < dist_z) {
-        new_z = old_z;
-        block_z = old_block_z;
+    if (!canMobOccupyPosition(new_x, old_y, new_z, mob_data[i].dimension)) {
+      if (canMobStepTo(new_x, old_y + 1.0, new_z, mob_data[i].dimension)) {
+        new_y = old_y + 1.0;
+        stepped_up = true;
       } else {
-        new_x = old_x;
-        block_x = old_block_x;
+        if (!canMobOccupyPosition(new_x, old_y, old_z, mob_data[i].dimension)) {
+          if (canMobStepTo(new_x, old_y + 1.0, old_z, mob_data[i].dimension)) {
+            new_y = old_y + 1.0;
+            new_z = old_z;
+            stepped_up = true;
+          } else {
+            new_x = old_x;
+            if (roaming) mob_data[i].move_timer = 0;
+          }
+        }
+
+        double test_y = stepped_up ? new_y : old_y;
+        if (!canMobOccupyPosition(new_x, test_y, new_z, mob_data[i].dimension)) {
+          if (!stepped_up && canMobStepTo(new_x, old_y + 1.0, new_z, mob_data[i].dimension)) {
+            new_y = old_y + 1.0;
+            stepped_up = true;
+          } else {
+            new_z = old_z;
+            if (roaming) mob_data[i].move_timer = 0;
+          }
+        }
       }
-      block = getBlockAt(block_x, block_y, block_z);
-      // Reset timer when blocked so passive mobs pick a new direction
-      if (passive) mob_data[i].move_timer = 0;
     }
 
-    // Check if we're supposed to climb/drop one block
-    // The checks above already ensure that there's enough space to climb
-    if (!isPassableBlock(block)) new_y += 1.0;
-    else if (isPassableBlock(getBlockAt(block_x, block_y - 1, block_z))) new_y -= 1.0;
+    if (!stepped_up &&
+        !hasMobFloorBelow(new_x, new_y, new_z, mob_data[i].dimension) &&
+        canMobOccupyPosition(new_x, old_y - 1.0, new_z, mob_data[i].dimension)) {
+      new_y = old_y - 1.0;
+    }
+
+    int block_x = mobBlockCoord(new_x);
+    int block_y = mobBlockCoord(new_y);
+    int block_z = mobBlockCoord(new_z);
+    uint16_t block = getBlockAt2(block_x, block_y, block_z, mob_data[i].dimension);
+    uint16_t block_above = getBlockAt2(block_x, block_y + 1, block_z, mob_data[i].dimension);
 
     // Exit early if all movement was cancelled
     if (fabs(new_x - mob_data[i].x) < 0.001 &&
@@ -4100,6 +4326,7 @@ void handleServerTick (int64_t time_since_last_tick) {
       if (j == i) continue;
       if (mob_data[j].type == 0) continue;
       if ((mob_data[j].data & 31) == 0) continue; // Skip dead mobs
+      if (mob_data[j].dimension != mob_data[i].dimension) continue;
       double dx = mob_data[j].x - new_x;
       double dz = mob_data[j].z - new_z;
       double dy = fabs(mob_data[j].y - new_y);
@@ -4205,6 +4432,7 @@ static void updatePlayerStateTask(void* arg) {
         case I_cooked_mutton: food = 6; saturation = 4800; break;
         case I_rotten_flesh: food = 4; saturation = 0; break;
         case I_apple: food = 4; saturation = 1200; break;
+        case I_bread: food = 5; saturation = 3000; break;
         default: break;
       }
 
@@ -4237,6 +4465,10 @@ static void updatePlayerStateTask(void* arg) {
     uint16_t block = getBlockAt2(player->x, player->y, player->z, pdim);
     if (block >= B_lava && block < B_lava + 4) {
       if (player->health > 8) player->health -= 8;
+      else player->health = 0;
+    }
+    if (!(player->flags & 0x04) && getBlockAt2(player->x, player->y - 1, player->z, pdim) == B_magma_block) {
+      if (player->health > 1) player->health -= 1;
       else player->health = 0;
     }
     #ifdef ENABLE_CACTUS_DAMAGE

@@ -34,7 +34,7 @@
 #define MAX_PLAYERS 16
 
 // How many mobs to allocate memory for
-#define MAX_MOBS (MAX_PLAYERS)
+#define MAX_MOBS (MAX_PLAYERS * 4)
 
 // Manhattan distance at which mobs despawn
 #define MOB_DESPAWN_DISTANCE 256
@@ -369,6 +369,7 @@ typedef struct {
   double move_dx;
   double move_dz;
   int move_timer;  // How many ticks to keep moving in this direction
+  int anger_timer; // Hostile-neutral mobs attack while this is positive
   uint8_t yaw_store;  // Consistent yaw while walking
   // Lower 5 bits: health
   // Middle 1 bit: sheep sheared, unused for other mobs

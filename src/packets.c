@@ -611,8 +611,8 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
         val >>= 7; \
       } \
     } else { \
-      uint16_t _pal[288]; \
-      uint16_t _palidx[277]; \
+      uint16_t _pal[320]; \
+      uint16_t _palidx[sizeof(B_to_I) / sizeof(B_to_I[0])]; \
       int _psize = 0; \
       memset(_palidx, 0xFF, sizeof(_palidx)); \
       for (int _j = 0; _j < 4096; _j++) { \
@@ -622,7 +622,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
           for (int _k = 0; _k < _psize; _k++) { if (_pal[_k] == _b) { _found = 1; break; } } \
           if (!_found) _pal[_psize++] = _b; \
         } else { \
-          if (_b < 277 && _palidx[_b] == 0xFFFF) { _palidx[_b] = _psize; _pal[_psize++] = _b; } \
+          if (_b < (sizeof(_palidx) / sizeof(_palidx[0])) && _palidx[_b] == 0xFFFF) { _palidx[_b] = _psize; _pal[_psize++] = _b; } \
         } \
       } \
       uint16_t _bc = 0; \
@@ -1169,6 +1169,75 @@ int cs_useItemOn (int client_fd) {
   return 0;
 }
 
+static void readChangedSlotPayload (int client_fd, uint8_t *present, uint16_t *item, uint8_t *count) {
+
+  *present = readByte(client_fd);
+  *item = 0;
+  *count = 0;
+
+  if (!*present) return;
+
+  *item = readVarInt(client_fd);
+  *count = (uint8_t)readVarInt(client_fd);
+
+  // ignore components
+  readLengthPrefixedData(client_fd);
+  readLengthPrefixedData(client_fd);
+
+}
+
+static uint8_t countCraftOperationsFromInventoryDelta (PlayerData *player, uint16_t item, uint8_t result_count, uint16_t *before_items, uint8_t *before_counts) {
+
+  if (item == 0 || result_count == 0) return 1;
+
+  uint16_t added = 0;
+  for (uint8_t i = 0; i < 41; i ++) {
+    if (player->inventory_items[i] != item) continue;
+    uint8_t before = before_items[i] == item ? before_counts[i] : 0;
+    if (player->inventory_count[i] > before) added += player->inventory_count[i] - before;
+  }
+
+  uint8_t operations = added / result_count;
+  return operations == 0 ? 1 : operations;
+
+}
+
+static void consumeCraftingIngredients (PlayerData *player, int window_id, uint8_t operations, uint8_t *before_counts, uint16_t *before_items) {
+
+  uint8_t inventory_craft_slots[] = {0, 1, 3, 4};
+  uint8_t max_slots = window_id == 12 ? 9 : 4;
+
+  for (uint8_t n = 0; n < max_slots; n ++) {
+    uint8_t i = window_id == 12 ? n : inventory_craft_slots[n];
+    if (before_items[i] == 0 || before_counts[i] == 0) continue;
+
+    uint8_t expected = before_counts[i] > operations ? before_counts[i] - operations : 0;
+
+    // If the client already sent the ingredient decrement, leave it alone.
+    // Otherwise reduce the still-unchanged slot server-side to keep crafting authoritative.
+    if (player->craft_items[i] == before_items[i] && player->craft_count[i] > expected) {
+      player->craft_count[i] = expected;
+      if (expected == 0) player->craft_items[i] = 0;
+    }
+  }
+
+}
+
+static void syncCraftingSlots (PlayerData *player, int window_id) {
+
+  uint8_t inventory_craft_slots[] = {0, 1, 3, 4};
+  uint8_t max_slots = window_id == 12 ? 9 : 4;
+
+  for (uint8_t n = 0; n < max_slots; n ++) {
+    uint8_t i = window_id == 12 ? n : inventory_craft_slots[n];
+    uint8_t client_slot = serverSlotToClientSlot(window_id, 41 + i);
+    if (client_slot != 255) {
+      sc_setContainerSlot(player->client_fd, window_id, client_slot, player->craft_count[i], player->craft_items[i]);
+    }
+  }
+
+}
+
 // C->S Click Container
 int cs_clickContainer (int client_fd) {
 
@@ -1184,6 +1253,23 @@ int cs_clickContainer (int client_fd) {
 
   PlayerData *player;
   if (getPlayerData(client_fd, &player)) return 1;
+
+  uint16_t before_inventory_items[41];
+  uint8_t before_inventory_count[41];
+  uint16_t before_craft_items[9];
+  uint8_t before_craft_count[9];
+  memcpy(before_inventory_items, player->inventory_items, sizeof(before_inventory_items));
+  memcpy(before_inventory_count, player->inventory_count, sizeof(before_inventory_count));
+  memcpy(before_craft_items, player->craft_items, sizeof(before_craft_items));
+  memcpy(before_craft_count, player->craft_count, sizeof(before_craft_count));
+
+  uint8_t output_click = false;
+  uint8_t output_count = 0;
+  uint16_t output_item = 0;
+  if ((window_id == 0 || window_id == 12) && clicked_slot == 0) {
+    getCraftingOutput(player, &output_count, &output_item);
+    output_click = output_item != 0 && output_count != 0;
+  }
 
   uint8_t apply_changes = true;
   uint8_t equipment_dirty = false;
@@ -1209,7 +1295,7 @@ int cs_clickContainer (int client_fd) {
     apply_changes = false;
   }
 
-  uint8_t slot, count, craft = false;
+  uint8_t slot, count, present, craft = false;
   uint16_t item;
   int tmp;
 
@@ -1224,7 +1310,8 @@ int cs_clickContainer (int client_fd) {
   for (int i = 0; i < changes_count; i ++) {
 
     slot = clientSlotToServerSlot(window_id, readUint16(client_fd));
-    if (slot > 67) continue; // skip out-of-bounds slots
+    readChangedSlotPayload(client_fd, &present, &item, &count);
+    if (slot > 67) continue; // skip out-of-bounds slots after consuming their payload
     // slots outside of the inventory overflow into the crafting buffer
     if (slot > 40 && apply_changes) craft = true;
 
@@ -1242,7 +1329,7 @@ int cs_clickContainer (int client_fd) {
       p_count = &player->inventory_count[slot];
     }
 
-    if (!readByte(client_fd)) { // no item?
+    if (!present) { // no item?
       if (slot != 255 && apply_changes) {
         *p_item = 0;
         *p_count = 0;
@@ -1259,13 +1346,6 @@ int cs_clickContainer (int client_fd) {
       }
       continue;
     }
-
-    item = readVarInt(client_fd);
-    count = (uint8_t)readVarInt(client_fd);
-
-    // ignore components
-    readLengthPrefixedData(client_fd);
-    readLengthPrefixedData(client_fd);
 
     if (count > 0 && apply_changes) {
       *p_item = item;
@@ -1285,6 +1365,15 @@ int cs_clickContainer (int client_fd) {
   }
 
   // window 0 is player inventory, window 12 is crafting table
+  if (output_click && apply_changes) {
+    uint8_t operations = mode == 1
+      ? countCraftOperationsFromInventoryDelta(player, output_item, output_count, before_inventory_items, before_inventory_count)
+      : 1;
+    consumeCraftingIngredients(player, window_id, operations, before_craft_count, before_craft_items);
+    syncCraftingSlots(player, window_id);
+    craft = true;
+  }
+
   if (craft && (window_id == 0 || window_id == 12)) {
     getCraftingOutput(player, &count, &item);
     sc_setContainerSlot(client_fd, window_id, 0, count, item);

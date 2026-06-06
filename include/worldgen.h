@@ -38,6 +38,7 @@ uint8_t biomeNameMatches(uint8_t biome_id, const char* name, uint8_t name_len);
 uint32_t getBiomeKeywordMask(uint8_t biome_id);
 uint32_t getQueryKeywordMask(const char* name, uint8_t name_len);
 uint8_t getBiomeAtBlockCoords(int x, int z);
+uint8_t getVillageHousePositions(int x, int z, short *house_x, short *house_z, uint8_t max_houses);
 
 extern WORLDGEN_THREAD_LOCAL uint16_t chunk_section[4096];
 uint16_t buildChunkSection (int cx, int cy, int cz, uint8_t dimension);

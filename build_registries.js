@@ -12,6 +12,7 @@ const blockToItemOverrides = {
   iron_ore: "raw_iron",
   coal_ore: "coal",
   copper_ore: "raw_copper",
+  emerald_ore: "emerald",
   snow: "snowball",
   dead_bush: "stick",
 };
@@ -393,17 +394,32 @@ async function extractItemsAndBlocks() {
 
   // Now add nether/essential blocks after the initial 256
   const extraBlocks = [
-    "netherrack", "soul_sand", "soul_soil", "glowstone",
-    "nether_quartz_ore", "obsidian", "ancient_debris",
-    "basalt", "blackstone", "crimson_nylium", "warped_nylium",
-    "shroomlight", "nether_bricks", "cracked_nether_bricks",
-    "nether_wart_block", "warped_wart_block",
-    "crimson_stem", "warped_stem", "fire", "gilded_blackstone",
+    "netherrack",
+    "soul_sand",
+    "soul_soil",
+    "glowstone",
+    "nether_quartz_ore",
+    "obsidian",
+    "ancient_debris",
+    "basalt",
+    "blackstone",
+    "crimson_nylium",
+    "warped_nylium",
+    "shroomlight",
+    "nether_bricks",
+    "cracked_nether_bricks",
+    "nether_wart_block",
+    "warped_wart_block",
+    "crimson_stem",
+    "warped_stem",
+    "fire",
+    "gilded_blackstone",
     "nether_portal",
+    "emerald_ore",
   ];
   for (const block of extraBlocks) {
-    if (block in palette) continue;  // Already included in first 256
-    if (!(block in blocks)) continue;  // Not in notchian data
+    if (block in palette) continue; // Already included in first 256
+    if (!(block in blocks)) continue; // Not in notchian data
     palette[block] = blocks[block];
     mapping.push(items[block] || 0);
     mappingWithOverrides.push(
@@ -610,7 +626,9 @@ async function convert() {
   // Send biomes separately - only "plains" is actually required
   registryBuffers.push(serializeRegistry("worldgen/biome", biomes));
   // Send dimensions separately - we only use "overworld"
-  registryBuffers.push(serializeRegistry("dimension_type", ["overworld", "the_nether"]));
+  registryBuffers.push(
+    serializeRegistry("dimension_type", ["overworld", "the_nether"]),
+  );
   const fullRegistryBuffer = Buffer.concat(registryBuffers);
 
   const itemsAndBlocks = await extractItemsAndBlocks();
@@ -636,6 +654,7 @@ async function convert() {
         itemsAndBlocks.blockRegistry["iron_ore"],
         itemsAndBlocks.blockRegistry["coal_ore"],
         itemsAndBlocks.blockRegistry["copper_ore"],
+        itemsAndBlocks.blockRegistry["emerald_ore"],
         itemsAndBlocks.blockRegistry["furnace"],
         itemsAndBlocks.blockRegistry["iron_block"],
         itemsAndBlocks.blockRegistry["gold_block"],
