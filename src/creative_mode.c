@@ -271,6 +271,8 @@ static const CreativeItem creative_items[] = {
   
   // Resources
   {I_coal, "Coal"},
+  {I_wheat, "Wheat"},
+  {I_wheat_seeds, "Wheat Seeds"},
   {I_charcoal, "Charcoal"},
   {I_diamond, "Diamond"},
   {I_emerald, "Emerald"},

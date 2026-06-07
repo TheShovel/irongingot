@@ -282,6 +282,14 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
         *count = 1;
         return;
       }
+      // Bread: 3 wheat in a row
+      if (first_item == I_wheat && first_col == 0 &&
+          player->craft_items[first + 1] == I_wheat &&
+          player->craft_items[first + 2] == I_wheat) {
+        *item = I_bread;
+        *count = 1;
+        return;
+      }
       // Slab recipes for all plank types (3 planks horizontal = 6 slabs)
       if (isPlankItem(first_item) && first_col == 0 &&
           player->craft_items[first + 1] == first_item &&

@@ -48,6 +48,7 @@ int sc_setContainerSlot (int client_fd, int window_id, uint16_t slot, uint8_t co
 int sc_setCursorItem (int client_fd, uint16_t item, uint8_t count);
 int sc_setHeldItem (int client_fd, uint8_t slot);
 int sc_blockUpdate (int client_fd, int64_t x, int64_t y, int64_t z, uint16_t block);
+int sc_blockUpdateState (int client_fd, int64_t x, int64_t y, int64_t z, uint16_t state_id);
 int sc_blockEvent (int client_fd, int64_t x, int64_t y, int64_t z, int action, int data, uint16_t block);
 #ifdef ALLOW_DOORS
 int sc_blockUpdateDoor (int client_fd, int64_t x, int64_t y, int64_t z, uint8_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge);

@@ -64,6 +64,7 @@ static int recoverLegacySpecialBlockTable(const LegacySpecialBlockEntry *entries
     short match_x = 0;
     uint8_t match_y = 0;
     short match_z = 0;
+    uint8_t match_dimension = 0;
 
     for (int j = 0; j < block_changes_count; j++) {
       if (block_changes[j].block == 0xFF) continue;
@@ -83,6 +84,7 @@ static int recoverLegacySpecialBlockTable(const LegacySpecialBlockEntry *entries
         match_x = block_changes[j].x;
         match_y = block_changes[j].y;
         match_z = block_changes[j].z;
+        match_dimension = block_changes[j].dimension;
         if (matches > 1) break;
       }
 
@@ -90,7 +92,7 @@ static int recoverLegacySpecialBlockTable(const LegacySpecialBlockEntry *entries
     }
 
     if (matches == 1) {
-      special_block_set_state(match_x, match_y, match_z, entries[i].block, entries[i].state);
+      special_block_set_state(match_x, match_y, match_z, match_dimension, entries[i].block, entries[i].state);
       recovered++;
     } else if (matches > 1) {
       ambiguous++;
@@ -285,12 +287,12 @@ int initSerializer () {
 
       if (block_changes[i].block == B_chest) {
         if (i + 14 < block_changes_count &&
-            !special_block_has_entry(block_changes[i].x, block_changes[i].y, block_changes[i].z)) {
+            !special_block_has_entry(block_changes[i].x, block_changes[i].y, block_changes[i].z, block_changes[i].dimension)) {
           uint8_t dir = block_changes[i + 14].y;
           if (dir > 3) dir = 0;
           special_block_set_state(block_changes[i].x, block_changes[i].y,
-                                  block_changes[i].z, B_chest,
-                                  (uint16_t)(dir & 3));
+                                  block_changes[i].z, block_changes[i].dimension,
+                                  B_chest, (uint16_t)(dir & 3));
           migrated++;
         }
         i += 14;
@@ -298,7 +300,7 @@ int initSerializer () {
       #ifdef ALLOW_DOORS
       else if (isDoorBlock(block_changes[i].block)) {
         if (i + 2 < block_changes_count &&
-            !special_block_has_entry(block_changes[i].x, block_changes[i].y, block_changes[i].z)) {
+            !special_block_has_entry(block_changes[i].x, block_changes[i].y, block_changes[i].z, block_changes[i].dimension)) {
           uint8_t dir   = block_changes[i + 2].x;
           uint8_t flags = block_changes[i + 2].y;
           if (dir > 3) dir = 0;
@@ -306,8 +308,8 @@ int initSerializer () {
           uint8_t hinge = (flags >> 1) & 0x01;
           uint16_t state = (uint16_t)((dir << 2) | (hinge << 1) | open);
           special_block_set_state(block_changes[i].x, block_changes[i].y,
-                                  block_changes[i].z, block_changes[i].block,
-                                  state);
+                                  block_changes[i].z, block_changes[i].dimension,
+                                  block_changes[i].block, state);
           migrated++;
         }
         i += 2;
@@ -315,7 +317,7 @@ int initSerializer () {
       #endif
       else if (isStairBlock(block_changes[i].block) || block_changes[i].block == B_furnace) {
         if (i + 1 < block_changes_count &&
-            !special_block_has_entry(block_changes[i].x, block_changes[i].y, block_changes[i].z)) {
+            !special_block_has_entry(block_changes[i].x, block_changes[i].y, block_changes[i].z, block_changes[i].dimension)) {
           uint8_t dir   = block_changes[i + 1].x;
           uint8_t extra = block_changes[i + 1].y;
           if (dir > 3) dir = 0;
@@ -323,14 +325,14 @@ int initSerializer () {
             uint8_t half = extra & 0x03;
             uint16_t state = (uint16_t)((dir << 2) | (half & 3));
             special_block_set_state(block_changes[i].x, block_changes[i].y,
-                                    block_changes[i].z, block_changes[i].block,
-                                    state);
+                                    block_changes[i].z, block_changes[i].dimension,
+                                    block_changes[i].block, state);
           } else {
             uint8_t lit = (extra >> 2) & 0x01;
             uint16_t state = (uint16_t)((lit << 2) | (dir & 3));
             special_block_set_state(block_changes[i].x, block_changes[i].y,
-                                    block_changes[i].z, B_furnace,
-                                    state);
+                                    block_changes[i].z, block_changes[i].dimension,
+                                    B_furnace, state);
           }
           migrated++;
         }

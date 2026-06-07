@@ -18,40 +18,42 @@ static inline void clear_entry(SpecialBlockEntry *entry) {
     entry->z = 0;
     entry->state = 0;
     entry->y = 0;
+    entry->dimension = 0;
     entry->block = SPECIAL_BLOCK_EMPTY;
 }
 
-static inline uint32_t entry_hash(short x, uint8_t y, short z) {
+static inline uint32_t entry_hash(short x, uint8_t y, short z, uint8_t dimension) {
     uint32_t h = (uint16_t)x;
-    h ^= ((uint32_t)(uint16_t)z << 1) | ((uint32_t)y << 17);
+    h ^= ((uint32_t)(uint16_t)z << 1) | ((uint32_t)y << 17) | ((uint32_t)dimension << 25);
     h *= 0x9E3779B9u;
     h ^= h >> 16;
     return h;
 }
 
-static inline uint8_t entry_matches(const SpecialBlockEntry *entry, short x, uint8_t y, short z) {
+static inline uint8_t entry_matches(const SpecialBlockEntry *entry, short x, uint8_t y, short z, uint8_t dimension) {
     return (
         entry->x == x &&
         entry->y == y &&
-        entry->z == z
+        entry->z == z &&
+        entry->dimension == dimension
     );
 }
 
-static int find_entry_locked(short x, uint8_t y, short z) {
+static int find_entry_locked(short x, uint8_t y, short z, uint8_t dimension) {
     uint32_t mask = MAX_SPECIAL_BLOCKS - 1;
-    uint32_t base = entry_hash(x, y, z) & mask;
+    uint32_t base = entry_hash(x, y, z, dimension) & mask;
 
     for (uint32_t probe = 0; probe < MAX_SPECIAL_BLOCKS; probe++) {
         uint32_t idx = (base + probe) & mask;
         if (entry_is_empty(&special_blocks[idx])) return -1;
-        if (entry_matches(&special_blocks[idx], x, y, z)) return (int)idx;
+        if (entry_matches(&special_blocks[idx], x, y, z, dimension)) return (int)idx;
     }
     return -1;
 }
 
-static int insert_entry_locked(short x, uint8_t y, short z) {
+static int insert_entry_locked(short x, uint8_t y, short z, uint8_t dimension) {
     uint32_t mask = MAX_SPECIAL_BLOCKS - 1;
-    uint32_t base = entry_hash(x, y, z) & mask;
+    uint32_t base = entry_hash(x, y, z, dimension) & mask;
 
     for (uint32_t probe = 0; probe < MAX_SPECIAL_BLOCKS; probe++) {
         uint32_t idx = (base + probe) & mask;
@@ -59,17 +61,18 @@ static int insert_entry_locked(short x, uint8_t y, short z) {
             special_blocks[idx].x = x;
             special_blocks[idx].y = y;
             special_blocks[idx].z = z;
+            special_blocks[idx].dimension = dimension;
             special_blocks[idx].state = 0;
             special_blocks_count++;
             return (int)idx;
         }
-        if (entry_matches(&special_blocks[idx], x, y, z)) return (int)idx;
+        if (entry_matches(&special_blocks[idx], x, y, z, dimension)) return (int)idx;
     }
     return -1;  /* table full */
 }
 
 static void reinsert_entry_locked(SpecialBlockEntry entry) {
-    int idx = insert_entry_locked(entry.x, entry.y, entry.z);
+    int idx = insert_entry_locked(entry.x, entry.y, entry.z, entry.dimension);
     if (idx < 0) return;
     special_blocks[idx] = entry;
 }
@@ -85,9 +88,9 @@ void special_block_init(void) {
     pthread_mutex_unlock(&special_block_mutex);
 }
 
-uint16_t special_block_get_state(short x, uint8_t y, short z) {
+uint16_t special_block_get_state(short x, uint8_t y, short z, uint8_t dimension) {
     pthread_mutex_lock(&special_block_mutex);
-    int idx = find_entry_locked(x, y, z);
+    int idx = find_entry_locked(x, y, z, dimension);
     if (idx < 0) {
         pthread_mutex_unlock(&special_block_mutex);
         return 0;
@@ -97,21 +100,22 @@ uint16_t special_block_get_state(short x, uint8_t y, short z) {
     return state;
 }
 
-void special_block_set_state(short x, uint8_t y, short z, uint16_t block, uint16_t state) {
+void special_block_set_state(short x, uint8_t y, short z, uint8_t dimension, uint16_t block, uint16_t state) {
     pthread_mutex_lock(&special_block_mutex);
-    int idx = insert_entry_locked(x, y, z);
+    int idx = insert_entry_locked(x, y, z, dimension);
     if (idx < 0) {
         pthread_mutex_unlock(&special_block_mutex);
         return;
     }
     special_blocks[idx].state = state;
     special_blocks[idx].block = block;
+    special_blocks[idx].dimension = dimension;
     pthread_mutex_unlock(&special_block_mutex);
 }
 
-void special_block_clear(short x, uint8_t y, short z) {
+void special_block_clear(short x, uint8_t y, short z, uint8_t dimension) {
     pthread_mutex_lock(&special_block_mutex);
-    int idx = find_entry_locked(x, y, z);
+    int idx = find_entry_locked(x, y, z, dimension);
     if (idx < 0) {
         pthread_mutex_unlock(&special_block_mutex);
         return;
@@ -134,9 +138,9 @@ void special_block_clear(short x, uint8_t y, short z) {
     pthread_mutex_unlock(&special_block_mutex);
 }
 
-uint8_t special_block_has_entry(short x, uint8_t y, short z) {
+uint8_t special_block_has_entry(short x, uint8_t y, short z, uint8_t dimension) {
     pthread_mutex_lock(&special_block_mutex);
-    uint8_t has_entry = find_entry_locked(x, y, z) >= 0;
+    uint8_t has_entry = find_entry_locked(x, y, z, dimension) >= 0;
     pthread_mutex_unlock(&special_block_mutex);
     return has_entry;
 }
@@ -298,14 +302,14 @@ uint16_t furnace_encode_state(uint8_t direction, uint8_t lit) {
 
 /* ── Interaction helpers ──────────────────────────────────────────── */
 
-uint8_t is_door_open_at(short x, uint8_t y, short z) {
-    uint16_t state = special_block_get_state(x, y, z);
+uint8_t is_door_open_at(short x, uint8_t y, short z, uint8_t dimension) {
+    uint16_t state = special_block_get_state(x, y, z, dimension);
     return door_get_open(state);
 }
 
-void toggle_door_state(short x, uint8_t y, short z) {
+void toggle_door_state(short x, uint8_t y, short z, uint8_t dimension) {
     pthread_mutex_lock(&special_block_mutex);
-    int idx = find_entry_locked(x, y, z);
+    int idx = find_entry_locked(x, y, z, dimension);
     if (idx >= 0) {
         special_blocks[idx].state ^= 0x01;
     }

@@ -848,7 +848,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
     #ifdef ALLOW_DOORS
     if (isDoorBlock(block_changes_snapshot[i].block)) {
       // Skip upper half of doors - they are sent together with lower half
-      uint16_t lower_state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y - 1, block_changes_snapshot[i].z);
+      uint16_t lower_state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y - 1, block_changes_snapshot[i].z, block_changes_snapshot[i].dimension);
       if (lower_state != 0) {
         // This is an upper half (lower half exists below), skip it
         // Still need to skip state entries
@@ -860,7 +860,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
       if (i + 2 >= block_changes_snapshot_count) continue;
 
       // Read state from the unified special block table
-      uint16_t state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z);
+      uint16_t state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].dimension);
       uint8_t open = door_get_open(state);
       uint8_t hinge = door_get_hinge(state);
       uint8_t direction = door_get_direction(state);
@@ -868,7 +868,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
       // Send door with proper state (both halves)
       sendDoorUpdate(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].block, 0, open, direction, hinge);
       // Check if upper half exists in special block table
-      uint16_t upper_state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y + 1, block_changes_snapshot[i].z);
+      uint16_t upper_state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y + 1, block_changes_snapshot[i].z, block_changes_snapshot[i].dimension);
       if (upper_state != 0) {
         // Upper half exists, send it
         sendDoorUpdate(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y + 1, block_changes_snapshot[i].z, block_changes_snapshot[i].block, 1, open, direction, hinge);
@@ -881,7 +881,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
 
     #ifdef ALLOW_DOORS
     if (isTrapdoorBlock(block_changes_snapshot[i].block)) {
-      uint16_t state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z);
+      uint16_t state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].dimension);
       uint8_t open = trapdoor_get_open(state);
       uint8_t half = trapdoor_get_half(state);
       uint8_t direction = trapdoor_get_direction(state);
@@ -893,7 +893,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
 
     if (isOrientedBlock(block_changes_snapshot[i].block)) {
       // Read direction from the unified special block table
-      uint16_t state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z);
+      uint16_t state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].dimension);
       uint8_t direction = oriented_get_direction(state);
 
       if (block_changes_snapshot[i].block == B_chest) {
@@ -912,13 +912,23 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
       if (i + 1 >= block_changes_snapshot_count) continue;
 
       // Read state from the unified special block table
-      uint16_t state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z);
+      uint16_t state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].dimension);
       uint8_t half = stair_get_half(state);
       uint8_t direction = stair_get_direction(state);
 
       sendStairUpdate(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].block, half, direction);
       // Skip the next entry (state data)
       i += 1;
+      continue;
+    }
+
+    if (block_changes_snapshot[i].block == B_wheat) {
+      uint16_t state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].dimension);
+      uint16_t age = state & 7;
+      sc_blockUpdateState(client_fd,
+        block_changes_snapshot[i].x, block_changes_snapshot[i].y,
+        block_changes_snapshot[i].z,
+        block_palette[B_wheat] + age);
       continue;
     }
 
@@ -963,9 +973,9 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
 
       if (block_type == B_chest) {
         uint8_t direction = (raw >> 9) & 3;
-        if (!special_block_has_entry(wx, wy, wz))
-          special_block_set_state(wx, wy, wz, block_type, oriented_encode_state(direction));
-        uint16_t st = special_block_get_state(wx, wy, wz);
+        if (!special_block_has_entry(wx, wy, wz, dimension))
+          special_block_set_state(wx, wy, wz, dimension, block_type, oriented_encode_state(direction));
+        uint16_t st = special_block_get_state(wx, wy, wz, dimension);
         sendOrientedUpdate(client_fd, wx, wy, wz, block_type, oriented_get_direction(st));
         if (num_village < 62) {
           processed_village[num_village][0] = wx;
@@ -975,14 +985,14 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
         }
       } else {
         // Read existing state or init default
-        if (!special_block_has_entry(wx, wy, wz)) {
+        if (!special_block_has_entry(wx, wy, wz, dimension)) {
           uint16_t vs = door_encode_state(0, 0, 1);
-          special_block_set_state(wx, wy, wz, block_type, vs);
-          if (!special_block_has_entry(wx, wy + 1, wz))
-            special_block_set_state(wx, wy + 1, wz, block_type, vs);
+          special_block_set_state(wx, wy, wz, dimension, block_type, vs);
+          if (!special_block_has_entry(wx, wy + 1, wz, dimension))
+            special_block_set_state(wx, wy + 1, wz, dimension, block_type, vs);
         }
         // Send correct state to client (chunk data may have stale default)
-        uint16_t st = special_block_get_state(wx, wy, wz);
+        uint16_t st = special_block_get_state(wx, wy, wz, dimension);
         uint8_t open = door_get_open(st);
         uint8_t hinge = door_get_hinge(st);
         uint8_t dir = door_get_direction(st);
@@ -1047,6 +1057,15 @@ int sc_blockUpdate (int client_fd, int64_t x, int64_t y, int64_t z, uint16_t blo
   startPacket(client_fd, 0x08);
   writeUint64(client_fd, ((x & 0x3FFFFFF) << 38) | ((z & 0x3FFFFFF) << 12) | (y & 0xFFF));
   writeVarInt(client_fd, block_palette[block]);
+  endPacket(client_fd);
+  return 0;
+}
+
+// S->C Block Update with raw state ID (for blocks with dynamic states like wheat)
+int sc_blockUpdateState (int client_fd, int64_t x, int64_t y, int64_t z, uint16_t state_id) {
+  startPacket(client_fd, 0x08);
+  writeUint64(client_fd, ((x & 0x3FFFFFF) << 38) | ((z & 0x3FFFFFF) << 12) | (y & 0xFFF));
+  writeVarInt(client_fd, state_id);
   endPacket(client_fd);
   return 0;
 }

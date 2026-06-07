@@ -15,6 +15,8 @@ const blockToItemOverrides = {
   emerald_ore: "emerald",
   snow: "snowball",
   dead_bush: "stick",
+  farmland: "dirt",
+  wheat: "wheat_seeds",
 };
 
 // Blacklisted block name strings
@@ -416,6 +418,8 @@ async function extractItemsAndBlocks() {
     "gilded_blackstone",
     "nether_portal",
     "emerald_ore",
+    "farmland",
+    "wheat",
   ];
   for (const block of extraBlocks) {
     if (block in palette) continue; // Already included in first 256

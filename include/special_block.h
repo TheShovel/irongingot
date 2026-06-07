@@ -47,6 +47,7 @@ typedef struct {
     int16_t z;
     uint16_t state;
     uint8_t y;
+    uint8_t dimension;
     uint16_t block;
 } SpecialBlockEntry;
 
@@ -57,10 +58,10 @@ extern int special_blocks_count;
 
 /* Hash table operations */
 void special_block_init(void);
-uint16_t special_block_get_state(short x, uint8_t y, short z);
-void special_block_set_state(short x, uint8_t y, short z, uint16_t block, uint16_t state);
-void special_block_clear(short x, uint8_t y, short z);
-uint8_t special_block_has_entry(short x, uint8_t y, short z);
+uint16_t special_block_get_state(short x, uint8_t y, short z, uint8_t dimension);
+void special_block_set_state(short x, uint8_t y, short z, uint8_t dimension, uint16_t block, uint16_t state);
+void special_block_clear(short x, uint8_t y, short z, uint8_t dimension);
+uint8_t special_block_has_entry(short x, uint8_t y, short z, uint8_t dimension);
 
 /* Block state ID computation for network packets */
 uint16_t get_door_state_id(uint16_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge);
@@ -96,7 +97,7 @@ uint16_t oriented_encode_state(uint8_t direction);
 uint16_t furnace_encode_state(uint8_t direction, uint8_t lit);
 
 /* Interaction helpers */
-uint8_t is_door_open_at(short x, uint8_t y, short z);
-void toggle_door_state(short x, uint8_t y, short z);
+uint8_t is_door_open_at(short x, uint8_t y, short z, uint8_t dimension);
+void toggle_door_state(short x, uint8_t y, short z, uint8_t dimension);
 
 #endif

@@ -1114,26 +1114,26 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint16_t block, uint8_t di
 
       if (block == B_chest && block_changes[i].block != B_chest) {
         block_changes[i].block = 0xFF;
-        if (is_base_block) special_block_clear(x, y, z);
+        if (is_base_block) special_block_clear(x, y, z, dimension);
         continue;
       }
 
       if (is_base_block) {
         block_changes[i].block = 0xFF;
-        special_block_clear(x, y, z);
+        special_block_clear(x, y, z, dimension);
       } else {
         block_changes[i].block = block;
         block_changes[i].dimension = dimension;
         // Initialize default state for special blocks
         if (is_door_block(block)) {
-          special_block_set_state(x, y, z, block, door_encode_state(0, 0, 0));
+          special_block_set_state(x, y, z, dimension, block, door_encode_state(0, 0, 0));
         } else if (is_stair_block(block)) {
-          special_block_set_state(x, y, z, block, stair_encode_state(0, 0));
+          special_block_set_state(x, y, z, dimension, block, stair_encode_state(0, 0));
         } else if (block == B_furnace) {
-          special_block_set_state(x, y, z, block, furnace_encode_state(0, 0));
+          special_block_set_state(x, y, z, dimension, block, furnace_encode_state(0, 0));
         } else if (block == B_chest) {
           memset(&block_changes[i + 1], 0, 14 * sizeof(BlockChange));
-          special_block_set_state(x, y, z, block, oriented_encode_state(0));
+          special_block_set_state(x, y, z, dimension, block, oriented_encode_state(0));
         }
       }
       write_from = i;
@@ -1209,7 +1209,7 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint16_t block, uint8_t di
 
     if (block == B_chest) {
       memset(&block_changes[base + 1], 0, 14 * sizeof(BlockChange));
-      special_block_set_state(x, y, z, block, oriented_encode_state(0));
+      special_block_set_state(x, y, z, dimension, block, oriented_encode_state(0));
     }
     #ifdef ALLOW_DOORS
     else if (is_door_block(block)) {
@@ -1224,7 +1224,7 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint16_t block, uint8_t di
       block_changes[base + 2].y = 0;
       block_changes[base + 2].z = z;
       block_changes[base + 2].block = 0;
-      special_block_set_state(x, y, z, block, door_encode_state(0, 0, 0));
+      special_block_set_state(x, y, z, dimension, block, door_encode_state(0, 0, 0));
     }
     #endif
     else if (is_stair_block(block) || block == B_furnace) {
@@ -1234,9 +1234,9 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint16_t block, uint8_t di
       block_changes[base + 1].z = z;
       block_changes[base + 1].block = 0;
       if (is_stair_block(block)) {
-        special_block_set_state(x, y, z, block, stair_encode_state(0, 0));
+        special_block_set_state(x, y, z, dimension, block, stair_encode_state(0, 0));
       } else {
-        special_block_set_state(x, y, z, block, furnace_encode_state(0, 0));
+        special_block_set_state(x, y, z, dimension, block, furnace_encode_state(0, 0));
       }
     }
 
@@ -1538,6 +1538,15 @@ uint16_t getMiningResult (uint16_t held_item, uint16_t block) {
     case B_soul_soil:
       return I_soul_soil;
 
+    case B_short_grass:
+    case B_fern:
+      if (fast_rand() % 8 == 0) return I_wheat_seeds; // 12.5% chance
+      return B_to_I[block];
+
+    case B_wheat:
+      if (held_item == 0) return I_wheat_seeds; // Cascaded break (support removed)
+      return 0; // Handled in handlePlayerAction with age check
+
     default: break;
   }
 
@@ -1587,6 +1596,7 @@ uint8_t isInstantlyMined (PlayerData *player, uint16_t block) {
     block == B_short_grass ||
     block == B_short_dry_grass ||
     block == B_tall_dry_grass ||
+    block == B_wheat ||
     isSaplingBlock(block) ||
     block == B_dandelion ||
     block == B_torchflower ||
@@ -1618,6 +1628,7 @@ uint8_t isColumnBlock (uint16_t block) {
     block == B_short_dry_grass ||
     block == B_tall_dry_grass ||
     block == B_fern ||
+    block == B_wheat ||
     block == B_dead_bush ||
     block == B_bush ||
     block == B_torch ||
@@ -1653,6 +1664,7 @@ uint8_t isPassableBlock (uint16_t block) {
     block == B_short_dry_grass ||
     block == B_tall_dry_grass ||
     block == B_fern ||
+    block == B_wheat ||
     block == B_dead_bush ||
     block == B_bush ||
     block == B_seagrass ||
@@ -1841,8 +1853,8 @@ uint8_t getDoorBlockFromItem (uint16_t item) {
 }
 
 /* Checks if a door at the given coordinates is open */
-uint8_t isDoorOpen (short x, uint8_t y, short z) {
-  return is_door_open_at(x, y, z);
+uint8_t isDoorOpen (short x, uint8_t y, short z, uint8_t dimension) {
+  return is_door_open_at(x, y, z, dimension);
 }
 
 /* Legacy wrappers for network state ID computation */
@@ -2323,6 +2335,12 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
   // If this is a "start mining" packet, the block must be instamine
   if (action == 0 && !isInstantlyMined(player, block)) return;
 
+  // Read wheat age BEFORE makeBlockChange clears the special block entry
+  uint16_t wheat_age = 0;
+  if (block == B_wheat) {
+    wheat_age = special_block_get_state(x, y, z, player->dimension);
+  }
+
   // Don't continue if the block change failed
   if (makeBlockChange(x, y, z, 0, player->dimension)) return;
 
@@ -2361,7 +2379,7 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
     }
 
     // Clear door state from the unified special block table
-    special_block_clear(door_x, door_y, door_z);
+    special_block_clear(door_x, door_y, door_z, player->dimension);
     // Give door item (only once for the whole door)
     if (item) {
       #ifdef ENABLE_PICKUP_ANIMATION
@@ -2378,6 +2396,17 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
     playPickupAnimation(player, item, x, y, z);
     #endif
     givePlayerItem(player, item, 1);
+  }
+
+  // Special handling for wheat drops based on maturity
+  if (block == B_wheat) {
+    if (wheat_age >= 7) {
+      givePlayerItem(player, I_wheat, 1);
+      givePlayerItem(player, I_wheat_seeds, 1 + (fast_rand() % 3));
+    } else {
+      givePlayerItem(player, I_wheat_seeds, 1);
+    }
+    special_block_clear(x, y, z, player->dimension);
   }
 
   // Cascade-break connected leaves and floating leaves (cap at 6 additional broken)
@@ -2926,7 +2955,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
           }
           if (i >= block_changes_count) block_changes_count = i + 1;
           chest_idx = base;
-          uint16_t st = special_block_get_state(x, y, z);
+          uint16_t st = special_block_get_state(x, y, z, player->dimension);
           block_changes[chest_idx + 14].y = oriented_get_direction(st);
           break;
         }
@@ -2964,7 +2993,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
         door_y = y - 1;
       }
 
-      uint16_t state = special_block_get_state(door_x, door_y, door_z);
+      uint16_t state = special_block_get_state(door_x, door_y, door_z, player->dimension);
       uint8_t open = door_get_open(state);
       uint8_t hinge = door_get_hinge(state);
       uint8_t direction = door_get_direction(state);
@@ -2972,13 +3001,13 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       // Toggle open/closed
       open ^= 1;
       state = door_encode_state(open, hinge, direction);
-      special_block_set_state(door_x, door_y, door_z, target, state);
+      special_block_set_state(door_x, door_y, door_z, player->dimension, target, state);
       
       // Also update upper half's state in the special block table
       // Use getBlockAt2 so village door upper halves are detected
       uint16_t above = getBlockAt2(door_x, door_y + 1, door_z, player->dimension);
       if (isDoorBlock(above)) {
-        special_block_set_state(door_x, door_y + 1, door_z, above, state);
+        special_block_set_state(door_x, door_y + 1, door_z, player->dimension, above, state);
       }
 
       // Broadcast door update to all players
@@ -2995,7 +3024,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     #endif
     // Trapdoor toggle on right-click
     else if (config.allow_doors && isTrapdoorBlock(target)) {
-      uint16_t state = special_block_get_state(x, y, z);
+      uint16_t state = special_block_get_state(x, y, z, player->dimension);
       uint8_t open = trapdoor_get_open(state);
       uint8_t half = trapdoor_get_half(state);
       uint8_t direction = trapdoor_get_direction(state);
@@ -3003,7 +3032,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       // Toggle open/closed
       open ^= 1;
       state = trapdoor_encode_state(open, half, direction);
-      special_block_set_state(x, y, z, target, state);
+      special_block_set_state(x, y, z, player->dimension, target, state);
 
       // Broadcast trapdoor update to all players
       for (int j = 0; j < MAX_PLAYERS; j++) {
@@ -3090,6 +3119,31 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     return;
   }
 
+  // Hoe tilling: right-click dirt or grass_block with any hoe → farmland
+  if (*item == I_wooden_hoe || *item == I_stone_hoe || *item == I_iron_hoe ||
+      *item == I_golden_hoe || *item == I_diamond_hoe || *item == I_netherite_hoe) {
+    if (target == B_dirt || target == B_grass_block) {
+      makeBlockChange(x, y, z, B_farmland, player->dimension);
+    }
+    return;
+  }
+
+  // Wheat seed planting: right-click farmland with seeds → wheat crop
+  if (*item == I_wheat_seeds && target == B_farmland) {
+    short above_x = x, above_z = z;
+    uint8_t above_y = y + 1;
+    uint16_t above_block = getBlockAt2(above_x, above_y, above_z, player->dimension);
+    if (above_block == B_air || isReplaceableBlock(above_block)) {
+      if (makeBlockChange(above_x, above_y, above_z, B_wheat, player->dimension)) return;
+      special_block_set_state(above_x, above_y, above_z, player->dimension, B_wheat, 0);
+      *count -= 1;
+      if (*count == 0) *item = 0;
+      sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
+      broadcastPlayerEquipment(player);
+    }
+    return;
+  }
+
   // If the selected item doesn't correspond to a block, exit
   uint16_t block = I_to_B(*item);
   if (block == 0) return;
@@ -3156,8 +3210,8 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       // makeBlockChange already set state for lower half, but we need to update it with direction
       // and set state for upper half
       uint16_t state = door_encode_state(0, 0, direction);  // closed, hinge left, direction
-      special_block_set_state(x, y, z, block, state);
-      special_block_set_state(x, y + 1, z, block, state);
+      special_block_set_state(x, y, z, player->dimension, block, state);
+      special_block_set_state(x, y + 1, z, player->dimension, block, state);
 
       // Send door updates with proper state to all players
       for (int j = 0; j < MAX_PLAYERS; j++) {
@@ -3232,7 +3286,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
 
       // Store trapdoor state (open=0 by default)
       uint16_t state = trapdoor_encode_state(0, half, direction);
-      special_block_set_state(x, y, z, block, state);
+      special_block_set_state(x, y, z, player->dimension, block, state);
 
       // Broadcast trapdoor update
       for (int j = 0; j < MAX_PLAYERS; j++) {
@@ -3287,7 +3341,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
 
       // Update state with direction in the unified special block table
       uint16_t state = oriented_encode_state(direction);
-      special_block_set_state(x, y, z, block, state);
+      special_block_set_state(x, y, z, player->dimension, block, state);
 
       // Store direction in legacy field for persistence across restarts
       for (int i = 0; i < block_changes_count; i++) {
@@ -3354,7 +3408,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
 
       // Update stair state in the unified special block table
       uint16_t state = stair_encode_state(half, direction);
-      special_block_set_state(x, y, z, block, state);
+      special_block_set_state(x, y, z, player->dimension, block, state);
 
       // Send stair updates to all players
       for (int j = 0; j < MAX_PLAYERS; j++) {
@@ -4263,6 +4317,35 @@ void handleServerTick (int64_t time_since_last_tick) {
 
   // Perform regular checks for if it's time to write to disk
   writeDataToDiskOnInterval();
+
+  // Wheat growth random tick every ~2 seconds (40 ticks)
+  if (server_ticks % 40 == 0) {
+    uint32_t seed = fast_rand();
+    for (int i = 0; i < MAX_SPECIAL_BLOCKS; i++) {
+      if (special_blocks[i].block != B_wheat) continue;
+      uint16_t age = special_blocks[i].state & 7;
+      if (age >= 7) continue;
+      uint16_t current = getBlockAt2(
+        special_blocks[i].x, special_blocks[i].y, special_blocks[i].z,
+        special_blocks[i].dimension);
+      if (current != B_wheat) continue;
+      if ((seed >> (i & 31)) & 1) {
+        age++;
+        special_blocks[i].state = age;
+        // Broadcast the new visual state to all players
+        uint16_t state_id = block_palette[B_wheat] + age;
+        for (int j = 0; j < MAX_PLAYERS; j++) {
+          if (player_data[j].client_fd == -1) continue;
+          if (player_data[j].flags & 0x20) continue;
+          sc_blockUpdateState(player_data[j].client_fd,
+            special_blocks[i].x,
+            special_blocks[i].y,
+            special_blocks[i].z,
+            state_id);
+        }
+      }
+    }
+  }
 
   /**
    * If the RNG seed ever hits 0, it'll never generate anything

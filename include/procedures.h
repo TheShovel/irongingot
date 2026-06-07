@@ -60,7 +60,7 @@ uint8_t isTrapdoorBlock (uint16_t block);
 uint8_t isDoorItem (uint16_t item);
 uint16_t getDoorItemFromBlock (uint16_t block);
 uint8_t getDoorBlockFromItem (uint16_t item);
-uint8_t isDoorOpen (short x, uint8_t y, short z);
+uint8_t isDoorOpen (short x, uint8_t y, short z, uint8_t dimension);
 uint16_t getDoorStateId (uint16_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge);
 void sendDoorUpdate (int client_fd, short x, uint8_t y, short z, uint16_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge);
 uint16_t getTrapdoorStateId (uint16_t block, uint8_t open, uint8_t direction, uint8_t half);
