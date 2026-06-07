@@ -15,6 +15,25 @@
 #include "generator.h"
 #include "special_block.h"
 
+// build_registries.js now emits these stronghold-specific palette entries.
+// If a developer has older generated registries locally, fall back to existing
+// blocks so the source still compiles until the registries are regenerated.
+#ifndef B_bookshelf
+#define B_bookshelf B_oak_planks
+#endif
+#ifndef B_end_portal_frame_eye_north
+#define B_end_portal_frame_eye_north B_end_portal_frame
+#endif
+#ifndef B_end_portal_frame_eye_south
+#define B_end_portal_frame_eye_south B_end_portal_frame
+#endif
+#ifndef B_end_portal_frame_eye_west
+#define B_end_portal_frame_eye_west B_end_portal_frame
+#endif
+#ifndef B_end_portal_frame_eye_east
+#define B_end_portal_frame_eye_east B_end_portal_frame
+#endif
+
 static Generator g;
 static SurfaceNoise surface_noise_biome;
 OctavePerlinNoiseSampler surface_noise;
@@ -730,6 +749,185 @@ static uint16_t getMineshaftBlockAt(int x, int y, int z) {
   return B_air;
 }
 
+// ============================================================
+// Strongholds
+// ============================================================
+// Deterministic underground strongholds. Each stronghold fits fully inside its
+// spawn cell, so a block only needs to inspect the cell containing its x/z.
+#define STRONGHOLD_SPACING 256
+#define STRONGHOLD_MARGIN 64
+#define STRONGHOLD_NONE 0xFFFF
+
+static uint8_t getStrongholdCell(int cell_x, int cell_z, int *center_x, int *center_z, int *base_y, uint64_t *out_key) {
+  uint64_t key = splitmix64(
+    ((uint64_t)(uint32_t)cell_x * 0x9E3779B97F4A7C15ULL) ^
+    ((uint64_t)(uint32_t)cell_z * 0xBF58476D1CE4E5B9ULL) ^
+    ((uint64_t)(uint32_t)world_seed * 0x94D049BB133111EBULL) ^
+    0x51A7E5B91D3C4F2AULL
+  );
+
+  // Roughly one stronghold every ~440 blocks on average. This is frequent
+  // enough to find by exploring, but sparse enough that they feel special.
+  if ((uint32_t)(key % 3) != 0) return 0;
+
+  int range = STRONGHOLD_SPACING - STRONGHOLD_MARGIN * 2;
+  *center_x = cell_x * STRONGHOLD_SPACING + STRONGHOLD_MARGIN + (int)((key >> 8) % (uint64_t)range);
+  *center_z = cell_z * STRONGHOLD_SPACING + STRONGHOLD_MARGIN + (int)((key >> 24) % (uint64_t)range);
+  *base_y = 20 + (int)((key >> 40) % 18); // Y 20..37, safely underground in normal terrain.
+  if (out_key != NULL) *out_key = key;
+  return 1;
+}
+
+static uint16_t getStrongholdBrickAt(int x, int y, int z, uint64_t key) {
+  uint64_t h = splitmix64(
+    ((uint64_t)(uint32_t)x * 0x632BE59BD9B4E019ULL) ^
+    ((uint64_t)(uint32_t)y * 0x85157AF5ULL) ^
+    ((uint64_t)(uint32_t)z * 0x9E3779B1ULL) ^
+    key
+  );
+
+  if ((h & 0x3F) == 0) return B_chiseled_stone_bricks;
+  if ((h & 0x0F) == 0) return B_mossy_stone_bricks;
+  if ((h & 0x1F) == 1) return B_cracked_stone_bricks;
+  return B_stone_bricks;
+}
+
+static void strongholdMarkRoom(int rx, int ry, int rz,
+                               int min_x, int max_x, int min_y, int max_y, int min_z, int max_z,
+                               uint8_t *matched, uint8_t *carve_air, uint16_t *solid, uint64_t key) {
+  if (rx < min_x || rx > max_x || ry < min_y || ry > max_y || rz < min_z || rz > max_z) return;
+  *matched = 1;
+
+  uint8_t wall = (
+    rx == min_x || rx == max_x ||
+    ry == min_y || ry == max_y ||
+    rz == min_z || rz == max_z
+  );
+
+  if (wall) {
+    if (!*carve_air) *solid = getStrongholdBrickAt(rx, ry, rz, key);
+  } else {
+    *carve_air = 1;
+  }
+}
+
+static void strongholdMarkCorridorX(int rx, int ry, int rz,
+                                    int min_x, int max_x, int min_y, int max_y, int min_z, int max_z,
+                                    uint8_t *matched, uint8_t *carve_air, uint16_t *solid, uint64_t key) {
+  if (rx < min_x || rx > max_x || ry < min_y || ry > max_y || rz < min_z || rz > max_z) return;
+  *matched = 1;
+
+  // X corridors have open ends; only their floors, ceilings, and side walls are solid.
+  uint8_t wall = (ry == min_y || ry == max_y || rz == min_z || rz == max_z);
+  if (wall) {
+    if (!*carve_air) *solid = getStrongholdBrickAt(rx, ry, rz, key);
+  } else {
+    *carve_air = 1;
+  }
+}
+
+static void strongholdMarkCorridorZ(int rx, int ry, int rz,
+                                    int min_x, int max_x, int min_y, int max_y, int min_z, int max_z,
+                                    uint8_t *matched, uint8_t *carve_air, uint16_t *solid, uint64_t key) {
+  if (rx < min_x || rx > max_x || ry < min_y || ry > max_y || rz < min_z || rz > max_z) return;
+  *matched = 1;
+
+  // Z corridors have open ends; only their floors, ceilings, and side walls are solid.
+  uint8_t wall = (ry == min_y || ry == max_y || rx == min_x || rx == max_x);
+  if (wall) {
+    if (!*carve_air) *solid = getStrongholdBrickAt(rx, ry, rz, key);
+  } else {
+    *carve_air = 1;
+  }
+}
+
+static uint16_t getStrongholdPortalFrameBlock(int rx, int rz) {
+  if (rz == -2 && rx >= -1 && rx <= 1) return B_end_portal_frame_eye_south;
+  if (rz ==  2 && rx >= -1 && rx <= 1) return B_end_portal_frame_eye_north;
+  if (rx == -2 && rz >= -1 && rz <= 1) return B_end_portal_frame_eye_east;
+  if (rx ==  2 && rz >= -1 && rz <= 1) return B_end_portal_frame_eye_west;
+  return STRONGHOLD_NONE;
+}
+
+static uint16_t getStrongholdDecorationAt(int rx, int ry, int rz, uint64_t key) {
+  // Portal room: a complete 3x3 End portal with all 12 frame eyes filled.
+  if (ry == 1) {
+    if (rx >= -1 && rx <= 1 && rz >= -1 && rz <= 1) return B_end_portal;
+
+    uint16_t frame = getStrongholdPortalFrameBlock(rx, rz);
+    if (frame != STRONGHOLD_NONE) return frame;
+
+    if ((rx == -6 || rx == 6) && (rz == -4 || rz == 4)) return B_torch;
+  }
+
+  if (ry == 0 && rx >= -1 && rx <= 1 && rz >= -1 && rz <= 1) return B_lava;
+
+  // Portal-room barred alcoves.
+  if (ry >= 2 && ry <= 4) {
+    if ((rx == -7 || rx == 7) && (rz == -4 || rz == 4)) return B_iron_bars;
+    if ((rz == -5 || rz == 5) && (rx == -5 || rx == 5)) return B_iron_bars;
+  }
+
+  // Library north of the main crossing: shelves along walls and two shelf rows.
+  if (rx >= -46 && rx <= -22 && rz >= -42 && rz <= -25 && ry >= 1 && ry <= 5) {
+    if (rx == -45 || rx == -23 || rz == -41 || rz == -26) return B_bookshelf;
+    if ((rz == -34 || rz == -33) && rx >= -42 && rx <= -26 && (ry == 1 || ry == 2 || ry == 4)) return B_bookshelf;
+    if (ry == 1 && (rx == -34 || rx == -33) && rz > -40 && rz < -27) return B_oak_planks;
+  }
+
+  // Small lava fountain room south of the crossing.
+  if (rx >= -42 && rx <= -22 && rz >= 25 && rz <= 42) {
+    if (ry == 1 && rx >= -34 && rx <= -30 && rz >= 32 && rz <= 36) return B_lava;
+    if (ry == 1 && ((rx == -36 && rz == 34) || (rx == -28 && rz == 34) || (rx == -32 && rz == 30) || (rx == -32 && rz == 38))) return B_torch;
+  }
+
+  // Occasional cobwebs in hallways and rooms.
+  if (ry >= 2 && ry <= 3) {
+    uint64_t h = splitmix64(((uint64_t)(uint32_t)rx * 0x45D9F3BULL) ^ ((uint64_t)(uint32_t)rz * 0x119DE1F3ULL) ^ key);
+    if ((h & 0xFF) == 0x3A) return B_cobweb;
+  }
+
+  return STRONGHOLD_NONE;
+}
+
+static uint16_t getStrongholdBlockAt(int x, int y, int z) {
+  if (y < 16 || y > 48) return STRONGHOLD_NONE;
+
+  int cell_x = div_floor(x, STRONGHOLD_SPACING);
+  int cell_z = div_floor(z, STRONGHOLD_SPACING);
+  int cx, cz, base_y;
+  uint64_t key;
+  if (!getStrongholdCell(cell_x, cell_z, &cx, &cz, &base_y, &key)) return STRONGHOLD_NONE;
+
+  int rx = x - cx;
+  int ry = y - base_y;
+  int rz = z - cz;
+  if (rx < -48 || rx > 16 || rz < -44 || rz > 44 || ry < 0 || ry > 8) return STRONGHOLD_NONE;
+
+  uint8_t matched = 0;
+  uint8_t carve_air = 0;
+  uint16_t solid = B_stone_bricks;
+
+  // Central portal room.
+  strongholdMarkRoom(rx, ry, rz, -8, 8, 0, 6, -6, 6, &matched, &carve_air, &solid, key);
+
+  // Main hall and four-way crossing.
+  strongholdMarkCorridorX(rx, ry, rz, -32, -8, 0, 4, -2, 2, &matched, &carve_air, &solid, key);
+  strongholdMarkRoom(rx, ry, rz, -38, -24, 0, 5, -6, 6, &matched, &carve_air, &solid, key);
+  strongholdMarkCorridorZ(rx, ry, rz, -34, -30, 0, 4, -28, 28, &matched, &carve_air, &solid, key);
+
+  // Side rooms branching from the crossing.
+  strongholdMarkRoom(rx, ry, rz, -46, -22, 0, 7, -42, -25, &matched, &carve_air, &solid, key);
+  strongholdMarkRoom(rx, ry, rz, -42, -22, 0, 5, 25, 42, &matched, &carve_air, &solid, key);
+
+  if (!matched) return STRONGHOLD_NONE;
+
+  uint16_t decoration = getStrongholdDecorationAt(rx, ry, rz, key);
+  if (decoration != STRONGHOLD_NONE) return decoration;
+
+  return carve_air ? B_air : solid;
+}
+
 static uint8_t isVillageHouseBiome(uint8_t biome) {
   switch (biome) {
     case W_plains: case W_forest: case W_sunflower_plains:
@@ -914,6 +1112,9 @@ uint16_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor
     uint16_t vb = getVillageBlockAt(x, y, z);
     if (vb != 0xFFFF) return vb;
   }
+
+  uint16_t stronghold_block = getStrongholdBlockAt(x, y, z);
+  if (stronghold_block != STRONGHOLD_NONE) return stronghold_block;
 
   if (y >= 64 && y >= height) switch (anchor.biome) {
     case W_plains: { // Generate oak trees and grass in plains

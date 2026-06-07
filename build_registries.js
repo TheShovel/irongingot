@@ -6,6 +6,10 @@ const blockToItemOverrides = {
   grass_block: "dirt",
   snowy_grass_block: "dirt",
   stone: "cobblestone",
+  end_portal_frame_eye_north: "end_portal_frame",
+  end_portal_frame_eye_south: "end_portal_frame",
+  end_portal_frame_eye_west: "end_portal_frame",
+  end_portal_frame_eye_east: "end_portal_frame",
   diamond_ore: "diamond",
   deepslate_diamond_ore: "diamond",
   gold_ore: "raw_gold",
@@ -365,6 +369,23 @@ async function extractItemsAndBlocks() {
           defaultState.id + i;
       }
     }
+
+    // End portal frames need the filled eye=true states for generated
+    // stronghold portals. Store each facing as its own palette entry so chunk
+    // generation can emit the exact state ID without runtime state metadata.
+    if (entry[0] === "minecraft:end_portal_frame") {
+      for (const facing of ["north", "south", "west", "east"]) {
+        const state = entry[1].states.find(
+          (s) =>
+            s.properties &&
+            s.properties.eye === "true" &&
+            s.properties.facing === facing,
+        );
+        if (state) {
+          blocks[`end_portal_frame_eye_${facing}`] = state.id;
+        }
+      }
+    }
   }
 
   for (const item in itemSource) {
@@ -429,6 +450,18 @@ async function extractItemsAndBlocks() {
     "gilded_blackstone",
     "nether_portal",
     "emerald_ore",
+    "stone_bricks",
+    "mossy_stone_bricks",
+    "cracked_stone_bricks",
+    "chiseled_stone_bricks",
+    "iron_bars",
+    "bookshelf",
+    "end_portal_frame",
+    "end_portal_frame_eye_north",
+    "end_portal_frame_eye_south",
+    "end_portal_frame_eye_west",
+    "end_portal_frame_eye_east",
+    "end_portal",
     "farmland",
     "wheat",
   ];
@@ -756,6 +789,12 @@ async function convert() {
         "gilded_blackstone",
         "nether_bricks",
         "cracked_nether_bricks",
+        "stone_bricks",
+        "mossy_stone_bricks",
+        "cracked_stone_bricks",
+        "chiseled_stone_bricks",
+        "iron_bars",
+        "end_portal_frame",
         "crimson_nylium",
         "warped_nylium",
         "obsidian",
@@ -765,6 +804,7 @@ async function convert() {
         "chest",
         "crafting_table",
         "note_block",
+        "bookshelf",
         "bamboo_block",
         "stripped_bamboo_block",
         "bamboo_planks",
