@@ -268,7 +268,7 @@ extern uint32_t server_ticks;
 
 typedef struct {
   short x;
-  uint8_t y;
+  int16_t y;
   short z;
   uint16_t fluid;
   uint16_t block;
@@ -299,7 +299,7 @@ extern uint8_t player_noclip[MAX_PLAYERS];
 typedef struct {
   short x;
   short z;
-  uint8_t y;
+  int16_t y;
   uint16_t block;
   uint8_t dimension;
 } BlockChange;

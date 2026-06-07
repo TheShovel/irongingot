@@ -35,8 +35,8 @@ void broadcastMobMetadata (int client_fd, int entity_id);
 uint8_t serverSlotToClientSlot (int window_id, uint8_t slot);
 uint8_t clientSlotToServerSlot (int window_id, uint8_t slot);
 
-uint16_t getBlockChange (short x, uint8_t y, short z);
-uint8_t makeBlockChange (short x, uint8_t y, short z, uint16_t block, uint8_t dimension);
+uint16_t getBlockChange (short x, int16_t y, short z, uint8_t dimension);
+uint8_t makeBlockChange (short x, int16_t y, short z, uint16_t block, uint8_t dimension);
 uint8_t isChunkModified (int chunk_x, int chunk_z);
 void rebuildBlockChangeIndexes (void);
 BlockChange *copyBlockChangesSnapshot (int *count);
@@ -76,7 +76,7 @@ uint16_t getMiningResult (uint16_t held_item, uint16_t block);
 void handlePlayerAction (PlayerData *player, int action, short x, short y, short z);
 void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t face);
 
-void checkFluidUpdate (short x, uint8_t y, short z, uint16_t block);
+void checkFluidUpdate (short x, int16_t y, short z, uint16_t block);
 void processFluidQueue (void);
 
 void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health, uint8_t dimension);

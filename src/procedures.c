@@ -598,7 +598,7 @@ void spawnPlayer (PlayerData *player) {
     spawn_y = player->y;
     spawn_z = (float)player->z + 0.5;
     // If Y is 0 or impossibly low, lift above surface
-    if ((uint8_t)spawn_y == 0 || (uint8_t)spawn_y > 255) {
+    if (spawn_y <= 0 || spawn_y > 319) {
       if (player->dimension == DIMENSION_OVERWORLD) {
         spawn_y = getHeightAt(player->x, player->z) + 1;
       } else {
@@ -835,7 +835,8 @@ void broadcastMobMetadata (int client_fd, int entity_id) {
 typedef struct {
   short x;
   short z;
-  uint8_t y;
+  int16_t y;
+  uint8_t dimension;
   uint16_t block;
   uint32_t epoch;
 } BlockLookupCacheEntry;
@@ -859,9 +860,10 @@ static inline uint32_t coord_hash(int x, int z) {
   return h ^ (h >> 16);
 }
 
-static inline uint32_t block_lookup_hash(short x, uint8_t y, short z) {
+static inline uint32_t block_lookup_hash(short x, int16_t y, short z, uint8_t dimension) {
   uint32_t h = coord_hash((int)x, (int)z);
-  h ^= (uint32_t)y * 2246822519u;
+  h ^= (uint32_t)(uint16_t)y * 2246822519u;
+  h ^= (uint32_t)dimension * 3266489917u;
   return h;
 }
 
@@ -976,15 +978,16 @@ static inline void notify_block_change_mutation(short x, short z, uint8_t dimens
   invalidate_block_lookup_cache();
 }
 
-uint16_t getBlockChange (short x, uint8_t y, short z) {
+uint16_t getBlockChange (short x, int16_t y, short z, uint8_t dimension) {
   uint32_t epoch = block_lookup_cache_epoch;
-  uint32_t cache_idx = block_lookup_hash(x, y, z) & (BLOCK_LOOKUP_CACHE_SIZE - 1);
+  uint32_t cache_idx = block_lookup_hash(x, y, z, dimension) & (BLOCK_LOOKUP_CACHE_SIZE - 1);
   BlockLookupCacheEntry *cached = &block_lookup_cache[cache_idx];
   if (
     cached->epoch == epoch &&
     cached->x == x &&
     cached->y == y &&
-    cached->z == z
+    cached->z == z &&
+    cached->dimension == dimension
   ) {
     return cached->block;
   }
@@ -995,7 +998,8 @@ uint16_t getBlockChange (short x, uint8_t y, short z) {
     if (
       block_changes[i].x == x &&
       block_changes[i].y == y &&
-      block_changes[i].z == z
+      block_changes[i].z == z &&
+      block_changes[i].dimension == dimension
     ) {
       block = block_changes[i].block;
       break;
@@ -1005,7 +1009,8 @@ uint16_t getBlockChange (short x, uint8_t y, short z) {
     if (is_door_block(block_changes[i].block)) {
       // Check if upper half matches before skipping
       if (i + 1 < block_changes_count &&
-          block_changes[i + 1].x == x && block_changes[i + 1].y == y && block_changes[i + 1].z == z) {
+          block_changes[i + 1].x == x && block_changes[i + 1].y == y && block_changes[i + 1].z == z &&
+          block_changes[i + 1].dimension == dimension) {
         block = block_changes[i + 1].block;
         break;
       }
@@ -1027,6 +1032,7 @@ uint16_t getBlockChange (short x, uint8_t y, short z) {
   cached->x = x;
   cached->y = y;
   cached->z = z;
+  cached->dimension = dimension;
   cached->block = block;
   cached->epoch = epoch;
 
@@ -1034,7 +1040,7 @@ uint16_t getBlockChange (short x, uint8_t y, short z) {
 }
 
 // Handle running out of memory for new block changes
-void failBlockChange (short x, uint8_t y, short z, uint16_t block) {
+void failBlockChange (short x, int16_t y, short z, uint16_t block) {
 
   // Get previous block at this location
   uint16_t before = getBlockAt(x, y, z);
@@ -1051,7 +1057,7 @@ void failBlockChange (short x, uint8_t y, short z, uint16_t block) {
 
 }
 
-uint8_t makeBlockChange (short x, uint8_t y, short z, uint16_t block, uint8_t dimension) {
+uint8_t makeBlockChange (short x, int16_t y, short z, uint16_t block, uint8_t dimension) {
 
   // Transmit block update to all in-game clients
   for (int i = 0; i < MAX_PLAYERS; i ++) {
@@ -1107,7 +1113,8 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint16_t block, uint8_t di
     if (
       block_changes[i].x == x &&
       block_changes[i].y == y &&
-      block_changes[i].z == z
+      block_changes[i].z == z &&
+      block_changes[i].dimension == dimension
     ) {
       // Clear any old special block state entries
       CLEAR_OLD_SPECIAL_ENTRIES(i);
@@ -1259,8 +1266,8 @@ uint8_t makeBlockChange (short x, uint8_t y, short z, uint16_t block, uint8_t di
 }
 
 // Forward declarations for breakConnectedLeaves
-static void breakConnectedLeaves(short x, uint8_t y, short z, uint16_t leaf_type, PlayerData *player, int *broken_count);
-static void breakFloatingLeaves(short bx, uint8_t by, short bz, uint16_t leaf_type, PlayerData *player, int *broken_count);
+static void breakConnectedLeaves(short x, int16_t y, short z, uint16_t leaf_type, PlayerData *player, int *broken_count);
+static void breakFloatingLeaves(short bx, int16_t by, short bz, uint16_t leaf_type, PlayerData *player, int *broken_count);
 void playPickupAnimation(PlayerData *player, uint16_t item, double x, double y, double z);
 int givePlayerItem(PlayerData *player, uint16_t item, uint8_t count);
 uint16_t getMiningResult(uint16_t held_item, uint16_t block);
@@ -1280,7 +1287,7 @@ uint8_t isLeafBlock (uint16_t block) {
 }
 
 // Recursively break connected leaf blocks of the same type (cap at 6 total)
-static void breakConnectedLeaves (short x, uint8_t y, short z, uint16_t leaf_type, PlayerData *player, int *broken_count) {
+static void breakConnectedLeaves (short x, int16_t y, short z, uint16_t leaf_type, PlayerData *player, int *broken_count) {
   if (*broken_count >= 6) return;
 
   // Check all 6 adjacent blocks
@@ -1292,7 +1299,8 @@ static void breakConnectedLeaves (short x, uint8_t y, short z, uint16_t leaf_typ
     if (*broken_count >= 6) break;
 
     short nx = x + dx[i];
-    uint8_t ny = y + dy[i];
+    int16_t ny = y + dy[i];
+    if (ny < 0 || ny > 319) continue;
     short nz = z + dz[i];
 
     uint16_t adj = getBlockAt2(nx, ny, nz, player->dimension);
@@ -1330,7 +1338,7 @@ static uint8_t isLogBlock(uint16_t block) {
 }
 
 // Break floating leaf blocks within a 2-block radius that have no log support
-static void breakFloatingLeaves (short bx, uint8_t by, short bz, uint16_t leaf_type, PlayerData *player, int *broken_count) {
+static void breakFloatingLeaves (short bx, int16_t by, short bz, uint16_t leaf_type, PlayerData *player, int *broken_count) {
   // Scan a 5x5x5 area centered on the broken block (radius 2)
   for (short dx = -2; dx <= 2; dx++) {
     for (short dz = -2; dz <= 2; dz++) {
@@ -1338,7 +1346,8 @@ static void breakFloatingLeaves (short bx, uint8_t by, short bz, uint16_t leaf_t
         if (*broken_count >= 6) return;
 
         short nx = bx + dx;
-        uint8_t ny = by + dy;
+        int16_t ny = by + dy;
+        if (ny < 0 || ny > 319) continue;
         short nz = bz + dz;
 
         // Skip the block that was already broken
@@ -1458,6 +1467,116 @@ static uint8_t isSaplingItem(uint16_t item) {
   );
 }
 
+static uint8_t isPickaxeItem(uint16_t item) {
+  return (
+    item == I_wooden_pickaxe ||
+    item == I_stone_pickaxe ||
+    item == I_iron_pickaxe ||
+    item == I_golden_pickaxe ||
+    item == I_diamond_pickaxe ||
+    item == I_netherite_pickaxe
+  );
+}
+
+static uint8_t isIronTierPickaxe(uint16_t item) {
+  // Keep golden pickaxe compatible with this server's prior ore-drop behavior.
+  return (
+    item == I_iron_pickaxe ||
+    item == I_golden_pickaxe ||
+    item == I_diamond_pickaxe ||
+    item == I_netherite_pickaxe
+  );
+}
+
+static uint8_t isDiamondTierPickaxe(uint16_t item) {
+  return item == I_diamond_pickaxe || item == I_netherite_pickaxe;
+}
+
+static uint8_t isShovelItem(uint16_t item) {
+  return (
+    item == I_wooden_shovel ||
+    item == I_stone_shovel ||
+    item == I_iron_shovel ||
+    item == I_golden_shovel ||
+    item == I_diamond_shovel ||
+    item == I_netherite_shovel
+  );
+}
+
+static uint8_t isShearsFastBlock(uint16_t block) {
+  return isLeafBlock(block) || (block >= B_white_wool && block <= B_blue_wool) || block == B_cobweb;
+}
+
+static uint8_t isIronTierPickaxeDropBlock(uint16_t block) {
+  switch (block) {
+    case B_gold_ore:
+    case B_deepslate_gold_ore:
+    case B_redstone_ore:
+    case B_diamond_ore:
+    case B_emerald_ore:
+      return true;
+    default:
+      return false;
+  }
+}
+
+static uint8_t isPickaxeDropBlock(uint16_t block) {
+  switch (block) {
+    case B_stone:
+    case B_granite:
+    case B_polished_granite:
+    case B_diorite:
+    case B_polished_diorite:
+    case B_andesite:
+    case B_polished_andesite:
+    case B_cobblestone:
+    case B_cobblestone_slab:
+    case B_cobblestone_stairs:
+    case B_sandstone:
+    case B_chiseled_sandstone:
+    case B_cut_sandstone:
+    case B_calcite:
+    case B_terracotta:
+    case B_white_terracotta:
+    case B_orange_terracotta:
+    case B_yellow_terracotta:
+    case B_brown_terracotta:
+    case B_red_terracotta:
+    case B_light_gray_terracotta:
+    case B_magma_block:
+    case B_furnace:
+    case B_dispenser:
+    case B_piston:
+    case B_sticky_piston:
+    case B_powered_rail:
+    case B_detector_rail:
+    case B_coal_ore:
+    case B_deepslate_coal_ore:
+    case B_iron_ore:
+    case B_deepslate_iron_ore:
+    case B_copper_ore:
+    case B_lapis_ore:
+    case B_deepslate_lapis_ore:
+    case B_nether_gold_ore:
+    case B_nether_quartz_ore:
+    case B_coal_block:
+    case B_copper_block:
+    case B_iron_block:
+    case B_gold_block:
+    case B_diamond_block:
+    case B_redstone_block:
+    case B_lapis_block:
+    case B_basalt:
+    case B_blackstone:
+    case B_gilded_blackstone:
+    case B_nether_bricks:
+    case B_cracked_nether_bricks:
+      return true;
+    default:
+      return false;
+  }
+}
+
 // Returns the result of mining a block, taking into account the block type and tools
 // Probability numbers obtained with this formula: N = floor(P * (2 ^ 32))
 uint16_t getMiningResult (uint16_t held_item, uint16_t block) {
@@ -1473,70 +1592,25 @@ uint16_t getMiningResult (uint16_t held_item, uint16_t block) {
     return 0;
   }
 
+  if (block == B_obsidian || block == B_ancient_debris) {
+    if (!isDiamondTierPickaxe(held_item)) return 0;
+  } else if (isIronTierPickaxeDropBlock(block)) {
+    if (!isIronTierPickaxe(held_item)) return 0;
+  } else if (isPickaxeDropBlock(block)) {
+    if (!isPickaxeItem(held_item)) return 0;
+  }
+
+  if ((block == B_snow || block == B_snow_block) && !isShovelItem(held_item)) return 0;
+
   switch (block) {
-
-    case B_stone:
-    case B_cobblestone:
-    case B_sandstone:
-    case B_furnace:
-    case B_coal_ore:
-    case B_iron_ore:
-    case B_iron_block:
-    case B_gold_block:
-    case B_diamond_block:
-    case B_redstone_block:
-    case B_coal_block:
-      // Check if player is holding (any) pickaxe
-      if (
-        held_item != I_wooden_pickaxe &&
-        held_item != I_stone_pickaxe &&
-        held_item != I_iron_pickaxe &&
-        held_item != I_golden_pickaxe &&
-        held_item != I_diamond_pickaxe &&
-        held_item != I_netherite_pickaxe
-      ) return 0;
-      break;
-
-    case B_gold_ore:
-    case B_redstone_ore:
-    case B_diamond_ore:
-    case B_emerald_ore:
-      // Check if player is holding an iron (or better) pickaxe
-      if (
-        held_item != I_iron_pickaxe &&
-        held_item != I_golden_pickaxe &&
-        held_item != I_diamond_pickaxe &&
-        held_item != I_netherite_pickaxe
-      ) return 0;
-      break;
-
-    case B_snow:
-      // Check if player is holding (any) shovel
-      if (
-        held_item != I_wooden_shovel &&
-        held_item != I_stone_shovel &&
-        held_item != I_iron_shovel &&
-        held_item != I_golden_shovel &&
-        held_item != I_diamond_shovel &&
-        held_item != I_netherite_shovel
-      ) return 0;
-      break;
-
-    case B_obsidian:
-      // Only diamond pickaxe can mine obsidian
-      if (held_item != I_diamond_pickaxe) return 0;
-      break;
-
     case B_gravel:
+    case B_suspicious_gravel:
       // 50% chance to drop flint instead of gravel
       if (fast_rand() % 2 == 0) return I_flint;
       return I_gravel;
 
-    case B_soul_sand:
-      return I_soul_sand;
-
-    case B_soul_soil:
-      return I_soul_soil;
+    case B_soul_sand: return I_soul_sand;
+    case B_soul_soil: return I_soul_soil;
 
     case B_short_grass:
     case B_fern:
@@ -1560,34 +1634,11 @@ uint8_t isInstantlyMined (PlayerData *player, uint16_t block) {
 
   uint16_t held_item = player->inventory_items[player->hotbar];
 
-  if (
-    block == B_snow ||
-    block == B_snow_block
-  ) return (
-    held_item == I_stone_shovel ||
-    held_item == I_iron_shovel ||
-    held_item == I_diamond_shovel ||
-    held_item == I_netherite_shovel ||
-    held_item == I_golden_shovel
-  );
+  if (block == B_snow || block == B_snow_block) return isShovelItem(held_item);
 
-  if (block == B_obsidian)
-    return held_item == I_diamond_pickaxe;
+  if (block == B_soul_sand || block == B_soul_soil) return isShovelItem(held_item);
 
-  if (
-    block == B_soul_sand ||
-    block == B_soul_soil
-  ) return (
-    held_item == I_wooden_shovel ||
-    held_item == I_stone_shovel ||
-    held_item == I_iron_shovel ||
-    held_item == I_diamond_shovel ||
-    held_item == I_netherite_shovel ||
-    held_item == I_golden_shovel
-  );
-
-  if (isLeafBlock(block))
-    return held_item == I_shears;
+  if (isShearsFastBlock(block)) return held_item == I_shears;
 
   return (
     block == B_dead_bush ||
@@ -2068,9 +2119,9 @@ uint8_t handlePlayerEating (PlayerData *player, uint8_t just_check) {
   return true;
 }
 
-static void enqueueFluidUpdate (short x, uint8_t y, short z, uint16_t fluid, uint16_t block);
+static void enqueueFluidUpdate (short x, int16_t y, short z, uint16_t fluid, uint16_t block);
 
-void handleFluidMovement (short x, uint8_t y, short z, uint16_t fluid, uint16_t block) {
+void handleFluidMovement (short x, int16_t y, short z, uint16_t fluid, uint16_t block) {
 
   // Skip stale entries — the block has already been changed by a prior update
   if (getBlockAt(x, y, z) != block) return;
@@ -2148,7 +2199,7 @@ void handleFluidMovement (short x, uint8_t y, short z, uint16_t fluid, uint16_t 
 
 }
 
-static void enqueueFluidUpdate (short x, uint8_t y, short z, uint16_t fluid, uint16_t block) {
+static void enqueueFluidUpdate (short x, int16_t y, short z, uint16_t fluid, uint16_t block) {
   // De-dup: skip if the last enqueued entry is for the same position
   int tail = fluid_queue_tail;
   if (tail != fluid_queue_head) {
@@ -2175,7 +2226,7 @@ void processFluidQueue (void) {
   }
 }
 
-void checkFluidUpdate (short x, uint8_t y, short z, uint16_t block) {
+void checkFluidUpdate (short x, int16_t y, short z, uint16_t block) {
 
   uint16_t fluid;
   if (block >= B_water && block < B_water + 8) fluid = B_water;
@@ -2221,13 +2272,13 @@ void playPickupAnimation (PlayerData *player, uint16_t item, double x, double y,
 }
 #endif
 
-static void clearConnectedNetherPortal(short start_x, uint8_t start_y, short start_z, uint8_t dimension) {
+static void clearConnectedNetherPortal(short start_x, int16_t start_y, short start_z, uint8_t dimension) {
 
   if (getBlockAt2(start_x, start_y, start_z, dimension) != B_nether_portal) return;
 
   typedef struct {
     short x;
-    uint8_t y;
+    int16_t y;
     short z;
   } PortalNode;
 
@@ -2249,15 +2300,15 @@ static void clearConnectedNetherPortal(short start_x, uint8_t start_y, short sta
 
     for (uint8_t i = 0; i < 6; i ++) {
       int ny = (int)node.y + offsets[i][1];
-      if (ny < 0 || ny > 255) continue;
+      if (ny < 0 || ny > 319) continue;
 
       short nx = node.x + offsets[i][0];
       short nz = node.z + offsets[i][2];
-      if (getBlockAt2(nx, (uint8_t)ny, nz, dimension) != B_nether_portal) continue;
+      if (getBlockAt2(nx, (int16_t)ny, nz, dimension) != B_nether_portal) continue;
 
-      makeBlockChange(nx, (uint8_t)ny, nz, 0, dimension);
+      makeBlockChange(nx, (int16_t)ny, nz, 0, dimension);
       if (tail < sizeof(queue) / sizeof(queue[0])) {
-        queue[tail++] = (PortalNode){nx, (uint8_t)ny, nz};
+        queue[tail++] = (PortalNode){nx, (int16_t)ny, nz};
       }
     }
   }
@@ -2270,9 +2321,9 @@ static void clearNearbyNetherPortal(short x, short y, short z, uint8_t dimension
     for (short dz = -2; dz <= 2; dz ++) {
       for (short dy = -4; dy <= 4; dy ++) {
         int ny = (int)y + dy;
-        if (ny < 0 || ny > 255) continue;
-        if (getBlockAt2(x + dx, (uint8_t)ny, z + dz, dimension) == B_nether_portal) {
-          clearConnectedNetherPortal(x + dx, (uint8_t)ny, z + dz, dimension);
+        if (ny < 0 || ny > 319) continue;
+        if (getBlockAt2(x + dx, (int16_t)ny, z + dz, dimension) == B_nether_portal) {
+          clearConnectedNetherPortal(x + dx, (int16_t)ny, z + dz, dimension);
         }
       }
     }
@@ -2430,7 +2481,7 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
 
   // Check if any blocks above this should break, and if so,
   // iterate upward over all blocks in the column and break them
-  uint8_t y_offset = 1;
+  int16_t y_offset = 1;
   while (isColumnBlock(block_above)) {
     // Destroy the next block
     makeBlockChange(x, y + y_offset, z, 0, player->dimension);
@@ -2443,7 +2494,7 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
   }
 }
 
-static uint8_t getFaceOffsetBlock(short x, uint8_t y, short z, uint8_t face, short *out_x, uint8_t *out_y, short *out_z) {
+static uint8_t getFaceOffsetBlock(short x, int16_t y, short z, uint8_t face, short *out_x, int16_t *out_y, short *out_z) {
   int fy = y;
   *out_x = x;
   *out_z = z;
@@ -2458,8 +2509,8 @@ static uint8_t getFaceOffsetBlock(short x, uint8_t y, short z, uint8_t face, sho
     default: return 0;
   }
 
-  if (fy < 0 || fy > 255) return 0;
-  *out_y = (uint8_t)fy;
+  if (fy < 0 || fy > 319) return 0;
+  *out_y = (int16_t)fy;
   return 1;
 }
 
@@ -2502,7 +2553,7 @@ static uint8_t handleBucketUse(PlayerData *player, short x, short y, short z, ui
     const double eye_z = (double)player->z + 0.5;
 
     short prev_x = player->x;
-    uint8_t prev_y = (uint8_t)player->y;
+    int16_t prev_y = player->y;
     short prev_z = player->z;
     uint8_t have_prev = false;
 
@@ -2511,12 +2562,12 @@ static uint8_t handleBucketUse(PlayerData *player, short x, short y, short z, ui
       int by_i = (int)floor(eye_y + ray_dy * distance);
       int bz_i = (int)floor(eye_z + ray_dz * distance);
 
-      if (by_i < 0 || by_i > 255 || bx_i < -32768 || bx_i > 32767 || bz_i < -32768 || bz_i > 32767) {
+      if (by_i < 0 || by_i > 319 || bx_i < -32768 || bx_i > 32767 || bz_i < -32768 || bz_i > 32767) {
         continue;
       }
 
       short bx = (short)bx_i;
-      uint8_t by = (uint8_t)by_i;
+      int16_t by = (int16_t)by_i;
       short bz = (short)bz_i;
       uint16_t ray_block = getBlockAt2(bx, by, bz, player->dimension);
 
@@ -2598,7 +2649,7 @@ static uint8_t handleBucketUse(PlayerData *player, short x, short y, short z, ui
   else return false;
 
   short fx = x, fz = z;
-  uint8_t fy = y;
+  int16_t fy = y;
   if (!getFaceOffsetBlock(x, y, z, face, &fx, &fy, &fz)) return true;
 
   uint16_t existing = getBlockAt2(fx, fy, fz, player->dimension);
@@ -3096,7 +3147,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
   // Handle flint and steel - portal creation or fire placement
   if (*item == I_flint_and_steel) {
     short fx = x, fz = z;
-    uint8_t fy = y;
+    int16_t fy = y;
     if (!getFaceOffsetBlock(x, y, z, face, &fx, &fy, &fz)) return;
     if (target == B_obsidian && tryCreatePortal(fx, fy, fz, player->dimension)) {
       if (*count > 0) {

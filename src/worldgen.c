@@ -2468,10 +2468,10 @@ uint8_t findNearestNetherStructure(int px, int pz, int radius, int *out_x, int *
 // buildNetherChunkSection() for blocks players can interact with.
 uint16_t getNetherBlockAt (int x, int y, int z) {
   if (y < 0) return B_bedrock;
-  if (y > 255) return B_air;
-  
+  if (y > 319) return B_air;
+
   uint8_t biome = getChunkNetherBiome(div_floor(x, 16), div_floor(z, 16));
-  
+
   // Get feature for this minichunk
   ChunkAnchor a;
   a.x = div_floor(x, 8);
@@ -2483,10 +2483,10 @@ uint16_t getNetherBlockAt (int x, int y, int z) {
   double fn = octave_sample(&surface_noise, (double)x * 0.015, 0, (double)z * 0.015);
   int floor_h = 60 + (int)(fn * 35.0);
   if (floor_h < 15) floor_h = 15;
-  
+
   double cn = octave_sample(&surface_noise, (double)x * 0.015 + 100.0, 0, (double)z * 0.015 + 100.0);
   int ceil_h = 130 + (int)(cn * 35.0);
-  
+
   // Flat lake logic
   double pool_n = octave_sample(&detail_noise, (double)x * 0.01, 0, (double)z * 0.01);
   double pool_threshold = 0.5;
@@ -2494,120 +2494,179 @@ uint16_t getNetherBlockAt (int x, int y, int z) {
   int is_lake = (pool_n > pool_threshold && floor_h > lake_y);
   uint32_t lh = (uint32_t)(x * 31 + z * 37 + y);
 
-  if (y < 5) return B_bedrock;
-  if (y <= 63) {
-    if (y <= floor_h) return (biome == W_basalt_deltas) ? B_basalt : B_netherrack;
-    return B_lava;
+  uint16_t block = B_air;
+
+  // === Bedrock Bottom (Y 0-4) ===
+  if (y < 5) {
+    block = B_bedrock;
   }
-  
-  if (y <= floor_h) {
-    if (is_lake && y >= lake_y - 4) {
-        if (y > lake_y) return B_air;
-        if (y == lake_y - 4) return (lh & 1) ? B_magma_block : B_gravel;
-        return B_lava;
+  // === Lava Sea (Y 5-63) ===
+  else if (y <= 63) {
+    if (y <= floor_h) {
+      if (biome == W_basalt_deltas) block = (lh & 1) ? B_basalt : B_blackstone;
+      else block = B_netherrack;
+    } else {
+      block = B_lava;
     }
-    if (biome == W_basalt_deltas) return (lh & 1) ? B_basalt : B_blackstone;
-    return B_netherrack;
   }
-  
-  if (y >= ceil_h) return B_netherrack;
-  
-  // Bridges
-  double bridge_freq = 0.025;
-  double bridge_threshold = 0.75;
-  if (biome == W_crimson_forest || biome == W_warped_forest) bridge_threshold = 0.65;
-  else if (biome == W_basalt_deltas) bridge_threshold = 0.60;
-  double bridge = octave_sample(&surface_noise, x * bridge_freq, y * 0.02, z * bridge_freq);
-  if (bridge > bridge_threshold) return B_netherrack;
+  // === Main Terrain Body ===
+  else if (y <= floor_h) {
+    if (is_lake && y >= lake_y - 4) {
+      if (y > lake_y) block = B_air;
+      else if (y == lake_y - 4) block = (lh & 1) ? B_magma_block : B_gravel;
+      else block = B_lava;
+    } else if (biome == W_basalt_deltas) {
+      uint32_t bh = (uint32_t)(x * 27281 ^ y * 47297 ^ z * 32423);
+      block = (bh & 1) ? B_basalt : B_blackstone;
+    } else {
+      block = B_netherrack;
+      double cave = octave_sample(&cave_noise, x * 0.04, y * 0.04, z * 0.04);
+      if (cave > 0.6) block = B_air;
 
-  // Trees (Features) in lookup - 1-width trunk, tall
-  if (biome == W_crimson_forest || biome == W_warped_forest) {
-      if (feature.y != 0xFF && feature.y >= 32 && feature.y <= 120) {
-          uint16_t stem = (biome == W_crimson_forest) ? B_crimson_stem : B_warped_stem;
-          uint16_t wart = (biome == W_crimson_forest) ? B_nether_wart_block : B_warped_wart_block;
-          int trunk_h = 5 + (feature.variant * 3);
-          
-          // 1x1 Trunk
-          if (x == feature.x && z == feature.z) {
-              if (y >= feature.y && y < feature.y + trunk_h) return stem;
-          }
-          
-          int dx = x - feature.x;
-          int dz = z - feature.z;
-          int adx = (dx < 0) ? -dx : dx;
-          int adz = (dz < 0) ? -dz : dz;
-          int dist = adx + adz;
-          int cap_y = feature.y + trunk_h;
-          if (y >= cap_y - 2 && y <= cap_y + 1) {
-              int radius = (y == cap_y + 1) ? 1 : (y >= cap_y) ? 3 : 2;
-              if (dist <= radius) {
-                  uint32_t ch = (uint32_t)(x * 7211 ^ z * 5237);
-                  return ((ch & 0x1F) == 0) ? B_shroomlight : wart;
-              }
-          }
+      if (block == B_netherrack && y < 28) {
+        uint32_t bh = (uint32_t)(x * 27281 ^ y * 47297 ^ z * 32423);
+        if ((bh & 0x1F) == 0) block = B_blackstone;
+        else if ((bh & 0xFF) == 0xDE) block = B_gilded_blackstone;
       }
+    }
   }
+  // === Ceiling Terrain ===
+  else if (y >= ceil_h) {
+    block = B_netherrack;
+    if (biome == W_basalt_deltas) {
+      uint32_t bh = (uint32_t)(x * 31337 ^ y * 13337 ^ z * 74747);
+      if ((bh & 3) == 0) block = B_basalt;
+    }
 
-  // Ruined Portals at ground level (before surface decorations)
-  if (y == floor_h + 1 && !is_lake) {
-      uint16_t rp = getRuinedPortalBlockAt(x, y, z);
-      if (rp != 0xFFFF) return rp;
+    // Keep this in sync with buildNetherChunkSection(): ceiling caves are
+    // carved after the base ceiling material is selected.
+    double cave = octave_sample(&cave_noise, x * 0.04 + 500.0, y * 0.04, z * 0.04 + 500.0);
+    if (cave > 0.6) block = B_air;
   }
-
-  // Surface decorations must match buildNetherChunkSection(). Without this,
-  // the client can see soul sand/soil while mining lookup reports air.
-  if (y == floor_h + 1 && !is_lake) {
-      uint16_t block = B_air;
-      double soul_threshold = 0.5;
-      if (biome == W_soul_sand_valley) soul_threshold = 0.2;
-      double soul = octave_sample(&detail_noise, x * 0.02 + 3000.0, 0, z * 0.02 + 3000.0);
-      if (soul > soul_threshold) {
-          uint32_t sh = (uint32_t)(x * 31337 + z * 74747);
-          block = (sh & 1) ? B_soul_sand : B_soul_soil;
+  // === Open Void with Bridges ===
+  else if (y > floor_h && y < ceil_h) {
+    double bridge_freq = 0.025;
+    double bridge_threshold = 0.75;
+    if (biome == W_crimson_forest || biome == W_warped_forest) bridge_threshold = 0.65;
+    else if (biome == W_basalt_deltas) bridge_threshold = 0.60;
+    double bridge = octave_sample(&surface_noise, x * bridge_freq, y * 0.02, z * bridge_freq);
+    if (bridge > bridge_threshold) {
+      double cave = octave_sample(&cave_noise, x * 0.04, y * 0.04, z * 0.04);
+      if (cave < 0.5) {
+        if (biome == W_basalt_deltas) {
+          uint32_t bh = (uint32_t)(x * 27281 ^ y * 47297 ^ z * 32423);
+          block = (bh & 1) ? B_basalt : B_blackstone;
+        } else {
+          block = B_netherrack;
+        }
       }
-      if (biome == W_soul_sand_valley || biome == W_basalt_deltas) {
-          double magma = octave_sample(&detail_noise, x * 0.04 + 7000.0, 0, z * 0.04 + 7000.0);
-          if (magma > 0.65) block = B_magma_block;
-      }
-      if (biome == W_nether_wastes) {
-          double gravel = octave_sample(&detail_noise, x * 0.03 + 11000.0, 0, z * 0.03 + 11000.0);
-          if (gravel > 0.75) block = B_gravel;
-      }
-      if (block != B_air) return block;
+    }
   }
 
-  // Basalt columns are also generated as air-space decorations.
-  if (y > floor_h + 1 && y < floor_h + 40 && !is_lake) {
-      double col_threshold = 0.75;
-      if (biome == W_basalt_deltas) col_threshold = 0.55;
-      else if (biome == W_soul_sand_valley) col_threshold = 0.65;
-      double col = octave_sample(&detail_noise, x * 0.05 + 5000.0, 0, z * 0.05 + 5000.0);
-      if (col > col_threshold) {
-          double col_h_n = octave_sample(&surface_noise, x * 0.015 + 6000.0, 0, z * 0.015 + 6000.0);
-          int col_h = 5 + (int)((col_h_n + 1.0) * 15.0);
-          if (y - floor_h <= col_h) return B_basalt;
+  // Trees (Features) - 1-width trunk, tall
+  if (block == B_air && (biome == W_crimson_forest || biome == W_warped_forest)) {
+    if (feature.y != 0xFF && feature.y >= 32 && feature.y <= 120) {
+      uint16_t stem = (biome == W_crimson_forest) ? B_crimson_stem : B_warped_stem;
+      uint16_t wart = (biome == W_crimson_forest) ? B_nether_wart_block : B_warped_wart_block;
+      int trunk_h = 5 + (feature.variant * 3);
+
+      if (x == feature.x && z == feature.z) {
+        if (y >= feature.y && y < feature.y + trunk_h) block = stem;
       }
+
+      int dx = x - feature.x;
+      int dz = z - feature.z;
+      int adx = (dx < 0) ? -dx : dx;
+      int adz = (dz < 0) ? -dz : dz;
+      int dist = adx + adz;
+      int cap_y = feature.y + trunk_h;
+      if (y >= cap_y - 2 && y <= cap_y + 1) {
+        int radius = (y == cap_y + 1) ? 1 : (y >= cap_y) ? 3 : 2;
+        if (dist <= radius) {
+          uint32_t ch = (uint32_t)(x * 7211 ^ z * 5237);
+          block = ((ch & 0x1F) == 0) ? B_shroomlight : wart;
+        }
+      }
+    }
+  }
+
+  // General Decorations
+  if (block == B_netherrack || block == B_basalt || block == B_blackstone) {
+    uint32_t h = (uint32_t)(x * 31337 + y * 13337 + z * 74747);
+    if (block == B_netherrack) {
+      if ((h & 0x3F) == 0) block = B_nether_quartz_ore;
+      else if ((h & 0x7F) == 0x20 && y < 80) block = B_nether_gold_ore;
+      else if ((h & 0xFFF) == 0xDEB && y < 40) block = B_ancient_debris;
+    }
+    if (y >= ceil_h && y < ceil_h + 6) {
+      double glow = octave_sample(&detail_noise, x * 0.08 + 2000.0, y * 0.1, z * 0.08 + 2000.0);
+      if (glow > 0.65) block = B_glowstone;
+    }
+    if (y == floor_h || y == ceil_h) {
+      if (biome == W_crimson_forest) block = B_crimson_nylium;
+      else if (biome == W_warped_forest) block = B_warped_nylium;
+    }
+  }
+
+  // Ruined Portals at ground level
+  if (block == B_air && y == floor_h + 1 && !is_lake) {
+    uint16_t rp = getRuinedPortalBlockAt(x, y, z);
+    if (rp != 0xFFFF) block = rp;
+  }
+
+  // Surface Decorations
+  if (block == B_air && y == floor_h + 1 && !is_lake) {
+    double soul_threshold = 0.5;
+    if (biome == W_soul_sand_valley) soul_threshold = 0.2;
+    double soul = octave_sample(&detail_noise, x * 0.02 + 3000.0, 0, z * 0.02 + 3000.0);
+    if (soul > soul_threshold) {
+      uint32_t sh = (uint32_t)(x * 31337 + z * 74747);
+      block = (sh & 1) ? B_soul_sand : B_soul_soil;
+    }
+    if (biome == W_soul_sand_valley || biome == W_basalt_deltas) {
+      double magma = octave_sample(&detail_noise, x * 0.04 + 7000.0, 0, z * 0.04 + 7000.0);
+      if (magma > 0.65) block = B_magma_block;
+    }
+    if (biome == W_nether_wastes) {
+      double gravel = octave_sample(&detail_noise, x * 0.03 + 11000.0, 0, z * 0.03 + 11000.0);
+      if (gravel > 0.75) block = B_gravel;
+    }
+  }
+
+  // Basalt columns
+  if (block == B_air && y > floor_h + 1 && y < floor_h + 40 && !is_lake) {
+    double col_threshold = 0.75;
+    if (biome == W_basalt_deltas) col_threshold = 0.55;
+    else if (biome == W_soul_sand_valley) col_threshold = 0.65;
+    double col = octave_sample(&detail_noise, x * 0.05 + 5000.0, 0, z * 0.05 + 5000.0);
+    if (col > col_threshold) {
+      double col_h_n = octave_sample(&surface_noise, x * 0.015 + 6000.0, 0, z * 0.015 + 6000.0);
+      int col_h = 5 + (int)((col_h_n + 1.0) * 15.0);
+      if (y - floor_h <= col_h) block = B_basalt;
+    }
   }
 
   // Glowstone stalactites hanging from ceiling
-  if (y < ceil_h && y >= ceil_h - 12 && !is_lake) {
-      uint16_t gs = getGlowstoneStalactiteBlockAt(x, y, z);
-      if (gs != 0xFFFF) return gs;
+  if (block == B_air && y < ceil_h && y >= ceil_h - 12 && !is_lake) {
+    uint16_t gs = getGlowstoneStalactiteBlockAt(x, y, z);
+    if (gs != 0xFFFF) block = gs;
   }
 
   // Nether structures (including support pillars below them)
-  if (y >= 5 && y <= 130) {
-      uint16_t fb = getNetherFortressBlockAt(x, y, z);
-      if (fb != 0xFFFF) return fb;
+  if (block == B_air && y >= 5 && y <= 130) {
+    uint16_t fb = getNetherFortressBlockAt(x, y, z);
+    if (fb != 0xFFFF) block = fb;
+    if (block == B_air) {
       uint16_t bb = getBastionBlockAt(x, y, z);
-      if (bb != 0xFFFF) return bb;
+      if (bb != 0xFFFF) block = bb;
+    }
   }
 
-  return B_air;
+  return block;
 }
 
 uint16_t getBlockAt2 (int x, int y, int z, uint8_t dimension) {
-  uint16_t block_change = getBlockChange(x, y, z);
+  uint16_t block_change = getBlockChange(x, y, z, dimension);
   if (block_change != 0xFF) return block_change;
   if (dimension == DIMENSION_NETHER) {
     return getNetherBlockAt(x, y, z);

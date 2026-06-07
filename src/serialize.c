@@ -217,6 +217,22 @@ int initSerializer () {
         return 1;
       }
     #endif
+    // Normalize loaded block-change heights. Older saves stored Y in one byte;
+    // after widening the field, any invalid high bits should fall back to the
+    // original low byte rather than pointing outside the generated world.
+    for (int i = 0; i < (
+      #ifdef INFINITE_BLOCK_CHANGES
+        block_changes_capacity
+      #else
+        MAX_BLOCK_CHANGES
+      #endif
+    ); i ++) {
+      if (block_changes[i].block == 0xFF) continue;
+      if (block_changes[i].y < 0 || block_changes[i].y > 319) {
+        block_changes[i].y = (int16_t)((uint16_t)block_changes[i].y & 0xFF);
+      }
+    }
+
     // Find the index of the last occupied entry to recover block_changes_count
     for (int i = 0; i < (
       #ifdef INFINITE_BLOCK_CHANGES
