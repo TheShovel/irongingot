@@ -53,6 +53,16 @@
 
 static volatile sig_atomic_t server_running = 1;
 
+static void server_idle_backoff(void) {
+  #ifdef ESP_PLATFORM
+    task_yield();
+  #elif defined(_WIN32)
+    Sleep(1);
+  #else
+    usleep(1000);  // 1ms: prevents nonblocking idle spin without noticeable latency
+  #endif
+}
+
 #ifndef _WIN32
 static void handle_shutdown_signal(int sig) {
   (void)sig;
@@ -115,6 +125,9 @@ typedef struct {
 #define CHUNK_RETRY_COOLDOWN_US 120000
 static ChunkRetryEntry chunk_retry_table[CHUNK_RETRY_TABLE_SIZE];
 static uint8_t chunk_retry_table_initialized = 0;
+static short chunk_stream_last_center_x[MAX_PLAYERS];
+static short chunk_stream_last_center_z[MAX_PLAYERS];
+static uint8_t chunk_stream_last_dimension[MAX_PLAYERS];
 
 static inline uint32_t chunkRetryHash(int x, int z) {
   uint32_t h = (uint32_t)x * 374761393u + (uint32_t)z * 668265263u;
@@ -161,8 +174,19 @@ static void streamChunksForPlayer(PlayerData *player) {
 
   int center_x = div_floor(player->x, 16);
   int center_z = div_floor(player->z, 16);
+  int player_index = (int)(player - player_data);
 
-  clearDistantVisitedChunks(player, center_x, center_z, VIEW_DISTANCE);
+  if (player_index < 0 || player_index >= MAX_PLAYERS ||
+      chunk_stream_last_center_x[player_index] != center_x ||
+      chunk_stream_last_center_z[player_index] != center_z ||
+      chunk_stream_last_dimension[player_index] != player->dimension) {
+    clearDistantVisitedChunks(player, center_x, center_z, VIEW_DISTANCE);
+    if (player_index >= 0 && player_index < MAX_PLAYERS) {
+      chunk_stream_last_center_x[player_index] = (short)center_x;
+      chunk_stream_last_center_z[player_index] = (short)center_z;
+      chunk_stream_last_dimension[player_index] = player->dimension;
+    }
+  }
 
   size_t chunk_backlog = get_client_send_queue_bytes(player->client_fd);
   if (chunk_backlog > (1024 * 1024)) {
@@ -214,16 +238,24 @@ static void streamChunksForPlayer(PlayerData *player) {
 static void* chunk_streamer_worker(void* arg) {
   (void)arg;
   while (chunk_streamer_running) {
+    uint8_t active_players = 0;
     for (int i = 0; i < MAX_PLAYERS; i++) {
+      if (player_data[i].client_fd == -1 || (player_data[i].flags & 0x20)) continue;
+      active_players = 1;
       streamChunksForPlayer(&player_data[i]);
     }
-    usleep(20000);  // 20ms
+    usleep(active_players ? 20000 : 100000);  // 20ms active, 100ms idle
   }
   return NULL;
 }
 
 static void init_chunk_streamer(void) {
   initChunkRetryTable();
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    chunk_stream_last_center_x[i] = 32767;
+    chunk_stream_last_center_z[i] = 32767;
+    chunk_stream_last_dimension[i] = 0xFF;
+  }
   chunk_streamer_running = 1;
   int ret = create_server_thread_with_stack(&chunk_streamer_thread, IRONGINGOT_CHUNK_THREAD_STACK_SIZE, chunk_streamer_worker, NULL);
   if (ret != 0) {
@@ -466,20 +498,25 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
         int player_index = (int)(player - player_data);
         uint8_t noclip_enabled = player_index >= 0 && player_index < MAX_PLAYERS && player_noclip[player_index];
 
-        uint8_t block_feet = getBlockAt(player->x, player->y, player->z);
-        uint8_t swimming = block_feet >= B_water && block_feet < B_water + 8;
-
-        // Handle fall damage
+        // Handle fall damage. Most movement packets are ordinary grounded walking,
+        // so avoid the expensive block lookup unless water state can change damage
+        // or grounded tracking.
         if (noclip_enabled) {
           player->grounded_y = player->y;
         } else if (on_ground) {
           int16_t damage = player->grounded_y - player->y - 3;
-          if (damage > 0 && (GAMEMODE == 0 || GAMEMODE == 2) && !swimming) {
-            hurtEntity(client_fd, -1, D_fall, damage);
+          uint8_t swimming = false;
+          if (damage > 0 && (GAMEMODE == 0 || GAMEMODE == 2)) {
+            uint16_t block_feet = getBlockAt2(player->x, player->y, player->z, player->dimension);
+            swimming = block_feet >= B_water && block_feet < B_water + 8;
+            if (!swimming) hurtEntity(client_fd, -1, D_fall, damage);
           }
           player->grounded_y = player->y;
-        } else if (swimming) {
-          player->grounded_y = player->y;
+        } else {
+          uint16_t block_feet = getBlockAt2(player->x, player->y, player->z, player->dimension);
+          if (block_feet >= B_water && block_feet < B_water + 8) {
+            player->grounded_y = player->y;
+          }
         }
 
         // Don't continue if all we got were flags
@@ -870,6 +907,7 @@ int main () {
   while (server_running) {
     // Check if it's time to yield to the idle task
     task_yield();
+    uint8_t did_work = false;
 
     // Attempt to accept a new connection
     for (int i = 0; i < MAX_PLAYERS; i ++) {
@@ -886,6 +924,7 @@ int main () {
         fcntl(clients[i], F_SETFL, flags | O_NONBLOCK);
       #endif
         client_count ++;
+        did_work = true;
       }
       break;
     }
@@ -898,7 +937,10 @@ int main () {
       if (client_index == MAX_PLAYERS) client_index = 0;
       searched++;
     } while (searched < MAX_PLAYERS && clients[client_index] == -1);
-    if (searched == MAX_PLAYERS && clients[client_index] == -1) continue;
+    if (searched == MAX_PLAYERS && clients[client_index] == -1) {
+      server_idle_backoff();
+      continue;
+    }
 
     // Handle periodic events (server ticks)
     int64_t time_since_last_tick = get_program_time() - last_tick_time;
@@ -907,6 +949,7 @@ int main () {
       // Periodically drain old packets to free memory
       drain_client_queues();
       last_tick_time = get_program_time();
+      did_work = true;
     }
 
     // Handle this individual client in a bounded burst.
@@ -935,10 +978,13 @@ int main () {
       if (recv_count < 2) {
         if (recv_count == 0 || (recv_count < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
           disconnectClient(&clients[client_index], 1);
+          did_work = true;
         }
         break;
       }
       #endif
+
+      did_work = true;
 
       // Handle 0xBEEF and 0xFEED packets for dumping/uploading world data.
       #ifdef DEV_ENABLE_BEEF_DUMPS
@@ -1128,6 +1174,8 @@ int main () {
         break;
       }
     }
+
+    if (!did_work) server_idle_backoff();
 
   }
 

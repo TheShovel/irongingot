@@ -4599,12 +4599,18 @@ void handleServerTick (int64_t time_since_last_tick) {
       // Decrement movement timer
       if (mob_data[i].move_timer > 0) mob_data[i].move_timer--;
       
-      // Find water surface level - the topmost water block
+      // Find nearby water surface level. Scanning from world top every tick is
+      // expensive; fish only need local surface avoidance around their current
+      // swim depth.
       int ws_fish_block_x = mobBlockCoord(new_x);
       int ws_fish_block_z = mobBlockCoord(new_z);
+      int fish_scan_y = mobBlockCoord(new_y);
       int water_surface = 0;
-      // Scan from above down to find the top water block
-      for (int y = 255; y >= mobBlockCoord(new_y) - 10; y--) {
+      int scan_top = fish_scan_y + 12;
+      int scan_bottom = fish_scan_y - 10;
+      if (scan_top > 319) scan_top = 319;
+      if (scan_bottom < 0) scan_bottom = 0;
+      for (int y = scan_top; y >= scan_bottom; y--) {
         uint16_t block = getBlockAt2(ws_fish_block_x, y, ws_fish_block_z, mob_data[i].dimension);
         uint16_t block_above = getBlockAt2(ws_fish_block_x, y + 1, ws_fish_block_z, mob_data[i].dimension);
         // Water surface is a water block with non-water (or air) above it
