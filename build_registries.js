@@ -737,6 +737,7 @@ async function convert() {
     block: {
       "mineable/pickaxe": tagBlocks([
         "stone",
+        "end_stone",
         "granite",
         "polished_granite",
         "diorite",

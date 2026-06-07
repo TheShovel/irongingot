@@ -2939,6 +2939,24 @@ uint16_t getEndBlockAt(int x, int y, int z) {
   int bottom, top;
   uint8_t biome;
   if (getEndIslandBoundsAt(x, z, &bottom, &top, &biome) && y >= bottom && y <= top) {
+    // Place exit portal on the surface of the main End island center
+    // Check if we're within the center platform area (a 5x5 square from -2 to 2)
+    if (x >= -2 && x <= 2 && z >= -2 && z <= 2) {
+      // Create a flat exit portal platform at Y=64
+      // The natural surface may have noise, but we override for the portal platform
+      int portal_top = 64;  // Fixed height for the exit portal platform
+      int platform_bottom = 54;  // 10 blocks down from portal top
+      
+      // Portal blocks at surface level
+      if (y == portal_top) {
+        return B_end_portal;
+      }
+      // Fill the platform area from portal top down to platform_bottom
+      if (y >= platform_bottom && y < portal_top) {
+        return B_end_stone;
+      }
+      // Fall through to natural island generation for deeper parts
+    }
     return B_end_stone;
   }
   return B_air;

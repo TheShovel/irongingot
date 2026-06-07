@@ -2879,9 +2879,12 @@ static void switchPlayerToDimension(PlayerData *player, uint8_t new_dim) {
     if (surface_y > 0) player->y = surface_y + 1;
     else player->y = 80;
   } else if (new_dim == DIMENSION_END) {
-    player->x = 0;
-    player->z = 0;
-    player->y = 76;
+    // Spawn offset from the exit portal to avoid immediate teleportation back
+    // The exit portal is at the center (0,0) from X/Z -2 to 2 at Y=64
+    // Spawn at (5, 5) on the island surface, well away from the portal
+    player->x = 5;
+    player->z = 5;
+    player->y = 65;  // On top of the island surface
   }
 
   // Fall damage is calculated from the last grounded Y. A dimension transfer is
@@ -2934,6 +2937,9 @@ void handlePortalTravel(PlayerData *player) {
     switchPlayerDimension(player);
   } else if (player->dimension == DIMENSION_OVERWORLD && block == B_end_portal) {
     switchPlayerToDimension(player, DIMENSION_END);
+  } else if (player->dimension == DIMENSION_END && block == B_end_portal) {
+    // Exit portal in the End takes player back to overworld
+    switchPlayerToDimension(player, DIMENSION_OVERWORLD);
   }
 }
 
