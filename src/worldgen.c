@@ -2147,7 +2147,7 @@ static uint16_t getRuinedPortalBlockAt(int x, int y, int z) {
 // Tapering cone of glowstone and netherrack hanging from the ceiling.
 static uint16_t getGlowstoneStalactiteBlockAt(int x, int y, int z) {
     double cn = octave_sample(&surface_noise, (double)x * 0.015 + 100.0, 0, (double)z * 0.015 + 100.0);
-    int ceil_h = 210 + (int)(cn * 35.0);
+    int ceil_h = 130 + (int)(cn * 35.0);
     int dy = y - ceil_h; // negative = below ceiling
     if (dy >= 0 || dy < -12) return 0xFFFF;
 
@@ -2485,7 +2485,7 @@ uint16_t getNetherBlockAt (int x, int y, int z) {
   if (floor_h < 15) floor_h = 15;
   
   double cn = octave_sample(&surface_noise, (double)x * 0.015 + 100.0, 0, (double)z * 0.015 + 100.0);
-  int ceil_h = 210 + (int)(cn * 35.0);
+  int ceil_h = 130 + (int)(cn * 35.0);
   
   // Flat lake logic
   double pool_n = octave_sample(&detail_noise, (double)x * 0.01, 0, (double)z * 0.01);
@@ -2700,7 +2700,7 @@ uint16_t buildNetherChunkSection(int cx, int cy, int cz) {
             if (floor_h < 15) floor_h = 15;
 
             double ceil_n = octave_sample(&surface_noise, x * 0.015 + 100.0, 0, z * 0.015 + 100.0);
-            int ceil_h = 210 + (int)(ceil_n * 35.0); // Range ~175 to 245
+            int ceil_h = 130 + (int)(ceil_n * 35.0); // Range ~95 to 165
             
             // Flat lake logic (like Overworld Y=64)
             double pool_n = octave_sample(&detail_noise, x * 0.01, 0, z * 0.01);
