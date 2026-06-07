@@ -2078,6 +2078,392 @@ uint16_t getTerrainAt (int x, int y, int z, ChunkAnchor anchor) {
 
 }
 
+// ============================================================
+// Ruined Portal
+// ============================================================
+// Broken obsidian portal frame on the ground with blackstone rubble.
+static uint16_t getRuinedPortalBlockAt(int x, int y, int z) {
+    double fn = octave_sample(&surface_noise, (double)x * 0.015, 0, (double)z * 0.015);
+    int floor_h = 60 + (int)(fn * 35.0);
+    if (floor_h < 15) floor_h = 15;
+    int dy = y - floor_h;
+    if (dy < 0 || dy > 4) return 0xFFFF;
+    if (y <= 63) return 0xFFFF; // don't place in lava sea
+
+    int px = div_floor(x, 40);
+    int pz = div_floor(z, 40);
+    uint64_t key = splitmix64(((uint64_t)(uint32_t)px * 12345987 ^ (uint64_t)(uint32_t)pz * 76543921) ^ world_seed);
+    if ((uint32_t)(key % 3) != 0) return 0xFFFF;
+
+    int cx = px * 40 + 10 + (int)((key >> 8) % 10);
+    int cz = pz * 40 + 10 + (int)((key >> 16) % 10);
+
+    int dx = x - cx;
+    int dz = z - cz;
+    if (dz < -2 || dz > 2) return 0xFFFF;
+    if (dx < -3 || dx > 4) return 0xFFFF;
+
+    uint32_t ph = (uint32_t)(x * 1013 ^ z * 7027);
+    int missing = (ph >> 4) & 3;
+
+    // Rubble on the ground around the frame
+    if (dy == 0) {
+        if (dz == -2 || dz == 2 || dx == -3 || dx == 4) {
+            if ((ph & 7) != 0) return B_blackstone;
+            return B_air;
+        }
+    }
+
+    // Portal frame at dz == 0
+    if (dz != 0) return 0xFFFF;
+
+    // Bottom rail (dy == 0)
+    if (dy == 0 && dx >= -1 && dx <= 2) {
+        if ((dx == -1 && missing > 2) || (dx == 2 && missing > 1)) return B_air;
+        return (ph & 0x80) ? B_gold_block : B_obsidian;
+    }
+    // Left column (dx == -1)
+    if (dx == -1 && dy >= 1 && dy <= 2) {
+        if ((dy == 1 && missing > 0) || (dy == 2 && missing > 2)) return B_air;
+        return B_obsidian;
+    }
+    // Right column (dx == 2)
+    if (dx == 2 && dy >= 1 && dy <= 2) {
+        if ((dy == 1 && missing > 1) || (dy == 2 && missing > 0)) return B_air;
+        return B_obsidian;
+    }
+    // Top rail (dy == 3)
+    if (dy == 3 && dx >= -1 && dx <= 2) {
+        if (dx == 0 && missing > 0) return B_air;
+        return B_obsidian;
+    }
+
+    return 0xFFFF;
+}
+
+// ============================================================
+// Glowstone Stalactite
+// ============================================================
+// Tapering cone of glowstone and netherrack hanging from the ceiling.
+static uint16_t getGlowstoneStalactiteBlockAt(int x, int y, int z) {
+    double cn = octave_sample(&surface_noise, (double)x * 0.015 + 100.0, 0, (double)z * 0.015 + 100.0);
+    int ceil_h = 210 + (int)(cn * 35.0);
+    int dy = y - ceil_h; // negative = below ceiling
+    if (dy >= 0 || dy < -12) return 0xFFFF;
+
+    int sx = div_floor(x, 32);
+    int sz = div_floor(z, 32);
+    uint64_t key = splitmix64(((uint64_t)(uint32_t)sx * 87654321 ^ (uint64_t)(uint32_t)sz * 23456789) ^ world_seed);
+    if ((uint32_t)(key % 3) != 0) return 0xFFFF;
+
+    int cx = sx * 32 + 8 + (int)((key >> 8) % 8);
+    int cz = sz * 32 + 8 + (int)((key >> 16) % 8);
+
+    int dx = x - cx;
+    int dz = z - cz;
+    int adx = (dx < 0) ? -dx : dx;
+    int adz = (dz < 0) ? -dz : dz;
+    int dist = (adx > adz) ? adx : adz;
+
+    // Cone: radius shrinks as we go down
+    int idy = -dy; // 1 = just below ceiling, 12 = furthest down
+    int radius;
+    if (idy <= 2) radius = 2;
+    else if (idy <= 4) radius = 1;
+    else if (idy <= 7) radius = 1;
+    else radius = 0;
+    // Taper more: at idy=3-4 radius=1, at idy=5-7 radius=0 (point)
+    if (idy >= 5 && idy <= 7) radius = (dist == 0) ? 0 : -1;
+    if (idy >= 8) radius = (dist == 0 && idy <= 10) ? 0 : -1;
+
+    if (dist > radius) return 0xFFFF;
+
+    // Random chance for shape variation
+    uint32_t sh = (uint32_t)(x * 57431 ^ y * 23417 ^ z * 92831);
+    // Make some blocks air to create branching look
+    if (radius > 0 && (sh & 0x1F) == 0 && dist == radius) return B_air;
+
+    // Core: glowstone, edges: netherrack
+    if (dist <= radius - 1 || (sh & 3) == 0) return B_glowstone;
+    return B_netherrack;
+}
+
+// ============================================================
+// Nether Fortress
+// ============================================================
+// Grid-based nether brick fortress — a solid rectangular keep
+// with pillar-supported interior, upper gallery, and treasure vault.
+static uint16_t getNetherFortressBlockAt(int x, int y, int z) {
+    if (y < 5 || y > 130) return 0xFFFF;
+
+    int fx = div_floor(x, 64);
+    int fz = div_floor(z, 64);
+
+    uint64_t key = splitmix64(((uint64_t)(uint32_t)fx * 3456789 ^ (uint64_t)(uint32_t)fz * 9876543) ^ world_seed);
+    if ((uint32_t)(key % 5) != 0) return 0xFFFF;
+
+    int cx = fx * 64 + 16 + (int)((key >> 8) % 16);
+    int cz = fz * 64 + 16 + (int)((key >> 16) % 16);
+    int fortress_y = 75 + (int)((key >> 24) % 25);
+
+    int len = 15 + ((key >> 30) & 3) * 4;  // 15, 19, 23, 27
+    int half = len / 2;
+
+    int dx = x - cx;
+    int dz = z - cz;
+    int dy = y - fortress_y;
+    int adx = (dx < 0) ? -dx : dx;
+    int adz = (dz < 0) ? -dz : dz;
+
+    // Outer bounding box
+    if (adx > half || adz > half) return 0xFFFF;
+
+    // ===== Support pillars below the structure =====
+    if (dy < 0) {
+        // Only place pillars at wall and interior grid positions
+        int is_pillar = (adx == half - 1 || adz == half - 1)
+                     || ((adx & 3) == 0 && (adz & 3) == 0 && adx < half - 1 && adz < half - 1);
+        if (!is_pillar) return 0xFFFF;
+        double fn = octave_sample(&surface_noise, (double)x * 0.015, 0, (double)z * 0.015);
+        int floor_h = 60 + (int)(fn * 35.0);
+        if (floor_h < 15) floor_h = 15;
+        if (y > floor_h) return B_nether_bricks;
+        return 0xFFFF;
+    }
+
+    if (dy >= 6) return 0xFFFF;
+
+    // Balcony overhang at outer edge
+    if (adx == half || adz == half) {
+        if (dy == 2 || dy == 3) {
+            if ((adx + adz) & 1) return B_nether_bricks;
+        }
+        return B_air;
+    }
+
+    uint16_t block = B_air;
+
+    // Outer walls
+    if (adx == half - 1 || adz == half - 1) {
+        if (dy == 0 || dy == 5) block = B_nether_bricks;
+        else if (dy >= 1 && dy <= 4) {
+            block = B_nether_bricks;
+        }
+    }
+    // Interior floor and ceiling
+    else if (dy == 0 || dy == 5) {
+        block = B_nether_bricks;
+    }
+    // Interior pillars and features (every 4 blocks in both directions)
+    else if (dy >= 1 && dy <= 4) {
+        int px = adx;
+        int pz = adz;
+        if (px % 4 == 0 && pz % 4 == 0) {
+            block = B_nether_bricks;
+        }
+        // Upper gallery: partial floor at dy=3
+        if (dy == 3 && (px <= 2 || pz <= 2)) {
+            block = B_nether_bricks;
+        }
+        // Treasure vault at center base
+        if (dy == 1 && adx <= 2 && adz <= 2) {
+            uint32_t thr = (uint32_t)(x * 31337 + y * 13337 + z * 74747);
+            if ((thr & 7) == 0) block = B_gold_block;
+            else if ((thr & 3) == 0) block = B_cracked_nether_bricks;
+            else block = B_nether_bricks;
+        }
+        // Windows / arrow slits in outer walls
+        if ((adx == half - 1 || adz == half - 1) && dy >= 1 && dy <= 3) {
+            uint32_t wh = (uint32_t)(x * 1013 ^ z * 7027);
+            if ((wh & 7) == 0) block = B_air;
+        }
+    }
+
+    return block;
+}
+
+// ============================================================
+// Bastion Remnant
+// ============================================================
+// Grid-based blackstone/basalt bastion with gilded treasure.
+// Square keep with corner towers, inner courtyard, and treasure vault.
+static uint16_t getBastionBlockAt(int x, int y, int z) {
+    if (y < 5 || y > 130) return 0xFFFF;
+
+    int bx = div_floor(x, 56);
+    int bz = div_floor(z, 56);
+
+    uint64_t key = splitmix64(((uint64_t)(uint32_t)bx * 56789123 ^ (uint64_t)(uint32_t)bz * 32948137) ^ world_seed);
+    if ((uint32_t)(key % 6) != 0) return 0xFFFF;
+
+    int cx = bx * 56 + 14 + (int)((key >> 8) % 14);
+    int cz = bz * 56 + 14 + (int)((key >> 16) % 14);
+    int bastion_y = 70 + (int)((key >> 24) % 25);
+
+    int dx = x - cx;
+    int dz = z - cz;
+    int dy = y - bastion_y;
+    int adx = (dx < 0) ? -dx : dx;
+    int adz = (dz < 0) ? -dz : dz;
+
+    if (adx > 8 || adz > 8) return 0xFFFF;
+
+    // ===== Support pillars below the structure =====
+    if (dy < 0) {
+        int is_pillar = (adx >= 5 && adz >= 5)  // under outer wall
+                     || (adx >= 7 && adz >= 7)   // under corner towers
+                     || (adx <= 4 && adz <= 4 && (adx & 3) == 0 && (adz & 3) == 0); // courtyard grid
+        if (!is_pillar) return 0xFFFF;
+        double fn = octave_sample(&surface_noise, (double)x * 0.015, 0, (double)z * 0.015);
+        int floor_h = 60 + (int)(fn * 35.0);
+        if (floor_h < 15) floor_h = 15;
+        if (y > floor_h) return B_blackstone;
+        return 0xFFFF;
+    }
+
+    if (dy >= 6) return 0xFFFF;
+
+    uint16_t block = B_air;
+
+    // Corner towers: 5x5 pillars at each corner (radius 7-8)
+    if (adx >= 7 && adz >= 7) {
+        if (adx <= 8 && adz <= 8) {
+            if (dy < 5) block = B_polished_andesite;
+        }
+        return block;
+    }
+
+    // Outer walls: radius 6-7 (3 blocks thick ring)
+    int in_outer = (adx >= 5 && adz >= 5);
+
+    if (in_outer) {
+        if (dy == 0) block = B_blackstone;
+        else if (dy >= 1 && dy <= 3) block = B_blackstone;
+        else if (dy == 4) block = B_basalt; // wall cap
+        else if (dy == 5) block = B_air;
+        // Battlements: every other block on top
+        if (dy == 4 && ((adx + adz) & 1)) block = B_blackstone;
+        return block;
+    }
+
+    // Inner courtyard (radius <= 4)
+    if (adx <= 4 && adz <= 4) {
+        // Floor: basalt
+        if (dy == 0) block = B_basalt;
+        // Center treasure platform
+        if (dy == 1 && adx <= 1 && adz <= 1) {
+            block = B_gilded_blackstone;
+        }
+        if (dy == 2 && adx <= 1 && adz <= 1) {
+            uint32_t th = (uint32_t)(x * 31337 + y * 13337 + z * 74747);
+            block = ((th & 3) == 0) ? B_gold_block : B_gilded_blackstone;
+        }
+        // Low walls forming inner enclosure
+        if (dy == 1 && (adx == 4 || adz == 4)) {
+            if (adx < 3 || adz < 3) block = B_basalt;
+        }
+        // Pillars at inner wall corners
+        if (dy >= 1 && dy <= 3 && adx == 4 && adz == 4) {
+            block = B_blackstone;
+        }
+    }
+
+    // Entrance bridge from outer wall to courtyard
+    if (!in_outer && (adx > 4 || adz > 4)) {
+        if (dy == 0) block = B_blackstone;
+        if (dy == 1 && ((adx + adz) & 1)) block = B_blackstone;
+    }
+
+    return block;
+}
+
+// Searches for nearest nether structure (fortress or bastion) from (px, pz).
+// Returns 1 if found and fills out_x/out_y/out_z/out_name.
+uint8_t findNearestNetherStructure(int px, int pz, int radius, int *out_x, int *out_y, int *out_z, const char **out_name) {
+    int best_dist = radius + 1;
+    int best_x = 0, best_y = 0, best_z = 0;
+    const char *best_name = NULL;
+
+    // Nether Fortress: 64-block grid, 1 in 5 cells
+    #define FORTRESS_SPACING 64
+    int f_ax = div_floor(px, FORTRESS_SPACING);
+    int f_az = div_floor(pz, FORTRESS_SPACING);
+    int f_rad = radius / FORTRESS_SPACING + 1;
+
+    for (int ring = 0; ring <= f_rad; ring++) {
+        int start_fx, start_fz, end_fx, end_fz;
+        if (ring == 0) {
+            start_fx = f_ax; end_fx = f_ax;
+            start_fz = f_az; end_fz = f_az;
+        } else {
+            start_fx = f_ax - ring; end_fx = f_ax + ring;
+            start_fz = f_az - ring; end_fz = f_az + ring;
+        }
+        for (int fx = start_fx; fx <= end_fx; fx++) {
+            for (int fz = start_fz; fz <= end_fz; fz++) {
+                if (ring > 0 && fx > f_ax - ring && fx < f_ax + ring && fz > f_az - ring && fz < f_az + ring) continue;
+                uint64_t key = splitmix64(((uint64_t)(uint32_t)fx * 3456789 ^ (uint64_t)(uint32_t)fz * 9876543) ^ world_seed);
+                if ((uint32_t)(key % 5) != 0) continue;
+                int cx = fx * FORTRESS_SPACING + 16 + (int)((key >> 8) % 16);
+                int cz = fz * FORTRESS_SPACING + 16 + (int)((key >> 16) % 16);
+                int cy = 75 + (int)((key >> 24) % 25);
+                int dx = cx - px;
+                int dz = cz - pz;
+                int dist = (dx < 0 ? -dx : dx) + (dz < 0 ? -dz : dz);
+                if (dist < best_dist) {
+                    best_dist = dist;
+                    best_x = cx; best_y = cy; best_z = cz;
+                    best_name = "Fortress";
+                }
+            }
+        }
+    }
+
+    // Bastion Remnant: 56-block grid, 1 in 6 cells
+    #define BASTION_SPACING 56
+    int b_ax = div_floor(px, BASTION_SPACING);
+    int b_az = div_floor(pz, BASTION_SPACING);
+    int b_rad = radius / BASTION_SPACING + 1;
+
+    for (int ring = 0; ring <= b_rad; ring++) {
+        int start_bx, start_bz, end_bx, end_bz;
+        if (ring == 0) {
+            start_bx = b_ax; end_bx = b_ax;
+            start_bz = b_az; end_bz = b_az;
+        } else {
+            start_bx = b_ax - ring; end_bx = b_ax + ring;
+            start_bz = b_az - ring; end_bz = b_az + ring;
+        }
+        for (int bx = start_bx; bx <= end_bx; bx++) {
+            for (int bz = start_bz; bz <= end_bz; bz++) {
+                if (ring > 0 && bx > b_ax - ring && bx < b_ax + ring && bz > b_az - ring && bz < b_az + ring) continue;
+                uint64_t key = splitmix64(((uint64_t)(uint32_t)bx * 56789123 ^ (uint64_t)(uint32_t)bz * 32948137) ^ world_seed);
+                if ((uint32_t)(key % 6) != 0) continue;
+                int cx = bx * BASTION_SPACING + 14 + (int)((key >> 8) % 14);
+                int cz = bz * BASTION_SPACING + 14 + (int)((key >> 16) % 14);
+                int cy = 70 + (int)((key >> 24) % 25);
+                int dx = cx - px;
+                int dz = cz - pz;
+                int dist = (dx < 0 ? -dx : dx) + (dz < 0 ? -dz : dz);
+                if (dist < best_dist) {
+                    best_dist = dist;
+                    best_x = cx; best_y = cy; best_z = cz;
+                    best_name = "Bastion";
+                }
+            }
+        }
+    }
+
+    if (best_name != NULL) {
+        *out_x = best_x;
+        *out_y = best_y;
+        *out_z = best_z;
+        *out_name = best_name;
+        return 1;
+    }
+    return 0;
+}
+
 // Nether block lookup used by gameplay systems. Keep this in sync with
 // buildNetherChunkSection() for blocks players can interact with.
 uint16_t getNetherBlockAt (int x, int y, int z) {
@@ -2162,6 +2548,12 @@ uint16_t getNetherBlockAt (int x, int y, int z) {
       }
   }
 
+  // Ruined Portals at ground level (before surface decorations)
+  if (y == floor_h + 1 && !is_lake) {
+      uint16_t rp = getRuinedPortalBlockAt(x, y, z);
+      if (rp != 0xFFFF) return rp;
+  }
+
   // Surface decorations must match buildNetherChunkSection(). Without this,
   // the client can see soul sand/soil while mining lookup reports air.
   if (y == floor_h + 1 && !is_lake) {
@@ -2195,6 +2587,20 @@ uint16_t getNetherBlockAt (int x, int y, int z) {
           int col_h = 5 + (int)((col_h_n + 1.0) * 15.0);
           if (y - floor_h <= col_h) return B_basalt;
       }
+  }
+
+  // Glowstone stalactites hanging from ceiling
+  if (y < ceil_h && y >= ceil_h - 12 && !is_lake) {
+      uint16_t gs = getGlowstoneStalactiteBlockAt(x, y, z);
+      if (gs != 0xFFFF) return gs;
+  }
+
+  // Nether structures (including support pillars below them)
+  if (y >= 5 && y <= 130) {
+      uint16_t fb = getNetherFortressBlockAt(x, y, z);
+      if (fb != 0xFFFF) return fb;
+      uint16_t bb = getBastionBlockAt(x, y, z);
+      if (bb != 0xFFFF) return bb;
   }
 
   return B_air;
@@ -2429,6 +2835,12 @@ uint16_t buildNetherChunkSection(int cx, int cy, int cz) {
                     }
                 }
 
+                // Ruined Portals at ground level
+                if (block == B_air && y == floor_h + 1 && !is_lake) {
+                    uint16_t rp = getRuinedPortalBlockAt(x, y, z);
+                    if (rp != 0xFFFF) block = rp;
+                }
+
                 // Surface Decorations
                 if (block == B_air && y == floor_h + 1 && !is_lake) {
                     double soul_threshold = 0.5;
@@ -2458,6 +2870,22 @@ uint16_t buildNetherChunkSection(int cx, int cy, int cz) {
                         double col_h_n = octave_sample(&surface_noise, x * 0.015 + 6000.0, 0, z * 0.015 + 6000.0);
                         int col_h = 5 + (int)((col_h_n + 1.0) * 15.0);
                         if (y - floor_h <= col_h) block = B_basalt;
+                    }
+                }
+
+                // Glowstone stalactites hanging from ceiling
+                if (block == B_air && y < ceil_h && y >= ceil_h - 12 && !is_lake) {
+                    uint16_t gs = getGlowstoneStalactiteBlockAt(x, y, z);
+                    if (gs != 0xFFFF) block = gs;
+                }
+
+                // Nether structures (including support pillars below them)
+                if (block == B_air && y >= 5 && y <= 130) {
+                    uint16_t fb = getNetherFortressBlockAt(x, y, z);
+                    if (fb != 0xFFFF) block = fb;
+                    if (block == B_air) {
+                        uint16_t bb = getBastionBlockAt(x, y, z);
+                        if (bb != 0xFFFF) block = bb;
                     }
                 }
 

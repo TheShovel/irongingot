@@ -45,6 +45,10 @@ uint16_t buildChunkSection (int cx, int cy, int cz, uint8_t dimension);
 uint16_t buildNetherChunkSection(int cx, int cy, int cz);
 uint8_t getChunkNetherBiome(short x, short z);
 
+// Searches for nearest nether structure (fortress or bastion) from (px, pz).
+// Returns 1 if found and fills out_x/out_y/out_z/out_name. Returns 0 if none found within radius.
+uint8_t findNearestNetherStructure(int px, int pz, int radius, int *out_x, int *out_y, int *out_z, const char **out_name);
+
 void init_worldgen(void);
 
 // Noise samplers

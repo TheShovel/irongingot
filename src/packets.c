@@ -2135,6 +2135,7 @@ int cs_chat (int client_fd) {
     "  !creative - Toggle creative mode UI / !creative list - List all items\n"
     "  !creative <item_name> - Give yourself an item (e.g., !creative oak_log)\n"
     "  !noclip [on|off] - Toggle spectator-style noclip movement\n"
+    "  !findstructure [radius] - Find and teleport to nearest nether structure\n"
     "  !help - Show this help message";
     sc_systemChat(client_fd, (char *)help_msg, (uint16_t)sizeof(help_msg) - 1);
     goto cleanup;
@@ -2478,6 +2479,61 @@ int cs_chat (int client_fd) {
       char response[192];
       int resp_len = snprintf(response, sizeof(response), "§7No matching biome found within %d blocks of your position.", radius);
       sc_systemChat(client_fd, response, (uint16_t)resp_len);
+    }
+    goto cleanup;
+  }
+
+  // !findstructure [radius] - Find nearest nether structure
+  if (!strncmp((char *)recv_buffer, "!findstructure", 14)) {
+    int ci = 14;
+    while (recv_buffer[ci] == ' ' && ci < 224) ci++;
+    int radius = 2000;
+    char rad_buf[32];
+    int rad_len = 0;
+    while (ci + rad_len < 224 && recv_buffer[ci + rad_len] != '\0' && recv_buffer[ci + rad_len] != ' ' && rad_len < 31) {
+        rad_buf[rad_len] = recv_buffer[ci + rad_len];
+        rad_len++;
+    }
+    if (rad_len > 0) {
+        rad_buf[rad_len] = '\0';
+        radius = atoi(rad_buf);
+        if (radius <= 0) radius = 2000;
+        if (radius > 30000) radius = 30000;
+    }
+
+    if (player->dimension != DIMENSION_NETHER) {
+        sc_systemChat(client_fd, "§cCan only find nether structures while in the Nether.", 55);
+        goto cleanup;
+    }
+
+    int sx, sy, sz;
+    const char *sname;
+    char search_msg[128];
+    int smsg_len = snprintf(search_msg, sizeof(search_msg), "§7Searching for nether structures within %d blocks...", radius);
+    sc_systemChat(client_fd, search_msg, (uint16_t)smsg_len);
+
+    if (findNearestNetherStructure(player->x, player->z, radius, &sx, &sy, &sz, &sname)) {
+        player->x = (short)sx;
+        player->y = (int16_t)sy;
+        player->z = (short)sz;
+        player->grounded_y = (uint8_t)sy;
+        sc_synchronizePlayerPosition(client_fd, (double)sx + 0.5, (double)sy, (double)sz + 0.5,
+            (float)player->yaw * 180.0f / 127.0f, (float)player->pitch * 90.0f / 127.0f);
+        for (int i = 0; i < MAX_PLAYERS; i++) {
+            if (player_data[i].client_fd == -1) continue;
+            if (player_data[i].client_fd == client_fd) continue;
+            if (player_data[i].flags & 0x20) continue;
+            sc_teleportEntity(player_data[i].client_fd, client_fd,
+                (double)sx + 0.5, (double)sy, (double)sz + 0.5,
+                (float)player->yaw * 180.0f / 127.0f, (float)player->pitch * 90.0f / 127.0f);
+        }
+        char response[192];
+        int resp_len = snprintf(response, sizeof(response), "§7Found §f%s§7 at §f%d, %d, %d§7. Teleported!", sname, sx, sy, sz);
+        sc_systemChat(client_fd, response, (uint16_t)resp_len);
+    } else {
+        char response[192];
+        int resp_len = snprintf(response, sizeof(response), "§7No nether structures found within %d blocks.", radius);
+        sc_systemChat(client_fd, response, (uint16_t)resp_len);
     }
     goto cleanup;
   }
