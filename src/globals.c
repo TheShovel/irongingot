@@ -10,6 +10,7 @@
 
 #include "globals.h"
 #include "config.h"
+#include "terminal_ui.h"
 
 #ifdef ESP_PLATFORM
   #include "esp_task_wdt.h"
@@ -96,9 +97,9 @@ void init_global_thread_pool(void) {
     
     if (thread_pool_init(&global_thread_pool, num_threads) == 0) {
       thread_pool_initialized = 1;
-      printf("Initialized thread pool with %d worker threads\n", num_threads);
+      terminal_ui_log("Initialized thread pool with %d worker threads", num_threads);
     } else {
-      fprintf(stderr, "Warning: Failed to initialize thread pool, running single-threaded\n");
+      terminal_ui_log("Warning: Failed to initialize thread pool, running single-threaded");
     }
   }
 }

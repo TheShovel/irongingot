@@ -5,6 +5,7 @@
 
 #include "config.h"
 #include "globals.h"
+#include "terminal_ui.h"
 
 ServerConfig config;
 
@@ -111,7 +112,7 @@ void calculate_derived_config(void) {
 int load_config(const char *filename) {
   FILE *f = fopen(filename, "r");
   if (!f) {
-    printf("Config file '%s' not found, using defaults\n", filename);
+    terminal_ui_log("Config file '%s' not found, using defaults", filename);
     return -1;
   }
 
@@ -128,7 +129,7 @@ int load_config(const char *filename) {
     // Find '=' separator
     char *eq = strchr(trimmed, '=');
     if (!eq) {
-      fprintf(stderr, "Warning: Invalid config syntax at line %d: %s\n", line_num, trimmed);
+      terminal_ui_log("Warning: Invalid config syntax at line %d: %s", line_num, trimmed);
       continue;
     }
 
@@ -241,13 +242,13 @@ int load_config(const char *filename) {
       strncpy(config.brand, value, sizeof(config.brand) - 1);
       config.brand[sizeof(config.brand) - 1] = '\0';
     } else {
-      fprintf(stderr, "Warning: Unknown config key at line %d: %s\n", line_num, key);
+      terminal_ui_log("Warning: Unknown config key at line %d: %s", line_num, key);
     }
   }
 
   fclose(f);
   calculate_derived_config();
-  printf("Configuration loaded from '%s'\n", filename);
+  terminal_ui_log("Configuration loaded from '%s'", filename);
   return 0;
 }
 
@@ -345,6 +346,6 @@ int save_config(const char *filename) {
   fprintf(f, "brand = %s\n", config.brand);
 
   fclose(f);
-  printf("Configuration saved to '%s'\n", filename);
+  terminal_ui_log("Configuration saved to '%s'", filename);
   return 0;
 }

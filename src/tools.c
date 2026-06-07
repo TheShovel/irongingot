@@ -26,6 +26,7 @@
 #include "procedures.h"
 #include "tools.h"
 #include "thread_utils.h"
+#include "terminal_ui.h"
 #include <zlib.h>
 #include <stdlib.h>
 
@@ -43,6 +44,7 @@
 // Keep track of the total amount of bytes received with recv_all
 // Helps notice misread packets and clean up after errors
 uint64_t total_bytes_received = 0;
+uint64_t total_bytes_sent = 0;
 
 // Outbound packet queue node
 struct OutPacket {
@@ -163,8 +165,15 @@ static void maybe_flush_chunk_debug_locked(int idx, int64_t now_us) {
 
   if (had_activity) {
     int client_fd = client_states[idx].client_fd;
-    printf(
-      "[chunk-debug] slot=%d fd=%d req=%u bp=%u miss=%u enq_ok=%u enq_fail=%u q_reject=%u enq_kb=%.1f sent_ok=%u sent_fail=%u sent_kb=%.1f max_q_kb=%.1f",
+    char extra[96] = "";
+    if (stats->has_last_request) {
+      snprintf(extra + strlen(extra), sizeof(extra) - strlen(extra), " last_req=(%d,%d)", stats->last_request_x, stats->last_request_z);
+    }
+    if (stats->has_last_enqueue) {
+      snprintf(extra + strlen(extra), sizeof(extra) - strlen(extra), " last_enq=(%d,%d)", stats->last_enqueue_x, stats->last_enqueue_z);
+    }
+    terminal_ui_log(
+      "[chunk-debug] slot=%d fd=%d req=%u bp=%u miss=%u enq_ok=%u enq_fail=%u q_reject=%u enq_kb=%.1f sent_ok=%u sent_fail=%u sent_kb=%.1f max_q_kb=%.1f%s",
       idx,
       client_fd,
       stats->stream_requests,
@@ -177,15 +186,9 @@ static void maybe_flush_chunk_debug_locked(int idx, int64_t now_us) {
       stats->sent_ok,
       stats->sent_fail,
       stats->sent_bytes / 1024.0,
-      stats->max_chunk_queue_bytes / 1024.0
+      stats->max_chunk_queue_bytes / 1024.0,
+      extra
     );
-    if (stats->has_last_request) {
-      printf(" last_req=(%d,%d)", stats->last_request_x, stats->last_request_z);
-    }
-    if (stats->has_last_enqueue) {
-      printf(" last_enq=(%d,%d)", stats->last_enqueue_x, stats->last_enqueue_z);
-    }
-    printf("\n");
   }
 
   reset_chunk_debug_window(stats, now_us);
@@ -393,8 +396,8 @@ static void* packet_sender_worker(void *arg) {
       chunk_debug_record_sent_chunk_packet(client_fd, pkt->len, send_ok);
     }
     #ifdef DEV_LOG_ALL_PACKETS
-    printf(
-      "[pkt-send] fd=%d id=0x%X wire=%u prio=%s ok=%d\n",
+    terminal_ui_log(
+      "[pkt-send] fd=%d id=0x%X wire=%u prio=%s ok=%d",
       client_fd,
       pkt->packet_id,
       pkt->len,
@@ -478,7 +481,7 @@ ssize_t send_all (int client_fd, const void *buf, ssize_t len) {
   if (packet_mode) {
     if (ensure_packet_buffer() != 0) return -1;
     if (packet_buffer_offset + len > MAX_PACKET_LEN) {
-      printf("ERROR: Packet buffer overflow (%d + %zd > %d)\n", packet_buffer_offset, (size_t)len, MAX_PACKET_LEN);
+      terminal_ui_log("ERROR: Packet buffer overflow (%d + %zd > %d)", packet_buffer_offset, (size_t)len, MAX_PACKET_LEN);
       return -1;
     }
     memcpy(packet_buffer + packet_buffer_offset, buf, len);
@@ -503,6 +506,7 @@ ssize_t send_all (int client_fd, const void *buf, ssize_t len) {
     #endif
     if (n > 0) { // some data was sent, log it
       sent += n;
+      total_bytes_sent += (uint64_t)n;
       last_update_time = get_program_time();
       continue;
     }
@@ -546,6 +550,7 @@ static ssize_t send_all_no_disconnect (int client_fd, const void *buf, ssize_t l
     #endif
     if (n > 0) {
       sent += n;
+      total_bytes_sent += (uint64_t)n;
       last_update_time = get_program_time();
       continue;
     }
@@ -681,9 +686,10 @@ int endPacket (int client_fd) {
     free(compressed_buf);
     packet_buffer_offset = 0;
     int enq_res = enqueue_packet_bytes(client_fd, wire_buf, wire_len, is_chunk_packet, packet_id);
+    terminal_ui_record_packet_out(wire_len, is_chunk_packet, enq_res == 0);
     #ifdef DEV_LOG_ALL_PACKETS
-    printf(
-      "[pkt-out] fd=%d id=0x%X payload=%d wire=%u prio=%s enq=%s\n",
+    terminal_ui_log(
+      "[pkt-out] fd=%d id=0x%X payload=%d wire=%u prio=%s enq=%s",
       client_fd,
       packet_id,
       uncompressed_len,
@@ -733,9 +739,10 @@ send_uncompressed:
 
   packet_buffer_offset = 0;
   int enq_res = enqueue_packet_bytes(client_fd, wire_buf, wire_len, is_chunk_packet, packet_id);
+  terminal_ui_record_packet_out(wire_len, is_chunk_packet, enq_res == 0);
   #ifdef DEV_LOG_ALL_PACKETS
-  printf(
-    "[pkt-out] fd=%d id=0x%X payload=%d wire=%u prio=%s enq=%s\n",
+  terminal_ui_log(
+    "[pkt-out] fd=%d id=0x%X payload=%d wire=%u prio=%s enq=%s",
     client_fd,
     packet_id,
     uncompressed_len,
@@ -757,7 +764,8 @@ void init_packet_sender_workers (void) {
   for (intptr_t i = 0; i < MAX_PLAYERS; i++) {
     int ret = create_server_thread(&sender_threads[i], packet_sender_worker, (void *)i);
     if (ret != 0) {
-      fprintf(stderr, "ERROR: Failed to start packet sender thread %ld: %s\n", (long)i, strerror(ret));
+      char message[192];
+      snprintf(message, sizeof(message), "ERROR: Failed to start packet sender thread %ld: %s", (long)i, strerror(ret));
       sender_workers_running = 0;
       for (intptr_t j = 0; j < i; j++) {
         pthread_mutex_lock(&client_states[j].send_mutex);
@@ -765,6 +773,7 @@ void init_packet_sender_workers (void) {
         pthread_mutex_unlock(&client_states[j].send_mutex);
         pthread_join(sender_threads[j], NULL);
       }
+      terminal_ui_shutdown(message);
       exit(1);
     }
   }
@@ -932,8 +941,8 @@ void chunk_debug_record_enqueue_result (int client_fd, int chunk_x, int chunk_z,
     stats->enqueue_fail++;
   }
   #ifdef DEV_LOG_CHUNK_STREAM_VERBOSE
-  printf(
-    "[chunk-debug-verbose] fd=%d chunk=(%d,%d) enqueue=%s\n",
+  terminal_ui_log(
+    "[chunk-debug-verbose] fd=%d chunk=(%d,%d) enqueue=%s",
     client_fd,
     chunk_x,
     chunk_z,
@@ -1102,7 +1111,7 @@ double readDouble (int client_fd) {
 ssize_t readLengthPrefixedData (int client_fd) {
   uint32_t length = readVarInt(client_fd);
   if (length >= MAX_RECV_BUF_LEN) {
-    printf("ERROR: Received length (%lu) exceeds maximum (%u)\n", length, MAX_RECV_BUF_LEN);
+    terminal_ui_log("ERROR: Received length (%lu) exceeds maximum (%u)", length, MAX_RECV_BUF_LEN);
     disconnectClient(&client_fd, -1);
     recv_count = 0;
     return 0;
@@ -1199,7 +1208,7 @@ static int base64_encode(const uint8_t *data, int len, char *out) {
 int load_favicon(const char *filepath) {
   FILE *f = fopen(filepath, "rb");
   if (!f) {
-    printf("Favicon: Could not open %s, server will have no icon.\n", filepath);
+    terminal_ui_log("Favicon: Could not open %s, server will have no icon", filepath);
     favicon_len = 0;
     return -1;
   }
@@ -1210,7 +1219,7 @@ int load_favicon(const char *filepath) {
   fseek(f, 0, SEEK_SET);
 
   if (file_size <= 0 || file_size > 65536) {
-    printf("Favicon: Invalid file size (%ld bytes), must be 1-65536 bytes.\n", file_size);
+    terminal_ui_log("Favicon: Invalid file size (%ld bytes), must be 1-65536 bytes", file_size);
     fclose(f);
     favicon_len = 0;
     return -1;
@@ -1219,7 +1228,7 @@ int load_favicon(const char *filepath) {
   // Read file
   uint8_t *png_data = (uint8_t *)malloc(file_size);
   if (!png_data) {
-    printf("Favicon: Memory allocation failed.\n");
+    terminal_ui_log("Favicon: Memory allocation failed");
     fclose(f);
     favicon_len = 0;
     return -1;
@@ -1229,7 +1238,7 @@ int load_favicon(const char *filepath) {
   fclose(f);
 
   if ((long)bytes_read != file_size) {
-    printf("Favicon: Failed to read entire file.\n");
+    terminal_ui_log("Favicon: Failed to read entire file");
     free(png_data);
     favicon_len = 0;
     return -1;
@@ -1243,7 +1252,7 @@ int load_favicon(const char *filepath) {
   int b64_len = ((file_size + 2) / 3) * 4;
 
   if (prefix_len + b64_len >= FAVICON_MAX_LEN) {
-    printf("Favicon: Encoded data too large (%d bytes, max %d).\n", prefix_len + b64_len, FAVICON_MAX_LEN);
+    terminal_ui_log("Favicon: Encoded data too large (%d bytes, max %d)", prefix_len + b64_len, FAVICON_MAX_LEN);
     free(png_data);
     favicon_len = 0;
     return -1;
@@ -1258,7 +1267,7 @@ int load_favicon(const char *filepath) {
   free(png_data);
 
   favicon_len = prefix_len + b64_len;
-  printf("Favicon: Loaded %s (%ld bytes, %u bytes encoded).\n", filepath, file_size, favicon_len);
+  terminal_ui_log("Favicon: Loaded %s (%ld bytes, %u bytes encoded)", filepath, file_size, favicon_len);
 
   return 0;
 }

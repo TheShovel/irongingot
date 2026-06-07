@@ -12,6 +12,7 @@
 
 #include "config.h"
 #include "mojang.h"
+#include "terminal_ui.h"
 
 #ifdef MOJANG_SKIN_LOOKUP_AVAILABLE
   #include <curl/curl.h>
@@ -315,18 +316,18 @@ void init_mojang_api(void) {
     mojang_backend = MOJANG_BACKEND_LIBCURL;
     return;
   }
-  printf("Mojang skin lookup: libcurl init failed, trying external curl command.\n");
+  terminal_ui_log("Mojang skin lookup: libcurl init failed, trying external curl command");
 #endif
 
 #ifndef _WIN32
   if (detectCurlCommand()) {
     mojang_backend = MOJANG_BACKEND_CURL_COMMAND;
-    printf("Mojang skin lookup: using external curl command backend (%s).\n", curl_command_path);
+    terminal_ui_log("Mojang skin lookup: using external curl command backend (%s)", curl_command_path);
     return;
   }
 #endif
 
-  printf("Mojang skin lookup: no HTTP backend available, feature disabled.\n");
+  terminal_ui_log("Mojang skin lookup: no HTTP backend available, feature disabled");
 }
 
 void shutdown_mojang_api(void) {

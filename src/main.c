@@ -45,6 +45,7 @@
 #include "chunk_generator.h"
 #include "config.h"
 #include "mojang.h"
+#include "terminal_ui.h"
 #include <zlib.h>
 
 #ifndef _WIN32
@@ -52,6 +53,21 @@
 #endif
 
 static volatile sig_atomic_t server_running = 1;
+
+static void printTransRightsBanner(void) {
+  const char *blue = "\033[48;2;91;206;250m";
+  const char *pink = "\033[48;2;245;169;184m";
+  const char *white = "\033[48;2;255;255;255m\033[30m";
+  const char *reset = "\033[0m";
+
+  printf("\n");
+  printf("%s%40s%s\n", blue, "", reset);
+  printf("%s%40s%s\n", pink, "", reset);
+  printf("%s%14s#transrights%14s%s\n", white, "", "", reset);
+  printf("%s%40s%s\n", pink, "", reset);
+  printf("%s%40s%s\n", blue, "", reset);
+  printf("\n");
+}
 
 static void server_idle_backoff(void) {
   #ifdef ESP_PLATFORM
@@ -61,6 +77,18 @@ static void server_idle_backoff(void) {
   #else
     usleep(1000);  // 1ms: prevents nonblocking idle spin without noticeable latency
   #endif
+}
+
+static void fatal_message_exit(const char *message) {
+  terminal_ui_shutdown(message);
+  exit(EXIT_FAILURE);
+}
+
+static void fatal_errno_exit(const char *message) {
+  char final_message[256];
+  snprintf(final_message, sizeof(final_message), "%s: %s", message, strerror(errno));
+  terminal_ui_shutdown(final_message);
+  exit(EXIT_FAILURE);
 }
 
 #ifndef _WIN32
@@ -259,18 +287,19 @@ static void init_chunk_streamer(void) {
   chunk_streamer_running = 1;
   int ret = create_server_thread_with_stack(&chunk_streamer_thread, IRONGINGOT_CHUNK_THREAD_STACK_SIZE, chunk_streamer_worker, NULL);
   if (ret != 0) {
-    fprintf(stderr, "ERROR: Failed to start chunk streamer thread: %s\n", strerror(ret));
+    char message[160];
+    snprintf(message, sizeof(message), "ERROR: Failed to start chunk streamer thread: %s", strerror(ret));
     chunk_streamer_running = 0;
-    exit(1);
+    fatal_message_exit(message);
   }
-  printf("Chunk streamer thread started\n");
+  terminal_ui_log("Chunk streamer thread started");
 }
 
 static void shutdown_chunk_streamer(void) {
   if (!chunk_streamer_running) return;
   chunk_streamer_running = 0;
   pthread_join(chunk_streamer_thread, NULL);
-  printf("Chunk streamer thread stopped\n");
+  terminal_ui_log("Chunk streamer thread stopped");
 }
 
 #define MAX_PACKETS_PER_CLIENT_TURN 8
@@ -288,8 +317,8 @@ static inline uint8_t isMovementPacketInPlayState(int state, int packet_id) {
 
 #ifdef DEV_LOG_ALL_PACKETS
 static void logIncomingPacket(int client_fd, int state, int packet_id, int payload_len, int frame_len, int compressed) {
-  printf(
-    "[pkt-in] fd=%d state=%d id=0x%X payload=%d frame=%d compressed=%d\n",
+  terminal_ui_log(
+    "[pkt-in] fd=%d state=%d id=0x%X payload=%d frame=%d compressed=%d",
     client_fd,
     state,
     packet_id,
@@ -377,10 +406,10 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
 
     case 0x03:
       if (state == STATE_LOGIN) {
-        printf("Client Acknowledged Login\n\n");
+        terminal_ui_log("Client acknowledged login (fd=%d)", client_fd);
         setClientState(client_fd, STATE_CONFIGURATION);
       } else if (state == STATE_CONFIGURATION) {
-        printf("Client Acknowledged Configuration\n\n");
+        terminal_ui_log("Client acknowledged configuration (fd=%d)", client_fd);
 
         // Enter client into "play" state
         setClientState(client_fd, STATE_PLAY);
@@ -434,8 +463,7 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
 
     case 0x07:
       if (state == STATE_CONFIGURATION) {
-        printf("Received Client's Known Packs\n");
-        printf("  Finishing configuration\n\n");
+        terminal_ui_log("Received client's known packs (fd=%d); finishing configuration", client_fd);
         sc_finishConfiguration(client_fd);
       }
       break;
@@ -673,9 +701,7 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
 
     default:
       #ifdef DEV_LOG_UNKNOWN_PACKETS
-        printf("Unknown packet: 0x");
-        if (packet_id < 16) printf("0");
-        printf("%X, length: %d, state: %d\n\n", packet_id, length, state);
+        terminal_ui_log("Unknown packet: 0x%02X, length: %d, state: %d", packet_id, length, state);
       #endif
       discard_all(client_fd, length, false);
       break;
@@ -692,27 +718,31 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
 
   #ifdef DEV_LOG_LENGTH_DISCREPANCY
   if (processed_length != 0) {
-    printf("WARNING: Packet 0x");
-    if (packet_id < 16) printf("0");
-    printf("%X parsed incorrectly!\n  Expected: %d, parsed: %d\n\n", packet_id, length, processed_length);
+    terminal_ui_log(
+      "WARNING: Packet 0x%02X parsed incorrectly! Expected: %d, parsed: %d",
+      packet_id,
+      length,
+      processed_length
+    );
   }
   #endif
   #ifdef DEV_LOG_UNKNOWN_PACKETS
   if (processed_length == 0) {
-    printf("Unknown packet: 0x");
-    if (packet_id < 16) printf("0");
-    printf("%X, length: %d, state: %d\n\n", packet_id, length, state);
+    terminal_ui_log("Unknown packet: 0x%02X, length: %d, state: %d", packet_id, length, state);
   }
   #endif
 
 }
 
 int main () {
+  printTransRightsBanner();
+  terminal_ui_init();
+  terminal_ui_log("Starting irongingot server");
+
   #ifdef _WIN32 //initialize windows socket
     WSADATA wsa;
       if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-        fprintf(stderr, "WSAStartup failed\n");
-        exit(EXIT_FAILURE);
+        fatal_message_exit("WSAStartup failed");
       }
   #endif
 
@@ -736,34 +766,59 @@ int main () {
     brand_len = strlen(brand);
   #endif
   
-  // Print config summary
-  printf("Server Configuration:\n");
-  printf("  Port: %d\n", config.port);
-  printf("  Max Players: %d\n", config.max_players);
-  printf("  View Distance: %d\n", config.view_distance);
-  printf("  Gamemode: %d\n", config.gamemode);
-  printf("  Chunk Cache Size: %d\n", config.chunk_cache_size);
-  printf("  Mojang Skin Lookup: %s\n", config.fetch_skins_from_mojang ? "on" : "off");
-  printf("  MOTD: %s\n", config.motd);
-  printf("\n");
+  // Publish config summary to the terminal UI
+  terminal_ui_set_server_info(
+    config.port,
+    config.max_players,
+    config.view_distance,
+    config.gamemode,
+    config.chunk_cache_size,
+    "initializing",
+    config.motd
+  );
+  terminal_ui_log(
+    "Configuration: port=%d max_players=%d view_distance=%d gamemode=%d chunk_cache=%d",
+    config.port,
+    config.max_players,
+    config.view_distance,
+    config.gamemode,
+    config.chunk_cache_size
+  );
+  terminal_ui_log("Mojang skin lookup: %s", config.fetch_skins_from_mojang ? "on" : "off");
 
   // Hash the seeds to ensure they're random enough
   world_seed = splitmix64(config.world_seed);
-  printf("World seed (hashed): ");
-  for (int i = 3; i >= 0; i --) printf("%X", (unsigned int)((world_seed >> (8 * i)) & 255));
-
   rng_seed = splitmix64(config.rng_seed);
-  printf("\nRNG seed (hashed): ");
-  for (int i = 3; i >= 0; i --) printf("%X", (unsigned int)((rng_seed >> (8 * i)) & 255));
-  printf("\n\n");
+  char world_seed_hex[9];
+  char rng_seed_hex[9];
+  snprintf(world_seed_hex, sizeof(world_seed_hex), "%02X%02X%02X%02X",
+    (unsigned int)((world_seed >> 24) & 255),
+    (unsigned int)((world_seed >> 16) & 255),
+    (unsigned int)((world_seed >> 8) & 255),
+    (unsigned int)(world_seed & 255));
+  snprintf(rng_seed_hex, sizeof(rng_seed_hex), "%02X%02X%02X%02X",
+    (unsigned int)((rng_seed >> 24) & 255),
+    (unsigned int)((rng_seed >> 16) & 255),
+    (unsigned int)((rng_seed >> 8) & 255),
+    (unsigned int)(rng_seed & 255));
+  terminal_ui_log("World seed (hashed): %s", world_seed_hex);
+  terminal_ui_log("RNG seed (hashed): %s", rng_seed_hex);
 
   // Initialize world generation
-  printf("Initializing world generation...\n");
-  printf("\n");
+  terminal_ui_log("Initializing world generation...");
 
   // Initialize Mojang profile/session lookups before worker threads start.
   init_mojang_api();
-  printf("Mojang Skin Backend: %s\n\n", mojang_skin_backend_name());
+  terminal_ui_set_server_info(
+    config.port,
+    config.max_players,
+    config.view_distance,
+    config.gamemode,
+    config.chunk_cache_size,
+    mojang_skin_backend_name(),
+    config.motd
+  );
+  terminal_ui_log("Mojang skin backend: %s", mojang_skin_backend_name());
 
   // Initialize global thread pool for parallel operations
   init_global_thread_pool();
@@ -773,19 +828,18 @@ int main () {
     if (config.infinite_block_changes) {
       // Start small and grow on demand.
       block_changes_capacity = 10;
-      printf("Block changes: dynamic (initial capacity: %d)\n", block_changes_capacity);
+      terminal_ui_log("Block changes: dynamic (initial capacity: %d)", block_changes_capacity);
     } else {
       // Use the dynamic storage backend in fixed-capacity mode.
       block_changes_capacity = config.max_block_changes > 0 ? config.max_block_changes : MAX_BLOCK_CHANGES;
-      printf("Block changes: fixed (%d)\n", block_changes_capacity);
+      terminal_ui_log("Block changes: fixed (%d)", block_changes_capacity);
     }
     block_changes = (BlockChange *)malloc(block_changes_capacity * sizeof(BlockChange));
     if (!block_changes) {
-      perror("Failed to allocate memory for block changes");
-      exit(EXIT_FAILURE);
+      fatal_errno_exit("Failed to allocate memory for block changes");
     }
   #else
-    printf("Block changes: fixed (%d)\n", MAX_BLOCK_CHANGES);
+    terminal_ui_log("Block changes: fixed (%d)", MAX_BLOCK_CHANGES);
   #endif
   // Initialize all block change entries as unallocated (0xFF = empty)
   for (int i = 0; i < (
@@ -801,7 +855,7 @@ int main () {
   // Start the disk/flash serializer (if applicable)
   if (initSerializer()) exit(EXIT_FAILURE);
   rebuildBlockChangeIndexes();
-  printf("Loaded block changes: %d\n", block_changes_count);
+  terminal_ui_log("Loaded block changes: %d", block_changes_count);
 
   // Initialize all file descriptor references to -1 (unallocated)
   int clients[MAX_PLAYERS], client_index = 0;
@@ -834,8 +888,7 @@ int main () {
 
   server_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (server_fd == -1) {
-    perror("socket failed");
-    exit(EXIT_FAILURE);
+    fatal_errno_exit("socket failed");
   }
 #ifdef _WIN32
   if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR,
@@ -843,8 +896,7 @@ int main () {
 #else
   if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
 #endif    
-    perror("socket options failed");
-    exit(EXIT_FAILURE);
+    fatal_errno_exit("socket options failed");
   }
 
   // Bind socket to IP/port
@@ -853,18 +905,20 @@ int main () {
   server_addr.sin_port = htons(config.port);
 
   if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-    perror("bind failed");
+    int bind_errno = errno;
     close(server_fd);
-    exit(EXIT_FAILURE);
+    errno = bind_errno;
+    fatal_errno_exit("bind failed");
   }
 
   // Listen for incoming connections
   if (listen(server_fd, 5) < 0) {
-    perror("listen failed");
+    int listen_errno = errno;
     close(server_fd);
-    exit(EXIT_FAILURE);
+    errno = listen_errno;
+    fatal_errno_exit("listen failed");
   }
-  printf("Server listening on port %d...\n", PORT);
+  terminal_ui_log("Server listening on port %d", config.port);
 
   // Start chunk generator thread
   init_chunk_generator();
@@ -876,8 +930,7 @@ int main () {
   #ifdef _WIN32
     u_long mode = 1;  // 1 = non-blocking
     if (ioctlsocket(server_fd, FIONBIO, &mode) != 0) {
-      fprintf(stderr, "Failed to set non-blocking mode\n");
-      exit(EXIT_FAILURE);
+      fatal_message_exit("Failed to set non-blocking mode");
     }
   #else
   int flags = fcntl(server_fd, F_GETFL, 0);
@@ -905,6 +958,7 @@ int main () {
    * connection monopolize the loop.
    */
   while (server_running) {
+    terminal_ui_maybe_render();
     // Check if it's time to yield to the idle task
     task_yield();
     uint8_t did_work = false;
@@ -915,7 +969,8 @@ int main () {
       clients[i] = accept(server_fd, (struct sockaddr *)&client_addr, &addr_len);
       // If the accept was successful, make the client non-blocking too
       if (clients[i] != -1) {
-        printf("New client, fd: %d\n", clients[i]);
+        terminal_ui_record_client_connect();
+        terminal_ui_log("New client connected (fd=%d)", clients[i]);
       #ifdef _WIN32
         u_long mode = 1;
         ioctlsocket(clients[i], FIONBIO, &mode);
@@ -946,6 +1001,7 @@ int main () {
     int64_t time_since_last_tick = get_program_time() - last_tick_time;
     if (time_since_last_tick > TIME_BETWEEN_TICKS) {
       handleServerTick(time_since_last_tick);
+      terminal_ui_record_tick(time_since_last_tick);
       // Periodically drain old packets to free memory
       drain_client_queues();
       last_tick_time = get_program_time();
@@ -1052,6 +1108,7 @@ int main () {
         disconnectClient(&clients[client_index], 2);
         break;
       }
+      terminal_ui_record_packet_in((size_t)packet_length);
 
       int packet_id;
       int threshold = getCompressionThreshold(client_fd);
@@ -1081,7 +1138,7 @@ int main () {
           // Compressed packet body.
           int compressed_len = packet_length - sizeVarInt(data_length);
           if (compressed_len > MAX_PACKET_LEN || data_length > MAX_PACKET_LEN) {
-            printf("ERROR: Compressed packet too large (%d or %d > %d)\n", compressed_len, data_length, MAX_PACKET_LEN);
+            terminal_ui_log("ERROR: Compressed packet too large (%d or %d > %d)", compressed_len, data_length, MAX_PACKET_LEN);
             disconnectClient(&clients[client_index], 8);
             break;
           }
@@ -1181,7 +1238,8 @@ int main () {
 
   // Save all data before exiting
   #ifdef SYNC_WORLD_TO_DISK
-  printf("Saving world data...\n");
+  terminal_ui_log("Saving world data...");
+  terminal_ui_render();
   writePlayerDataToDisk();
   #endif
 
@@ -1203,7 +1261,7 @@ int main () {
     WSACleanup();
   #endif
 
-  printf("Server closed.\n");
+  terminal_ui_shutdown("Server closed.");
 
 }
 

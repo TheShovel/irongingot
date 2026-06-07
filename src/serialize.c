@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include "globals.h"
 
 #ifdef SYNC_WORLD_TO_DISK
@@ -17,8 +18,13 @@
 #include "procedures.h"
 #include "serialize.h"
 #include "special_block.h"
+#include "terminal_ui.h"
 
 int64_t last_disk_sync_time = 0;
+
+static void logSerializerErrno(const char *message) {
+  terminal_ui_log("%s: %s", message, strerror(errno));
+}
 
 typedef struct {
   int32_t key;
@@ -100,7 +106,7 @@ static int recoverLegacySpecialBlockTable(const LegacySpecialBlockEntry *entries
   }
 
   if (ambiguous > 0) {
-    fprintf(stderr, "[LOAD] Skipped %d ambiguous legacy special block entries\n", ambiguous);
+    terminal_ui_log("[LOAD] Skipped %d ambiguous legacy special block entries", ambiguous);
   }
 
   return recovered;
@@ -121,8 +127,8 @@ int initSerializer () {
 
     esp_err_t ret = esp_vfs_littlefs_register(&conf);
     if (ret != ESP_OK) {
-      printf("LittleFS error %d\n", ret);
-      perror("Failed to mount LittleFS. Aborting.");
+      terminal_ui_log("LittleFS error %d", ret);
+      logSerializerErrno("Failed to mount LittleFS. Aborting.");
       return 1;
     }
   #endif
@@ -130,7 +136,7 @@ int initSerializer () {
   // Attempt to open existing world file
   FILE *file = fopen(FILE_PATH, "rb");
   if (file) {
-    fprintf(stderr, "[LOAD] Opened world.bin for reading\n");
+    terminal_ui_log("[LOAD] Opened world.bin for reading");
     size_t read;
     int has_capacity_header = 0;
     long block_changes_bytes = 0;
@@ -139,7 +145,7 @@ int initSerializer () {
     fseek(file, 0, SEEK_END);
     long file_size = ftell(file);
     fseek(file, 0, SEEK_SET);
-    fprintf(stderr, "[LOAD] File size: %ld bytes\n", file_size);
+    terminal_ui_log("[LOAD] File size: %ld bytes", file_size);
 
     // Read block changes from the start of the file directly into memory
     #ifdef INFINITE_BLOCK_CHANGES
@@ -156,25 +162,25 @@ int initSerializer () {
         block_changes_capacity = stored_capacity;
         block_changes = (BlockChange *)malloc(block_changes_capacity * sizeof(BlockChange));
         if (!block_changes) {
-          printf("Failed to allocate memory for block changes. Aborting.\n");
+          terminal_ui_log("Failed to allocate memory for block changes. Aborting.");
           fclose(file);
           return 1;
         }
         // Read block changes data
         read = fread(block_changes, sizeof(BlockChange), block_changes_capacity, file);
         if (read != (size_t)block_changes_capacity) {
-          printf("Read %u block changes from \"world.bin\", expected %d. Aborting.\n", read, block_changes_capacity);
+          terminal_ui_log("Read %u block changes from \"world.bin\", expected %d. Aborting.", read, block_changes_capacity);
           fclose(file);
           return 1;
         }
       } else {
         // Old fixed-format file, rewind and calculate size from file
-        printf("Detected old world file format, converting...\n");
+        terminal_ui_log("Detected old world file format, converting...");
         rewind(file);
         // Calculate actual block changes size from file size
         block_changes_bytes = file_size - sizeof(player_data);
         if (block_changes_bytes <= 0) {
-          printf("Invalid world file size. Aborting.\n");
+          terminal_ui_log("Invalid world file size. Aborting.");
           fclose(file);
           return 1;
         }
@@ -182,14 +188,14 @@ int initSerializer () {
         block_changes_capacity = (block_changes_bytes / sizeof(BlockChange)) + 100;
         block_changes = (BlockChange *)malloc(block_changes_capacity * sizeof(BlockChange));
         if (!block_changes) {
-          printf("Failed to allocate memory for block changes. Aborting.\n");
+          terminal_ui_log("Failed to allocate memory for block changes. Aborting.");
           fclose(file);
           return 1;
         }
         // Read the block changes data
         read = fread(block_changes, 1, block_changes_bytes, file);
         if (read != (size_t)block_changes_bytes) {
-          printf("Read %u bytes from \"world.bin\", expected %ld. Aborting.\n", read, block_changes_bytes);
+          terminal_ui_log("Read %u bytes from \"world.bin\", expected %ld. Aborting.", read, block_changes_bytes);
           fclose(file);
           return 1;
         }
@@ -199,20 +205,20 @@ int initSerializer () {
         ? sizeof(int) + block_changes_capacity * sizeof(BlockChange)
         : block_changes_bytes;
       if (fseek(file, seek_offset, SEEK_SET) != 0) {
-        perror("Failed to seek to player data in \"world.bin\". Aborting.");
+        logSerializerErrno("Failed to seek to player data in \"world.bin\". Aborting.");
         fclose(file);
         return 1;
       }
     #else
       size_t read = fread(block_changes, 1, sizeof(block_changes), file);
       if (read != sizeof(block_changes)) {
-        printf("Read %u bytes from \"world.bin\", expected %u (block changes). Aborting.\n", read, sizeof(block_changes));
+        terminal_ui_log("Read %u bytes from \"world.bin\", expected %u (block changes). Aborting.", read, sizeof(block_changes));
         fclose(file);
         return 1;
       }
       // Seek past block changes to start reading player data
       if (fseek(file, sizeof(block_changes), SEEK_SET) != 0) {
-        perror("Failed to seek to player data in \"world.bin\". Aborting.");
+        logSerializerErrno("Failed to seek to player data in \"world.bin\". Aborting.");
         fclose(file);
         return 1;
       }
@@ -252,7 +258,7 @@ int initSerializer () {
     // Read player data directly into memory
     read = fread(player_data, 1, sizeof(player_data), file);
     if (read != sizeof(player_data)) {
-      printf("Read %u bytes from \"world.bin\", expected %zu (player data). Aborting.\n",
+      terminal_ui_log("Read %u bytes from \"world.bin\", expected %zu (player data). Aborting.",
         read, sizeof(player_data));
       fclose(file);
       return 1;
@@ -260,36 +266,36 @@ int initSerializer () {
 
     // Read special block state table (new format -- appended after player data)
     special_block_init();
-    fprintf(stderr, "[LOAD] About to read sb_count, file pos=%ld\n", ftell(file));
+    terminal_ui_log("[LOAD] About to read sb_count, file pos=%ld", ftell(file));
     int sb_count = 0;
     read = fread(&sb_count, sizeof(int), 1, file);
-    fprintf(stderr, "[LOAD] Read sb_count: read=%zd, value=%d\n", read, sb_count);
+    terminal_ui_log("[LOAD] Read sb_count: read=%zd, value=%d", read, sb_count);
     if (read == 1 && sb_count > 0 && sb_count <= MAX_SPECIAL_BLOCKS) {
       size_t expected = sizeof(SpecialBlockEntry) * MAX_SPECIAL_BLOCKS;
       void *raw_special_blocks = malloc(expected);
 
-      fprintf(stderr, "[LOAD] Reading %zd bytes of special block data\n", expected);
+      terminal_ui_log("[LOAD] Reading %zd bytes of special block data", expected);
       if (!raw_special_blocks) {
-        fprintf(stderr, "[LOAD] ERROR: failed to allocate temporary special block buffer\n");
+        terminal_ui_log("[LOAD] ERROR: failed to allocate temporary special block buffer");
       } else {
         read = fread(raw_special_blocks, 1, expected, file);
-        fprintf(stderr, "[LOAD] Read %zd of %zd bytes\n", read, expected);
+        terminal_ui_log("[LOAD] Read %zd of %zd bytes", read, expected);
         if (read == expected) {
           if (looksLikeCurrentSpecialBlockTable((SpecialBlockEntry *)raw_special_blocks, sb_count)) {
             memcpy(special_blocks, raw_special_blocks, expected);
             special_blocks_count = sb_count;
-            fprintf(stderr, "[LOAD] Successfully loaded %d special block entries\n", special_blocks_count);
+            terminal_ui_log("[LOAD] Successfully loaded %d special block entries", special_blocks_count);
           } else {
             int recovered = recoverLegacySpecialBlockTable((LegacySpecialBlockEntry *)raw_special_blocks);
-            fprintf(stderr, "[LOAD] Recovered %d entries from legacy special block table\n", recovered);
+            terminal_ui_log("[LOAD] Recovered %d entries from legacy special block table", recovered);
           }
         } else {
-          fprintf(stderr, "[LOAD] ERROR: short read of special block data\n");
+          terminal_ui_log("[LOAD] ERROR: short read of special block data");
         }
         free(raw_special_blocks);
       }
     } else {
-      fprintf(stderr, "[LOAD] No special block table found (read=%zd, sb_count=%d)\n", read, sb_count);
+      terminal_ui_log("[LOAD] No special block table found (read=%zd, sb_count=%d)", read, sb_count);
     }
 
     /* Migrate legacy state data from block_changes entries into the
@@ -355,15 +361,15 @@ int initSerializer () {
         i += 1;
       }
     }
-    printf("Loaded special block table: %d entries (migrated %d legacy)\n",
+    terminal_ui_log("Loaded special block table: %d entries (migrated %d legacy)",
            special_blocks_count, migrated);
-    fprintf(stderr, "[LOAD] Loaded special block table: %d entries, migrated %d legacy, file_size=%ld\n",
+    terminal_ui_log("[LOAD] Loaded special block table: %d entries, migrated %d legacy, file_size=%ld",
            special_blocks_count, migrated, file_size);
 
     fclose(file);
 
   } else { // World file doesn't exist or failed to open
-    printf("No \"world.bin\" file found, creating one...\n\n");
+    terminal_ui_log("No \"world.bin\" file found, creating one...");
 
     // Initialize special block table
     special_block_init();
@@ -371,8 +377,8 @@ int initSerializer () {
     // Try to create the file in binary write mode
     file = fopen(FILE_PATH, "wb");
     if (!file) {
-      perror(
-        "Failed to open \"world.bin\" for writing.\n"
+      logSerializerErrno(
+        "Failed to open \"world.bin\" for writing. "
         "Consider checking permissions or disabling SYNC_WORLD_TO_DISK in \"globals.h\"."
       );
       return 1;
@@ -383,15 +389,15 @@ int initSerializer () {
       // Write capacity header first
       size_t written = fwrite(&block_changes_capacity, sizeof(int), 1, file);
       if (written != 1) {
-        perror("Failed to write block changes header to \"world.bin\".");
+        logSerializerErrno("Failed to write block changes header to \"world.bin\".");
         fclose(file);
         return 1;
       }
       // Write block changes data
       written = fwrite(block_changes, sizeof(BlockChange), block_changes_capacity, file);
       if (written != (size_t)block_changes_capacity) {
-        perror(
-          "Failed to write initial block data to \"world.bin\".\n"
+        logSerializerErrno(
+          "Failed to write initial block data to \"world.bin\". "
           "Consider checking permissions or disabling SYNC_WORLD_TO_DISK in \"globals.h\"."
         );
         fclose(file);
@@ -400,8 +406,8 @@ int initSerializer () {
     #else
       size_t written = fwrite(block_changes, 1, sizeof(block_changes), file);
       if (written != sizeof(block_changes)) {
-        perror(
-          "Failed to write initial block data to \"world.bin\".\n"
+        logSerializerErrno(
+          "Failed to write initial block data to \"world.bin\". "
           "Consider checking permissions or disabling SYNC_WORLD_TO_DISK in \"globals.h\"."
         );
         fclose(file);
@@ -416,8 +422,8 @@ int initSerializer () {
         sizeof(block_changes),
       #endif
       SEEK_SET) != 0) {
-      perror(
-        "Failed to seek past block changes in \"world.bin\"."
+      logSerializerErrno(
+        "Failed to seek past block changes in \"world.bin\". "
         "Consider checking permissions or disabling SYNC_WORLD_TO_DISK in \"globals.h\"."
       );
       fclose(file);
@@ -426,8 +432,8 @@ int initSerializer () {
     // Write initial player data to disk (should be just nulls?)
     written = fwrite(player_data, 1, sizeof(player_data), file);
     if (written != sizeof(player_data)) {
-      perror(
-        "Failed to write initial player data to \"world.bin\".\n"
+      logSerializerErrno(
+        "Failed to write initial player data to \"world.bin\". "
         "Consider checking permissions or disabling SYNC_WORLD_TO_DISK in \"globals.h\"."
       );
       fclose(file);
@@ -438,7 +444,7 @@ int initSerializer () {
     written = fwrite(&sb_count, sizeof(int), 1, file);
     fclose(file);
     if (written != 1) {
-      perror("Failed to write special block header to \"world.bin\".");
+      logSerializerErrno("Failed to write special block header to \"world.bin\".");
       return 1;
     }
 
@@ -454,7 +460,7 @@ void writeBlockChangesToDisk (int from, int to) {
   // Try to open the file in rw (without overwriting)
   FILE *file = fopen(FILE_PATH, "r+b");
   if (!file) {
-    perror("Failed to open \"world.bin\". Block updates have been dropped.");
+    logSerializerErrno("Failed to open \"world.bin\". Block updates have been dropped.");
     return;
   }
 
@@ -468,13 +474,13 @@ void writeBlockChangesToDisk (int from, int to) {
       #endif
     if (fseek(file, offset, SEEK_SET) != 0) {
       fclose(file);
-      perror("Failed to seek in \"world.bin\". Block updates have been dropped.");
+      logSerializerErrno("Failed to seek in \"world.bin\". Block updates have been dropped.");
       return;
     }
     // Write block change entry to file
     if (fwrite(&block_changes[i], 1, sizeof(BlockChange), file) != sizeof(BlockChange)) {
       fclose(file);
-      perror("Failed to write to \"world.bin\". Block updates have been dropped.");
+      logSerializerErrno("Failed to write to \"world.bin\". Block updates have been dropped.");
       return;
     }
   }
@@ -487,12 +493,12 @@ void writeBlockChangesToDisk (int from, int to) {
 // current block_changes_capacity (which may have grown via realloc).
 void writePlayerDataToDisk () {
 
-  fprintf(stderr, "[SAVE] writePlayerDataToDisk called, sb_count=%d, bc_capacity=%d\n",
+  terminal_ui_log("[SAVE] writePlayerDataToDisk called, sb_count=%d, bc_capacity=%d",
     special_blocks_count, block_changes_capacity);
 
   FILE *file = fopen(FILE_PATH, "wb");  /* Rewrite entire file */
   if (!file) {
-    perror("Failed to open \"world.bin\" for writing. Player updates have been dropped.");
+    logSerializerErrno("Failed to open \"world.bin\" for writing. Player updates have been dropped.");
     return;
   }
 
@@ -500,19 +506,19 @@ void writePlayerDataToDisk () {
     /* Write capacity header */
     if (fwrite(&block_changes_capacity, sizeof(int), 1, file) != 1) {
       fclose(file);
-      perror("Failed to write block changes capacity header.");
+      logSerializerErrno("Failed to write block changes capacity header.");
       return;
     }
     /* Write entire block_changes array */
     if (fwrite(block_changes, sizeof(BlockChange), block_changes_capacity, file) != (size_t)block_changes_capacity) {
       fclose(file);
-      perror("Failed to write block changes.");
+      logSerializerErrno("Failed to write block changes.");
       return;
     }
   #else
     if (fwrite(block_changes, 1, sizeof(block_changes), file) != sizeof(block_changes)) {
       fclose(file);
-      perror("Failed to write block changes.");
+      logSerializerErrno("Failed to write block changes.");
       return;
     }
   #endif
@@ -520,7 +526,7 @@ void writePlayerDataToDisk () {
   /* Write player data */
   if (fwrite(&player_data, 1, sizeof(player_data), file) != sizeof(player_data)) {
     fclose(file);
-    perror("Failed to write player data.");
+    logSerializerErrno("Failed to write player data.");
     return;
   }
 
@@ -528,17 +534,17 @@ void writePlayerDataToDisk () {
   int sb_count = special_blocks_count;
   if (fwrite(&sb_count, sizeof(int), 1, file) != 1) {
     fclose(file);
-    perror("Failed to write special block count.");
+    logSerializerErrno("Failed to write special block count.");
     return;
   }
   size_t expected = sizeof(SpecialBlockEntry) * MAX_SPECIAL_BLOCKS;
   if (fwrite(special_blocks, 1, expected, file) != expected) {
     fclose(file);
-    perror("Failed to write special blocks.");
+    logSerializerErrno("Failed to write special blocks.");
     return;
   }
 
-  fprintf(stderr, "[SAVE] wrote full world file successfully\n");
+  terminal_ui_log("[SAVE] Wrote full world file successfully");
   fclose(file);
 }
 

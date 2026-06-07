@@ -10,6 +10,7 @@
 #include "chunk_generator.h"
 #include "thread_pool.h"
 #include "thread_utils.h"
+#include "terminal_ui.h"
 
 // Simple chunk cache - stores generated chunk section data
 // Size is determined by config.chunk_cache_size
@@ -340,7 +341,9 @@ void init_chunk_generator() {
   cache_size = config.chunk_cache_size;
   chunk_cache = (CachedChunkData*)malloc(cache_size * sizeof(CachedChunkData));
   if (!chunk_cache) {
-    fprintf(stderr, "ERROR: Failed to allocate chunk cache (%d entries)\n", cache_size);
+    char message[160];
+    snprintf(message, sizeof(message), "ERROR: Failed to allocate chunk cache (%d entries)", cache_size);
+    terminal_ui_shutdown(message);
     exit(1);
   }
   // Initialize cache entries
@@ -364,7 +367,8 @@ void init_chunk_generator() {
   for (intptr_t i = 0; i < worker_thread_count; i++) {
     int ret = create_server_thread_with_stack(&worker_threads[i], IRONGINGOT_CHUNK_THREAD_STACK_SIZE, chunk_generator_worker, (void *)i);
     if (ret != 0) {
-      fprintf(stderr, "ERROR: Failed to start chunk generator thread %ld: %s\n", (long)i, strerror(ret));
+      char message[192];
+      snprintf(message, sizeof(message), "ERROR: Failed to start chunk generator thread %ld: %s", (long)i, strerror(ret));
       running = 0;
       pthread_mutex_lock(&request_mutex);
       pthread_cond_broadcast(&request_cond);
@@ -372,11 +376,12 @@ void init_chunk_generator() {
       for (intptr_t j = 0; j < i; j++) {
         pthread_join(worker_threads[j], NULL);
       }
+      terminal_ui_shutdown(message);
       exit(1);
     }
   }
-  printf(
-    "Chunk generator threads started (%d workers, cache size: %d chunks)\n",
+  terminal_ui_log(
+    "Chunk generator threads started (%d workers, cache size: %d chunks)",
     worker_thread_count,
     cache_size
   );
@@ -397,7 +402,7 @@ void shutdown_chunk_generator() {
     free(chunk_cache);
     chunk_cache = NULL;
   }
-  printf("Chunk generator threads stopped\n");
+  terminal_ui_log("Chunk generator threads stopped");
 }
 
 // Task function for chunk generation

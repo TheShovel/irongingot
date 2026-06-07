@@ -23,6 +23,7 @@
 #include "thread_pool.h"
 #include "config.h"
 #include "creative_mode.h"
+#include "terminal_ui.h"
 
 // World spawn point (block coordinates)
 #define SPAWN_BLOCK_X 8
@@ -143,7 +144,7 @@ static uint8_t loadAppearanceFilesForBase(PlayerAppearance *appearance, const ch
   snprintf(path, sizeof(path), "skins/%s.texture", base_name);
   len = readTokenFile(path, appearance->texture_value, sizeof(appearance->texture_value));
   if (len <= 0) {
-    if (len == -2) printf("Skin: %s is too large, ignoring\n", path);
+    if (len == -2) terminal_ui_log("Skin: %s is too large, ignoring", path);
     return false;
   }
 
@@ -156,7 +157,7 @@ static uint8_t loadAppearanceFilesForBase(PlayerAppearance *appearance, const ch
     appearance->texture_signature_len = (uint16_t)len;
     appearance->has_signature = true;
   } else if (len == -2) {
-    printf("Skin: %s is too large, ignoring signature\n", path);
+    terminal_ui_log("Skin: %s is too large, ignoring signature", path);
   }
 
   return true;
@@ -255,7 +256,7 @@ void loadPlayerAppearance (int player_index, const uint8_t *uuid, const char *na
 
   PlayerAppearance *appearance = &player_appearance[player_index];
   if (fetchMojangPlayerAppearance(uuid, name, appearance)) {
-    printf("Skin: loaded texture for %s from Mojang\n", name);
+    terminal_ui_log("Skin: loaded texture for %s from Mojang", name);
     return;
   }
 
@@ -263,13 +264,13 @@ void loadPlayerAppearance (int player_index, const uint8_t *uuid, const char *na
   uuidToHex(uuid, uuid_hex);
 
   if (loadAppearanceFilesForBase(appearance, uuid_hex)) {
-    printf("Skin: loaded texture for %s from skins/%s.*\n", name, uuid_hex);
+    terminal_ui_log("Skin: loaded texture for %s from skins/%s.*", name, uuid_hex);
     return;
   }
 
   if (!isSafeSkinName(name)) return;
   if (loadAppearanceFilesForBase(appearance, name)) {
-    printf("Skin: loaded texture for %s from skins/%s.*\n", name, name);
+    terminal_ui_log("Skin: loaded texture for %s from skins/%s.*", name, name);
   }
 }
 
@@ -442,13 +443,16 @@ void disconnectClient (int *client_fd, int cause) {
   client_count --;
   setClientState(*client_fd, STATE_NONE);
   handlePlayerDisconnect(*client_fd);
+  int disconnected_fd = *client_fd;
+  terminal_ui_record_client_disconnect(cause);
   #ifdef _WIN32
-  closesocket(*client_fd);
-  printf("Disconnected client %d, cause: %d, errno: %d\n", *client_fd, cause, WSAGetLastError());
+  int disconnect_errno = WSAGetLastError();
+  closesocket(disconnected_fd);
   #else
-  close(*client_fd);
-  printf("Disconnected client %d, cause: %d, errno: %d\n\n", *client_fd, cause, errno);
+  int disconnect_errno = errno;
+  close(disconnected_fd);
   #endif
+  terminal_ui_log("Disconnected client fd=%d cause=%d errno=%d", disconnected_fd, cause, disconnect_errno);
   *client_fd = -1;
 }
 
@@ -1192,8 +1196,7 @@ uint8_t makeBlockChange (short x, int16_t y, short z, uint16_t block, uint8_t di
       }
       block_changes = new_block_changes;
       for (int j = block_changes_capacity; j < new_capacity; j ++) block_changes[j].block = 0xFF;
-      printf("Block changes expanded: %d -> %d\n", block_changes_capacity, new_capacity);
-      fflush(stdout);
+      terminal_ui_log("Block changes expanded: %d -> %d", block_changes_capacity, new_capacity);
       block_changes_capacity = new_capacity;
     }
     #else
@@ -2795,7 +2798,7 @@ void switchPlayerDimension(PlayerData *player) {
     np_h = floor_h;
     player->y = (float)(floor_h + 1);
 
-    printf("NETHER SPAWN: bx=%d bz=%d floor_h=%d np_h=%d player_y=%d\n",
+    terminal_ui_log("Nether spawn: bx=%d bz=%d floor_h=%d np_h=%d player_y=%d",
       np_x, np_z, floor_h, np_h, (int)player->y);
   }
 
