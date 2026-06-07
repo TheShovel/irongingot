@@ -221,6 +221,12 @@ const biomes = [
   "crimson_forest",
   "warped_forest",
   "basalt_deltas",
+  // End biomes
+  "the_end",
+  "small_end_islands",
+  "end_midlands",
+  "end_highlands",
+  "end_barrens",
 ];
 
 // Extract item and block data from registry dump
@@ -462,6 +468,7 @@ async function extractItemsAndBlocks() {
     "end_portal_frame_eye_west",
     "end_portal_frame_eye_east",
     "end_portal",
+    "end_stone",
     "farmland",
     "wheat",
   ];
@@ -673,9 +680,9 @@ async function convert() {
   }
   // Send biomes separately - only "plains" is actually required
   registryBuffers.push(serializeRegistry("worldgen/biome", biomes));
-  // Send dimensions separately - we only use "overworld"
+  // Send dimensions separately. Order must match DIMENSION_* IDs in globals.h.
   registryBuffers.push(
-    serializeRegistry("dimension_type", ["overworld", "the_nether"]),
+    serializeRegistry("dimension_type", ["overworld", "the_nether", "the_end"]),
   );
   const fullRegistryBuffer = Buffer.concat(registryBuffers);
 

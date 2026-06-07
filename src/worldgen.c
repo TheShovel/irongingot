@@ -33,6 +33,21 @@
 #ifndef B_end_portal_frame_eye_east
 #define B_end_portal_frame_eye_east B_end_portal_frame
 #endif
+#ifndef B_end_portal
+#define B_end_portal B_air
+#endif
+#ifndef B_end_stone
+#define B_end_stone B_stone
+#endif
+#ifndef W_the_end
+#define W_the_end W_plains
+#endif
+#ifndef W_end_highlands
+#define W_end_highlands W_the_end
+#endif
+#ifndef W_small_end_islands
+#define W_small_end_islands W_the_end
+#endif
 
 static Generator g;
 static SurfaceNoise surface_noise_biome;
@@ -850,7 +865,7 @@ static uint16_t getStrongholdPortalFrameBlock(int rx, int rz) {
 }
 
 static uint16_t getStrongholdDecorationAt(int rx, int ry, int rz, uint64_t key) {
-  // Portal room: a complete 3x3 End portal with all 12 frame eyes filled.
+  // Portal room: a complete visual-only 3x3 End portal with all 12 frame eyes filled.
   if (ry == 1) {
     if (rx >= -1 && rx <= 1 && rz >= -1 && rz <= 1) return B_end_portal;
 
@@ -2866,11 +2881,122 @@ uint16_t getNetherBlockAt (int x, int y, int z) {
   return block;
 }
 
+static int getEndIslandBoundsAt(int x, int z, int *bottom, int *top, uint8_t *biome) {
+  double dx = (double)x;
+  double dz = (double)z;
+  double r2 = dx * dx + dz * dz;
+  double main_radius = 104.0;
+
+  if (r2 <= main_radius * main_radius) {
+    double r = sqrt(r2);
+    double noise = octave_sample(&surface_noise, x * 0.025, 0, z * 0.025);
+    int t = 64 - (int)((r * r) / 190.0) + (int)(noise * 5.0);
+    int thickness = 10 + (int)((main_radius - r) / 5.0);
+    if (thickness < 6) thickness = 6;
+    *top = t;
+    *bottom = t - thickness;
+    *biome = W_the_end;
+    return 1;
+  }
+
+  // Sparse outer End islands. This is intentionally simple: deterministic island
+  // centers per 256×256 region, skipped near the main island to preserve the void.
+  int region_x = div_floor(x, 256);
+  int region_z = div_floor(z, 256);
+  uint64_t key = splitmix64(((uint64_t)(uint32_t)region_x << 32) ^ (uint32_t)region_z ^ world_seed ^ 0x454e44ULL);
+  int center_x = region_x * 256 + 64 + (int)((key >> 8) & 127);
+  int center_z = region_z * 256 + 64 + (int)((key >> 16) & 127);
+  int cdx = x - center_x;
+  int cdz = z - center_z;
+  double cr2 = (double)cdx * cdx + (double)cdz * cdz;
+  int far_x = center_x < 0 ? -center_x : center_x;
+  int far_z = center_z < 0 ? -center_z : center_z;
+  if (far_x < 640 && far_z < 640) return 0;
+
+  double radius = 22.0 + (double)((key >> 24) & 31);
+  if (cr2 > radius * radius) return 0;
+
+  double cr = sqrt(cr2);
+  double noise = octave_sample(&detail_noise, x * 0.035 + 9000.0, 0, z * 0.035 + 9000.0);
+  int t = 70 + (int)(noise * 7.0) - (int)((cr * cr) / (radius * 2.2));
+  int thickness = 5 + (int)((radius - cr) / 3.0);
+  if (thickness < 3) thickness = 3;
+  *top = t;
+  *bottom = t - thickness;
+  *biome = (radius > 40.0) ? W_end_highlands : W_small_end_islands;
+  return 1;
+}
+
+uint8_t getChunkEndBiome(short x, short z) {
+  int bottom, top;
+  uint8_t biome = W_the_end;
+  return getEndIslandBoundsAt(x * 16 + 8, z * 16 + 8, &bottom, &top, &biome) ? biome : W_the_end;
+}
+
+uint16_t getEndBlockAt(int x, int y, int z) {
+  if (y < 0 || y > 319) return B_air;
+
+  int bottom, top;
+  uint8_t biome;
+  if (getEndIslandBoundsAt(x, z, &bottom, &top, &biome) && y >= bottom && y <= top) {
+    return B_end_stone;
+  }
+  return B_air;
+}
+
+uint16_t buildEndChunkSection(int cx, int cy, int cz) {
+  uint8_t biome = getChunkEndBiome(div_floor(cx, 16), div_floor(cz, 16));
+
+  for (int dy = 0; dy < 16; dy++) {
+    int y = cy + dy;
+    for (int dz = 0; dz < 16; dz++) {
+      int z = cz + dz;
+      for (int dx = 0; dx < 16; dx++) {
+        int x = cx + dx;
+        unsigned address = (unsigned)(dx + (dz << 4) + (dy << 8));
+        unsigned index = (address & ~7u) | (7u - (address & 7u));
+        chunk_section[index] = getEndBlockAt(x, y, z);
+      }
+    }
+  }
+
+  if (!isChunkModified(div_floor(cx, 16), div_floor(cz, 16))) return biome;
+
+  int block_changes_snapshot_count = 0;
+  BlockChange *block_changes_snapshot = copyBlockChangesSnapshot(&block_changes_snapshot_count);
+  if (block_changes_snapshot_count > 0 && block_changes_snapshot != NULL) {
+    for (int i = 0; i < block_changes_snapshot_count; i++) {
+      if (block_changes_snapshot[i].block == 0xFF) continue;
+      if (is_stair_block(block_changes_snapshot[i].block) || is_oriented_block(block_changes_snapshot[i].block)) {
+        if (block_changes_snapshot[i].block == B_chest) i += 14;
+        else if (is_stair_block(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_furnace) i += 1;
+        continue;
+      }
+      if (block_changes_snapshot[i].dimension != DIMENSION_END ||
+          block_changes_snapshot[i].x < cx || block_changes_snapshot[i].x >= cx + 16 ||
+          block_changes_snapshot[i].y < cy || block_changes_snapshot[i].y >= cy + 16 ||
+          block_changes_snapshot[i].z < cz || block_changes_snapshot[i].z >= cz + 16) continue;
+      int dx = block_changes_snapshot[i].x - cx;
+      int dy = block_changes_snapshot[i].y - cy;
+      int dz = block_changes_snapshot[i].z - cz;
+      unsigned address = (unsigned)(dx + (dz << 4) + (dy << 8));
+      unsigned index = (address & ~7u) | (7u - (address & 7u));
+      chunk_section[index] = block_changes_snapshot[i].block;
+    }
+    freeBlockChangesSnapshot(block_changes_snapshot);
+  }
+
+  return biome;
+}
+
 uint16_t getBlockAt2 (int x, int y, int z, uint8_t dimension) {
   uint16_t block_change = getBlockChange(x, y, z, dimension);
   if (block_change != 0xFF) return block_change;
   if (dimension == DIMENSION_NETHER) {
     return getNetherBlockAt(x, y, z);
+  }
+  if (dimension == DIMENSION_END) {
+    return getEndBlockAt(x, y, z);
   }
   short anchor_x = div_floor(x, CHUNK_SIZE);
   short anchor_z = div_floor(z, CHUNK_SIZE);
@@ -3188,6 +3314,9 @@ uint16_t buildNetherChunkSection(int cx, int cy, int cz) {
 uint16_t buildChunkSection (int cx, int cy, int cz, uint8_t dimension) {
   if (dimension == DIMENSION_NETHER) {
     return buildNetherChunkSection(cx, cy, cz);
+  }
+  if (dimension == DIMENSION_END) {
+    return buildEndChunkSection(cx, cy, cz);
   }
   // Precompute hashes, anchors and features for each relevant minichunk
   int anchor_index = 0, feature_index = 0;

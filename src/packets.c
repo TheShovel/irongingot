@@ -29,6 +29,31 @@
 #include "special_block.h"
 #include "creative_mode.h"
 
+#ifdef B_end_portal
+#define HAVE_B_END_PORTAL 1
+#else
+#define HAVE_B_END_PORTAL 0
+#define B_end_portal B_air
+#endif
+
+#define BLOCK_ENTITY_TYPE_CHEST 1
+#define BLOCK_ENTITY_TYPE_END_PORTAL 14
+
+static const char *dimension_name(uint8_t dimension) {
+  switch (dimension) {
+    case DIMENSION_NETHER: return "minecraft:the_nether";
+    case DIMENSION_END: return "minecraft:the_end";
+    case DIMENSION_OVERWORLD:
+    default: return "minecraft:overworld";
+  }
+}
+
+static void write_dimension_name(int client_fd, uint8_t dimension) {
+  const char *name = dimension_name(dimension);
+  writeVarInt(client_fd, strlen(name));
+  send_all(client_fd, name, strlen(name));
+}
+
 // Case-insensitive string comparison for item lookup
 static int creative_strcasecmp(const char *s1, const char *s2) {
   if (!s1 || !s2) return -1;
@@ -308,14 +333,10 @@ int sc_loginPlay (int client_fd, uint8_t dimension) {
   // hardcore
   writeByte(client_fd, false);
   // dimensions
-  writeVarInt(client_fd, 1);
-  if (dimension == DIMENSION_OVERWORLD) {
-    writeVarInt(client_fd, 18);
-    send_all(client_fd, "minecraft:overworld", 18);
-  } else {
-    writeVarInt(client_fd, 19);
-    send_all(client_fd, "minecraft:the_nether", 19);
-  }
+  writeVarInt(client_fd, 3);
+  write_dimension_name(client_fd, DIMENSION_OVERWORLD);
+  write_dimension_name(client_fd, DIMENSION_NETHER);
+  write_dimension_name(client_fd, DIMENSION_END);
   // maxplayers
   writeVarInt(client_fd, MAX_PLAYERS);
   // view distance
@@ -331,13 +352,7 @@ int sc_loginPlay (int client_fd, uint8_t dimension) {
   // dimension id (from server-sent registries)
   writeVarInt(client_fd, dimension);
   // dimension name
-  if (dimension == DIMENSION_OVERWORLD) {
-    writeVarInt(client_fd, 18);
-    send_all(client_fd, "minecraft:overworld", 18);
-  } else {
-    writeVarInt(client_fd, 19);
-    send_all(client_fd, "minecraft:the_nether", 19);
-  }
+  write_dimension_name(client_fd, dimension);
   // hashed seed
   writeUint64(client_fd, 0x0123456789ABCDEF);
   // gamemode
@@ -546,9 +561,10 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
 
   // Determine section count per dimension
   // Overworld:  min_y=-64, height=384 -> 24 sections
-  // Nether:     min_y=0,   height=256 -> 16 sections
-  int terrain_sections = (dimension == DIMENSION_NETHER) ? 16 : 20;
-  int bedrock_sections = (dimension == DIMENSION_NETHER) ? 0  : 4;
+  // Nether/End: min_y=0,   height=256 -> 16 sections
+  int zero_min_y_dimension = (dimension == DIMENSION_NETHER || dimension == DIMENSION_END);
+  int terrain_sections = zero_min_y_dimension ? 16 : 20;
+  int bedrock_sections = zero_min_y_dimension ? 0  : 4;
   int total_sections   = bedrock_sections + terrain_sections;
   int light_bits       = total_sections + 2;  // +2 for border sections
 
@@ -688,20 +704,35 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
     ENCODE_SECTION(cached_sections[i], cached_biomes[i]);
   }
 
-  // Scan terrain sections for village-generated chests that need block entities
-  // in the chunk data packet (otherwise they render invisible).
+  // Scan terrain sections for blocks that need block entities in the chunk data
+  // packet to render correctly. Chests are invisible without one, and End portal
+  // blocks need one for the animated portal surface renderer.
   int chest_count = 0;
   int chest_wx[64], chest_wy[64], chest_wz[64];
-  for (int _s = 0; _s < terrain_sections && chest_count < 64; _s++) {
+  int end_portal_count = 0;
+  int end_portal_wx[64], end_portal_wy[64], end_portal_wz[64];
+  for (int _s = 0; _s < terrain_sections; _s++) {
     int section_y = (dimension == DIMENSION_NETHER) ? _s * 16 : _s * 16;
-    for (int _j = 0; _j < 4096 && chest_count < 64; _j++) {
+    for (int _j = 0; _j < 4096; _j++) {
       uint16_t raw = cached_sections[_s][_j];
-      if ((raw & 0x8000) && (raw & 0x1FF) == B_chest) {
-        int addr = (_j & ~7) | (7 - (_j & 7));
-        chest_wx[chest_count] = x + (addr & 15);
-        chest_wz[chest_count] = z + ((addr >> 4) & 15);
-        chest_wy[chest_count] = section_y + (addr >> 8);
+      uint16_t block_type = (raw & 0x8000) ? (raw & 0x1FF) : raw;
+      if (block_type != B_chest && (!HAVE_B_END_PORTAL || block_type != B_end_portal)) continue;
+
+      int addr = (_j & ~7) | (7 - (_j & 7));
+      int wx = x + (addr & 15);
+      int wz = z + ((addr >> 4) & 15);
+      int wy = section_y + (addr >> 8);
+
+      if (block_type == B_chest && chest_count < 64) {
+        chest_wx[chest_count] = wx;
+        chest_wz[chest_count] = wz;
+        chest_wy[chest_count] = wy;
         chest_count++;
+      } else if (HAVE_B_END_PORTAL && block_type == B_end_portal && end_portal_count < 64) {
+        end_portal_wx[end_portal_count] = wx;
+        end_portal_wz[end_portal_count] = wz;
+        end_portal_wy[end_portal_count] = wy;
+        end_portal_count++;
       }
     }
   }
@@ -719,16 +750,23 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
   writeVarInt(client_fd, chunk_data_size);
   send_all(client_fd, data_buf, chunk_data_size);
 
-  // Block entities section — needed for chests (and other tile entity blocks)
-  // to render correctly. Without it, chests appear invisible with only a hitbox.
-  writeVarInt(client_fd, chest_count);
+  // Block entities section — needed for some blocks to render correctly.
+  writeVarInt(client_fd, chest_count + end_portal_count);
   for (int _be = 0; _be < chest_count; _be++) {
     writeByte(client_fd, ((chest_wx[_be] & 15) << 4) | (chest_wz[_be] & 15));
     writeByte(client_fd, (chest_wy[_be] >> 8) & 0xFF);
     writeByte(client_fd, chest_wy[_be] & 0xFF);
-    writeVarInt(client_fd, 1); // block entity type ID for chest
+    writeVarInt(client_fd, BLOCK_ENTITY_TYPE_CHEST);
     // Anonymous network NBT: TAG_Compound type byte, then compound data (no name),
     // terminated by TAG_End.
+    writeByte(client_fd, 0x0A); // TAG_Compound type
+    writeByte(client_fd, 0x00); // TAG_End — empty compound
+  }
+  for (int _be = 0; _be < end_portal_count; _be++) {
+    writeByte(client_fd, ((end_portal_wx[_be] & 15) << 4) | (end_portal_wz[_be] & 15));
+    writeByte(client_fd, (end_portal_wy[_be] >> 8) & 0xFF);
+    writeByte(client_fd, end_portal_wy[_be] & 0xFF);
+    writeVarInt(client_fd, BLOCK_ENTITY_TYPE_END_PORTAL);
     writeByte(client_fd, 0x0A); // TAG_Compound type
     writeByte(client_fd, 0x00); // TAG_End — empty compound
   }
@@ -1907,13 +1945,7 @@ int sc_respawn (int client_fd, uint8_t dimension) {
   // dimension id (from server-sent registries)
   writeVarInt(client_fd, dimension);
   // dimension name
-  if (dimension == DIMENSION_OVERWORLD) {
-    writeVarInt(client_fd, 18);
-    send_all(client_fd, "minecraft:overworld", 18);
-  } else {
-    writeVarInt(client_fd, 19);
-    send_all(client_fd, "minecraft:the_nether", 19);
-  }
+  write_dimension_name(client_fd, dimension);
   // hashed seed
   writeUint64(client_fd, 0x0123456789ABCDEF);
   // gamemode

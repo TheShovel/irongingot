@@ -2747,30 +2747,43 @@ static uint8_t tryCreatePortal(short x, uint8_t y, short z, uint8_t dimension) {
          tryCreatePortalInPlane(x, y, z, 0, 1, dimension);
 }
 
-void switchPlayerDimension(PlayerData *player) {
-  uint8_t new_dim = (player->dimension == DIMENSION_OVERWORLD) ? DIMENSION_NETHER : DIMENSION_OVERWORLD;
+static void switchPlayerToDimension(PlayerData *player, uint8_t new_dim) {
+  uint8_t old_dim = player->dimension;
+  if (old_dim == new_dim) return;
 
   if (new_dim == DIMENSION_NETHER) {
-    // Save overworld entry coords for return trip
-    player->portal_ow_x = player->x;
-    player->portal_ow_y = player->y;
-    player->portal_ow_z = player->z;
-    player->portal_valid = 1;
-
-    player->x = player->x / 8;
-    player->z = player->z / 8;
-  } else {
-    if (player->portal_valid) {
-      // Use saved overworld coords for return, with 3-block offset to avoid re-entering portal
-      short ox = player->portal_ow_x;
-      short oz = player->portal_ow_z;
-      player->x = ox + 3;
-      player->z = oz - 3;
-      player->portal_valid = 0;
-    } else {
-      player->x = player->x * 8;
-      player->z = player->z * 8;
+    if (old_dim == DIMENSION_OVERWORLD) {
+      // Save overworld entry coords for return trip.
+      player->portal_ow_x = player->x;
+      player->portal_ow_y = player->y;
+      player->portal_ow_z = player->z;
+      player->portal_valid = 1;
+      player->x = player->x / 8;
+      player->z = player->z / 8;
     }
+  } else if (new_dim == DIMENSION_OVERWORLD) {
+    if (old_dim == DIMENSION_NETHER) {
+      if (player->portal_valid) {
+        // Use saved overworld coords for return, with 3-block offset to avoid re-entering portal.
+        short ox = player->portal_ow_x;
+        short oz = player->portal_ow_z;
+        player->x = ox + 3;
+        player->z = oz - 3;
+        player->portal_valid = 0;
+      } else {
+        player->x = player->x * 8;
+        player->z = player->z * 8;
+      }
+    } else if (old_dim == DIMENSION_END) {
+      player->x = 8;
+      player->z = 8;
+    }
+  } else if (new_dim == DIMENSION_END) {
+    // Visual-only stronghold End portals now lead to the End. Spawn at the
+    // center island; no exit gateway/dragon fight mechanics are implemented yet.
+    player->x = 0;
+    player->z = 0;
+    player->y = 76;
   }
 
   if (player->x < -16384) player->x = -16384;
@@ -2780,19 +2793,19 @@ void switchPlayerDimension(PlayerData *player) {
 
   player->dimension = new_dim;
 
-  // Compute nether Y and save portal position before respawn
+  // Compute nether Y and save portal position before respawn.
   int np_x = 0, np_z = 0, np_h = 65;
   if (new_dim == DIMENSION_NETHER) {
     init_worldgen();
     np_x = (int)player->x;
     np_z = (int)player->z;
-    // Sample floor height instead of ceiling height
+    // Sample floor height instead of ceiling height.
     double floor_n = octave_sample(&surface_noise, (double)np_x * 0.015, 0, (double)np_z * 0.015);
     int floor_h = 60 + (int)(floor_n * 35.0);
     if (floor_h < 35) floor_h = 35;
     if (floor_h > 95) floor_h = 95;
 
-    // Ensure we are above the lava sea (Y=50)
+    // Ensure we are above the lava sea (Y=50).
     if (floor_h < 64) floor_h = 64;
 
     np_h = floor_h;
@@ -2865,6 +2878,10 @@ void switchPlayerDimension(PlayerData *player) {
     uint8_t surface_y = getHeightAt(player->x, player->z);
     if (surface_y > 0) player->y = surface_y + 1;
     else player->y = 80;
+  } else if (new_dim == DIMENSION_END) {
+    player->x = 0;
+    player->z = 0;
+    player->y = 76;
   }
 
   // Fall damage is calculated from the last grounded Y. A dimension transfer is
@@ -2902,6 +2919,11 @@ void switchPlayerDimension(PlayerData *player) {
     player->yaw * 180.0f / 127.0f, player->pitch * 90.0f / 127.0f);
 }
 
+void switchPlayerDimension(PlayerData *player) {
+  uint8_t new_dim = (player->dimension == DIMENSION_OVERWORLD) ? DIMENSION_NETHER : DIMENSION_OVERWORLD;
+  switchPlayerToDimension(player, new_dim);
+}
+
 void handlePortalTravel(PlayerData *player) {
   if (player->client_fd == -1) return;
   if (player->flags & 0x20) return;
@@ -2910,6 +2932,8 @@ void handlePortalTravel(PlayerData *player) {
   uint16_t block = getBlockAt2(player->x, player->y, player->z, player->dimension);
   if (block == B_nether_portal) {
     switchPlayerDimension(player);
+  } else if (player->dimension == DIMENSION_OVERWORLD && block == B_end_portal) {
+    switchPlayerToDimension(player, DIMENSION_END);
   }
 }
 

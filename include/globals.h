@@ -48,6 +48,7 @@
 // Dimension identifiers (avoid conflict with cubiomes DIM_NETHER/DIM_OVERWORLD)
 #define DIMENSION_OVERWORLD 0
 #define DIMENSION_NETHER 1
+#define DIMENSION_END 2
 
 // Time between server ticks in microseconds (default = 50ms for 20 TPS)
 #define TIME_BETWEEN_TICKS 50000
