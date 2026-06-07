@@ -22,10 +22,7 @@ static const CreativeItem creative_items[] = {
   {I_polished_diorite, "Polished Diorite"},
   {I_andesite, "Andesite"},
   {I_polished_andesite, "Polished Andesite"},
-  {I_deepslate, "Deepslate"},
   {I_cobblestone, "Cobblestone"},
-  {I_stone_bricks, "Stone Bricks"},
-  {I_mossy_stone_bricks, "Mossy Stone Bricks"},
   
   // Building Blocks - Dirt & Grass
   {I_grass_block, "Grass Block"},
@@ -107,7 +104,6 @@ static const CreativeItem creative_items[] = {
   {I_cherry_stairs, "Cherry Stairs"},
   {I_pale_oak_stairs, "Pale Oak Stairs"},
   {I_cobblestone_stairs, "Cobblestone Stairs"},
-  {I_stone_brick_stairs, "Stone Brick Stairs"},
   
   // Slabs
   {I_oak_slab, "Oak Slab"},
@@ -120,7 +116,6 @@ static const CreativeItem creative_items[] = {
   {I_cherry_slab, "Cherry Slab"},
   {I_pale_oak_slab, "Pale Oak Slab"},
   {I_cobblestone_slab, "Cobblestone Slab"},
-  {I_stone_brick_slab, "Stone Brick Slab"},
   
   // Doors
   {I_oak_door, "Oak Door"},
@@ -132,7 +127,6 @@ static const CreativeItem creative_items[] = {
   {I_mangrove_door, "Mangrove Door"},
   {I_cherry_door, "Cherry Door"},
   {I_pale_oak_door, "Pale Oak Door"},
-  {I_iron_door, "Iron Door"},
   
   // Trapdoors
   {I_oak_trapdoor, "Oak Trapdoor"},
@@ -144,7 +138,6 @@ static const CreativeItem creative_items[] = {
   {I_mangrove_trapdoor, "Mangrove Trapdoor"},
   {I_cherry_trapdoor, "Cherry Trapdoor"},
   {I_pale_oak_trapdoor, "Pale Oak Trapdoor"},
-  {I_iron_trapdoor, "Iron Trapdoor"},
   
   // Fences
   {I_oak_fence, "Oak Fence"},
@@ -156,7 +149,6 @@ static const CreativeItem creative_items[] = {
   {I_mangrove_fence, "Mangrove Fence"},
   {I_cherry_fence, "Cherry Fence"},
   {I_pale_oak_fence, "Pale Oak Fence"},
-  {I_iron_bars, "Iron Bars"},
   
   // Decorative & Flowers
   {I_torch, "Torch"},
@@ -188,7 +180,6 @@ static const CreativeItem creative_items[] = {
   {I_iron_block, "Iron Block"},
   {I_gold_block, "Gold Block"},
   {I_diamond_block, "Diamond Block"},
-  {I_emerald_block, "Emerald Block"},
   {I_copper_block, "Copper Block"},
   {I_coal_block, "Coal Block"},
   {I_lapis_block, "Lapis Block"},
@@ -207,14 +198,9 @@ static const CreativeItem creative_items[] = {
   {I_cyan_wool, "Cyan Wool"},
   {I_purple_wool, "Purple Wool"},
   {I_blue_wool, "Blue Wool"},
-  {I_brown_wool, "Brown Wool"},
-  {I_green_wool, "Green Wool"},
-  {I_red_wool, "Red Wool"},
-  {I_black_wool, "Black Wool"},
   
   // Other Building Blocks
   {I_glass, "Glass"},
-  {I_bookshelf, "Bookshelf"},
   {I_crafting_table, "Crafting Table"},
   {I_furnace, "Furnace"},
   {I_chest, "Chest"},
@@ -225,7 +211,6 @@ static const CreativeItem creative_items[] = {
   {I_blue_ice, "Blue Ice"},
   {I_cactus, "Cactus"},
   {I_obsidian, "Obsidian"},
-  {I_crying_obsidian, "Crying Obsidian"},
   {I_netherrack, "Netherrack"},
   {I_soul_sand, "Soul Sand"},
   {I_soul_soil, "Soul Soil"},
