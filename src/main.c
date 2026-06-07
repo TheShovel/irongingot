@@ -640,10 +640,16 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
         short dz = _z - div_floor(player->z, 16);
 
         // Prevent players from leaving the world
+        // In the End, falling into the void kills the player
         if (!noclip_enabled && cy < 0) {
-          cy = 0;
-          player->grounded_y = 0;
-          sc_synchronizePlayerPosition(client_fd, cx, 0, cz, player->yaw * 180 / 127, player->pitch * 90 / 127);
+          if (player->dimension == DIMENSION_END) {
+            // Void death in the End - D_out_of_world will kill the player
+            hurtEntity(client_fd, -1, D_out_of_world, 100);
+          } else {
+            cy = 0;
+            player->grounded_y = 0;
+            sc_synchronizePlayerPosition(client_fd, cx, 0, cz, player->yaw * 180 / 127, player->pitch * 90 / 127);
+          }
         } else if (!noclip_enabled && cy > 319) {
           cy = 319;
           sc_synchronizePlayerPosition(client_fd, cx, 319, cz, player->yaw * 180 / 127, player->pitch * 90 / 127);

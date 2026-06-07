@@ -3866,6 +3866,9 @@ static void spawnFishInWater(PlayerData *player) {
 
 static void spawnMobsAroundPlayer (PlayerData *player) {
 
+  // Passive mobs and villagers don't spawn in the End
+  if (player->dimension == DIMENSION_END) return;
+
   spawnVillageVillagers(player);
   spawnFishInWater(player);
 
@@ -4169,6 +4172,10 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
         // Killed by being near a cactus
         strcpy((char *)recv_buffer + player_name_len, " was pricked to death");
         recv_buffer[player_name_len + 21] = '\0';
+      } else if (damage_type == D_out_of_world) {
+        // Killed by falling into the void
+        strcpy((char *)recv_buffer + player_name_len, " fell from the world");
+        recv_buffer[player_name_len + 20] = '\0';
       } else {
         // Unknown death reason
         strcpy((char *)recv_buffer + player_name_len, " died");
