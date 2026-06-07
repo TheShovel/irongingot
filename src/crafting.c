@@ -12,6 +12,49 @@ static uint16_t getSupportedBlockCraft(uint16_t item) {
   return item;
 }
 
+static uint8_t isBurnableLogOrWoodItem(uint16_t item) {
+  switch (item) {
+    case I_oak_log:
+    case I_spruce_log:
+    case I_birch_log:
+    case I_jungle_log:
+    case I_acacia_log:
+    case I_cherry_log:
+    case I_dark_oak_log:
+    case I_pale_oak_log:
+    case I_mangrove_log:
+    case I_oak_wood:
+    case I_spruce_wood:
+    case I_birch_wood:
+    case I_jungle_wood:
+    case I_acacia_wood:
+    case I_cherry_wood:
+    case I_dark_oak_wood:
+    case I_pale_oak_wood:
+    case I_mangrove_wood:
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+static uint8_t isBurnableSaplingItem(uint16_t item) {
+  switch (item) {
+    case I_oak_sapling:
+    case I_spruce_sapling:
+    case I_birch_sapling:
+    case I_jungle_sapling:
+    case I_acacia_sapling:
+    case I_cherry_sapling:
+    case I_dark_oak_sapling:
+    case I_pale_oak_sapling:
+    case I_mangrove_propagule:
+      return 1;
+    default:
+      return 0;
+  }
+}
+
 // Helper function to check if an item is any type of plank
 uint8_t isPlankItem(uint16_t item) {
   switch (item) {
@@ -742,11 +785,11 @@ void getSmeltingOutput (PlayerData *player) {
   if (*fuel == I_coal) fuel_value = 8;
   else if (*fuel == I_charcoal) fuel_value = 8;
   else if (*fuel == I_coal_block) fuel_value = 80;
-  else if (*fuel == I_oak_planks) fuel_value = 1 + (fast_rand() & 1);
-  else if (*fuel == I_oak_log) fuel_value = 1 + (fast_rand() & 1);
+  else if ((isPlankItem(*fuel) && *fuel != I_crimson_planks && *fuel != I_warped_planks) || *fuel == I_bamboo_block) fuel_value = 1 + (fast_rand() & 1);
+  else if (isBurnableLogOrWoodItem(*fuel)) fuel_value = 1 + (fast_rand() & 1);
   else if (*fuel == I_crafting_table) fuel_value = 1 + (fast_rand() & 1);
   else if (*fuel == I_stick) fuel_value = (fast_rand() & 1);
-  else if (*fuel == I_oak_sapling) fuel_value = (fast_rand() & 1);
+  else if (isBurnableSaplingItem(*fuel)) fuel_value = (fast_rand() & 1);
   else if (*fuel == I_wooden_axe) fuel_value = 1;
   else if (*fuel == I_wooden_pickaxe) fuel_value = 1;
   else if (*fuel == I_wooden_shovel) fuel_value = 1;
@@ -758,14 +801,39 @@ void getSmeltingOutput (PlayerData *player) {
 
   registerSmeltingRecipe(I_cobblestone, I_stone);
   else registerSmeltingRecipe(I_oak_log, I_charcoal);
+  else registerSmeltingRecipe(I_spruce_log, I_charcoal);
+  else registerSmeltingRecipe(I_birch_log, I_charcoal);
+  else registerSmeltingRecipe(I_jungle_log, I_charcoal);
+  else registerSmeltingRecipe(I_acacia_log, I_charcoal);
+  else registerSmeltingRecipe(I_cherry_log, I_charcoal);
+  else registerSmeltingRecipe(I_dark_oak_log, I_charcoal);
+  else registerSmeltingRecipe(I_pale_oak_log, I_charcoal);
+  else registerSmeltingRecipe(I_mangrove_log, I_charcoal);
   else registerSmeltingRecipe(I_oak_wood, I_charcoal);
+  else registerSmeltingRecipe(I_spruce_wood, I_charcoal);
+  else registerSmeltingRecipe(I_birch_wood, I_charcoal);
+  else registerSmeltingRecipe(I_jungle_wood, I_charcoal);
+  else registerSmeltingRecipe(I_acacia_wood, I_charcoal);
+  else registerSmeltingRecipe(I_cherry_wood, I_charcoal);
+  else registerSmeltingRecipe(I_dark_oak_wood, I_charcoal);
+  else registerSmeltingRecipe(I_pale_oak_wood, I_charcoal);
+  else registerSmeltingRecipe(I_mangrove_wood, I_charcoal);
   else registerSmeltingRecipe(I_raw_iron, I_iron_ingot);
   else registerSmeltingRecipe(I_raw_gold, I_gold_ingot);
+  else registerSmeltingRecipe(I_raw_copper, I_copper_ingot);
+  else registerSmeltingRecipe(I_ancient_debris, I_netherite_scrap);
   else registerSmeltingRecipe(I_sand, I_glass);
+  else registerSmeltingRecipe(I_red_sand, I_glass);
+  else registerSmeltingRecipe(I_netherrack, I_nether_brick);
+  else registerSmeltingRecipe(I_cactus, I_green_dye);
   else registerSmeltingRecipe(I_chicken, I_cooked_chicken);
   else registerSmeltingRecipe(I_beef, I_cooked_beef);
   else registerSmeltingRecipe(I_porkchop, I_cooked_porkchop);
   else registerSmeltingRecipe(I_mutton, I_cooked_mutton);
+  else registerSmeltingRecipe(I_cod, I_cooked_cod);
+  else registerSmeltingRecipe(I_salmon, I_cooked_salmon);
+  else registerSmeltingRecipe(I_rabbit, I_cooked_rabbit);
+  else registerSmeltingRecipe(I_potato, I_baked_potato);
   else return;
 
   *output_count += exchange;
