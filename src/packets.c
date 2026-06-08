@@ -2187,6 +2187,7 @@ int cs_chat (int client_fd) {
     "  !creative <item_name> - Give yourself an item (e.g., !creative oak_log)\n"
     "  !noclip [on|off] - Toggle spectator-style noclip movement\n"
     "  !findstructure [radius] - Find and teleport to nearest nether structure\n"
+    "  !weather <clear|rain|thunder> - Set the world weather\n"
     "  !help - Show this help message";
     sc_systemChat(client_fd, (char *)help_msg, (uint16_t)sizeof(help_msg) - 1);
     goto cleanup;
@@ -2585,6 +2586,72 @@ int cs_chat (int client_fd) {
         char response[192];
         int resp_len = snprintf(response, sizeof(response), "§7No nether structures found within %d blocks.", radius);
         sc_systemChat(client_fd, response, (uint16_t)resp_len);
+    }
+    goto cleanup;
+  }
+
+  // !weather <clear|rain|thunder> - Set world weather
+  if (!strncmp((char *)recv_buffer, "!weather", 8) && (recv_buffer[8] == '\0' || recv_buffer[8] == ' ')) {
+    int arg_offset = 9;
+    while (arg_offset < 224 && recv_buffer[arg_offset] == ' ') arg_offset++;
+
+    if (recv_buffer[arg_offset] == '\0') {
+      const char usage[] = "§7Usage: !weather <clear|rain|thunder>";
+      sc_systemChat(client_fd, (char *)usage, (uint16_t)sizeof(usage) - 1);
+      goto cleanup;
+    }
+
+    char *arg = (char *)recv_buffer + arg_offset;
+    if (!strncmp(arg, "clear", 5) && (arg[5] == '\0' || arg[5] == ' ')) {
+      world_weather_clear = 1;
+      world_rain_level = 0.0f;
+      world_thunder_level = 0.0f;
+      world_weather_clear_time = 12000 + (int32_t)(fast_rand() % 168000);
+      world_weather_rain_time = 0;
+      world_weather_thunder_time = 0;
+      for (int i = 0; i < MAX_PLAYERS; i++) {
+        if (player_data[i].client_fd == -1) continue;
+        if (player_data[i].flags & 0x20) continue;
+        sc_gameEvent(player_data[i].client_fd, 2, 0.0f); // End rain
+        sc_gameEvent(player_data[i].client_fd, 7, 0.0f); // Rain level
+        sc_gameEvent(player_data[i].client_fd, 8, 0.0f); // Thunder level
+      }
+      sc_systemChat(client_fd, "§aWeather set to clear.", 23);
+    } else if (!strncmp(arg, "rain", 4) && (arg[4] == '\0' || arg[4] == ' ')) {
+      world_weather_clear = 0;
+      world_rain_level = 1.0f;
+      world_thunder_level = 0.0f;
+      world_weather_clear_time = 0;
+      world_weather_rain_time = 12000 + (int32_t)(fast_rand() % 12000);
+      world_weather_thunder_time = 0;
+      for (int i = 0; i < MAX_PLAYERS; i++) {
+        if (player_data[i].client_fd == -1) continue;
+        if (player_data[i].flags & 0x20) continue;
+        sc_gameEvent(player_data[i].client_fd, 1, 0.0f); // Begin rain
+        sc_gameEvent(player_data[i].client_fd, 7, 1.0f); // Rain level
+        sc_gameEvent(player_data[i].client_fd, 8, 0.0f); // Thunder level
+      }
+      sc_systemChat(client_fd, "§aWeather set to rain.", 22);
+    } else if (!strncmp(arg, "thunder", 7) && (arg[7] == '\0' || arg[7] == ' ')) {
+      world_weather_clear = 0;
+      world_rain_level = 1.0f;
+      world_thunder_level = 1.0f;
+      world_weather_clear_time = 0;
+      world_weather_rain_time = 12000 + (int32_t)(fast_rand() % 12000);
+      world_weather_thunder_time = 3600 + (int32_t)(fast_rand() % 12000);
+      if (world_weather_thunder_time > world_weather_rain_time)
+        world_weather_thunder_time = world_weather_rain_time;
+      for (int i = 0; i < MAX_PLAYERS; i++) {
+        if (player_data[i].client_fd == -1) continue;
+        if (player_data[i].flags & 0x20) continue;
+        sc_gameEvent(player_data[i].client_fd, 1, 0.0f); // Begin rain
+        sc_gameEvent(player_data[i].client_fd, 7, 1.0f); // Rain level
+        sc_gameEvent(player_data[i].client_fd, 8, 1.0f); // Thunder level
+      }
+      sc_systemChat(client_fd, "§aWeather set to thunder.", 25);
+    } else {
+      const char usage[] = "§7Usage: !weather <clear|rain|thunder>";
+      sc_systemChat(client_fd, (char *)usage, (uint16_t)sizeof(usage) - 1);
     }
     goto cleanup;
   }

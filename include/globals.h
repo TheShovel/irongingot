@@ -263,6 +263,13 @@ extern uint32_t rng_seed;
 extern uint16_t world_time;
 extern uint32_t server_ticks;
 
+extern float world_rain_level;
+extern float world_thunder_level;
+extern uint8_t world_weather_clear;
+extern int32_t world_weather_clear_time;
+extern int32_t world_weather_rain_time;
+extern int32_t world_weather_thunder_time;
+
 // Fluid update queue for deferred processing
 #define FLUID_QUEUE_SIZE 65536
 #define FLUID_UPDATES_PER_TICK 64

@@ -49,6 +49,13 @@ uint32_t rng_seed = INITIAL_RNG_SEED;
 uint16_t world_time = 0;
 uint32_t server_ticks = 0;
 
+float world_rain_level = 0.0f;
+float world_thunder_level = 0.0f;
+uint8_t world_weather_clear = 1;
+int32_t world_weather_clear_time = 0;
+int32_t world_weather_rain_time = 0;
+int32_t world_weather_thunder_time = 0;
+
 char motd[MOTD_MAX_LEN] = { "A bareiron server" };
 uint8_t motd_len = sizeof("A bareiron server") - 1;
 

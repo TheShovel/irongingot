@@ -810,6 +810,15 @@ int main () {
   terminal_ui_log("World seed (hashed): %s", world_seed_hex);
   terminal_ui_log("RNG seed (hashed): %s", rng_seed_hex);
 
+  // Initialize world weather (start with random clear duration)
+  world_weather_clear = 1;
+  world_rain_level = 0.0f;
+  world_thunder_level = 0.0f;
+  world_weather_clear_time = 12000 + (int32_t)(fast_rand() % 168000);
+  world_weather_rain_time = 0;
+  world_weather_thunder_time = 0;
+  terminal_ui_log("Weather initialized (clear for ~%d seconds)", world_weather_clear_time / 20);
+
   // Initialize world generation
   terminal_ui_log("Initializing world generation...");
 

@@ -639,6 +639,15 @@ void spawnPlayer (PlayerData *player) {
   // Sync client clock time
   sc_updateTime(player->client_fd, world_time);
 
+  // Sync client weather
+  if (world_weather_clear) {
+    sc_gameEvent(player->client_fd, 2, 0.0f);
+  } else {
+    sc_gameEvent(player->client_fd, 1, 0.0f);
+  }
+  sc_gameEvent(player->client_fd, 7, world_rain_level);
+  sc_gameEvent(player->client_fd, 8, world_thunder_level);
+
   #ifdef ENABLE_PLAYER_FLIGHT
   if (GAMEMODE != 1 && GAMEMODE != 3) {
     // Give the player flight (for testing)
@@ -4374,6 +4383,64 @@ void handleServerTick (int64_t time_since_last_tick) {
         player->health ++;
       }
       sc_setHealth(player->client_fd, player->health, player->hunger, player->saturation);
+    }
+  }
+
+  // Weather progression - every ~2 seconds (40 ticks)
+  if (server_ticks % 40 == 0) {
+    uint8_t weather_changed = 0;
+
+    if (world_weather_thunder_time > 0) {
+      world_weather_thunder_time -= 40;
+      if (world_weather_thunder_time <= 0) {
+        world_weather_thunder_time = 0;
+        world_thunder_level = 0.0f;
+        weather_changed = 1;
+      }
+    }
+
+    if (world_weather_rain_time > 0) {
+      world_weather_rain_time -= 40;
+      if (world_weather_rain_time <= 0) {
+        world_weather_rain_time = 0;
+        world_weather_clear = 1;
+        world_rain_level = 0.0f;
+        world_thunder_level = 0.0f;
+        world_weather_thunder_time = 0;
+        world_weather_clear_time = 12000 + (int32_t)(fast_rand() % 168000);
+        weather_changed = 1;
+      }
+    }
+
+    if (world_weather_clear_time > 0) {
+      world_weather_clear_time -= 40;
+      if (world_weather_clear_time <= 0) {
+        world_weather_clear_time = 0;
+        world_weather_clear = 0;
+        world_rain_level = 1.0f;
+        world_weather_rain_time = 12000 + (int32_t)(fast_rand() % 12000);
+        if ((fast_rand() % 4) == 0) {
+          world_thunder_level = 1.0f;
+          world_weather_thunder_time = 3600 + (int32_t)(fast_rand() % 12000);
+          if (world_weather_thunder_time > world_weather_rain_time)
+            world_weather_thunder_time = world_weather_rain_time;
+        }
+        weather_changed = 1;
+      }
+    }
+
+    if (weather_changed) {
+      for (int i = 0; i < MAX_PLAYERS; i++) {
+        if (player_data[i].client_fd == -1) continue;
+        if (player_data[i].flags & 0x20) continue;
+        if (world_weather_clear) {
+          sc_gameEvent(player_data[i].client_fd, 2, 0.0f);
+        } else {
+          sc_gameEvent(player_data[i].client_fd, 1, 0.0f);
+        }
+        sc_gameEvent(player_data[i].client_fd, 7, world_rain_level);
+        sc_gameEvent(player_data[i].client_fd, 8, world_thunder_level);
+      }
     }
   }
 
