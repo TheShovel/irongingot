@@ -215,7 +215,7 @@
 #define E_VILLAGER 134
 #define E_PIGLIN 96
 #define E_ZOMBIE 145
-#define E_ENDERMAN 36
+#define E_ENDERMAN 39
 // Fish entity IDs for protocol 772 (1.21.8)
 #define E_COD 26
 #define E_SALMON 105
