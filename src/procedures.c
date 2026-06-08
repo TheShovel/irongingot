@@ -5180,27 +5180,24 @@ void handleServerTick (int64_t time_since_last_tick) {
       // Decrement attack cooldown timer
       if (mob_data[i].move_timer > 0) mob_data[i].move_timer--;
 
-      // Only move towards player if within vision range
-      if (dist_to_player > vision_range) {
-        continue;
-      }
+      // Move towards the closest player if within vision range
+      if (dist_to_player <= vision_range) {
+        double dx = closest_player->x - old_x;
+        double dz = closest_player->z - old_z;
+        double len = sqrt(dx * dx + dz * dz);
 
-      // Move towards the closest player with persistent direction
-      double dx = closest_player->x - old_x;
-      double dz = closest_player->z - old_z;
-      double len = sqrt(dx * dx + dz * dz);
+        if (len > 0.001) {
+          // Normalize and scale movement for smooth pursuit
+          double move_x = (dx / len) * zombie_move;
+          double move_z = (dz / len) * zombie_move;
 
-      if (len > 0.001) {
-        // Normalize and scale movement for smooth pursuit
-        double move_x = (dx / len) * zombie_move;
-        double move_z = (dz / len) * zombie_move;
+          new_x += move_x;
+          new_z += move_z;
 
-        new_x += move_x;
-        new_z += move_z;
-
-        // Calculate yaw from direction
-        double angle = atan2(dz, dx) * 256.0 / (2.0 * 3.14159265358979);
-        yaw = (uint8_t)(((int)(angle + 0.5) - 75) & 255);
+          // Calculate yaw from direction
+          double angle = atan2(dz, dx) * 256.0 / (2.0 * 3.14159265358979);
+          yaw = (uint8_t)(((int)(angle + 0.5) - 75) & 255);
+        }
       }
 
     }
