@@ -3358,13 +3358,24 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
 
   // Handle throwable items when no block is targeted
   if (face == 255 && *item == I_ender_pearl && *count > 0) {
+    int owner_idx = getPlayerIndexByPointer(player);
+    // Don't allow throwing if player already has an active ender pearl
+    int has_active = 0;
+    for (int i = 0; i < MAX_PROJECTILES; i++) {
+      if (projectile_data[i].active &&
+          projectile_data[i].type == E_ENDER_PEARL &&
+          projectile_data[i].owner_index == owner_idx) {
+        has_active = 1;
+        break;
+      }
+    }
+    if (has_active) return;
     // Find a free projectile slot
     int slot = -1;
     for (int i = 0; i < MAX_PROJECTILES; i++) {
       if (!projectile_data[i].active) { slot = i; break; }
     }
     if (slot >= 0) {
-      int owner_idx = getPlayerIndexByPointer(player);
       ProjectileData *p = &projectile_data[slot];
       p->active = 1;
       p->type = E_ENDER_PEARL;
@@ -5431,6 +5442,11 @@ void handleServerTick (int64_t time_since_last_tick) {
         owner->x = (short)p->x;
         owner->y = (int16_t)p->y;
         owner->z = (short)p->z;
+
+        // Update center chunk so the client loads the correct area
+        short _cx = div_floor(owner->x, 16);
+        short _cz = div_floor(owner->z, 16);
+        sc_setCenterChunk(owner->client_fd, _cx, _cz);
 
         // Send Synchronize Player Position to the owner (requires client confirmation)
         sc_synchronizePlayerPosition(
