@@ -4871,7 +4871,7 @@ void handleServerTick (int64_t time_since_last_tick) {
       if (dist_sq < 256.0) {
         double angle_rad = atan2(dz, dx);
         int16_t target_yaw = (int16_t)(angle_rad * 128.0 / 3.14159265358979);
-        target_yaw = (uint8_t)((target_yaw - 75) & 255);
+        target_yaw = (uint8_t)((target_yaw - 64) & 255);
         uint8_t player_yaw = (uint8_t)(int8_t)closest_player->yaw;
         int16_t diff = (int16_t)((int16_t)player_yaw - target_yaw);
         if (diff > 127) diff -= 256;
@@ -5074,7 +5074,7 @@ void handleServerTick (int64_t time_since_last_tick) {
               mob_data[i].move_dz = (dz / len) * 0.2;
               // Calculate yaw from flee direction
               double angle = atan2(dz, dx) * 256.0 / (2.0 * 3.14159265358979);
-              mob_data[i].yaw_store = (uint8_t)(((int)(angle + 0.5) - 75) & 255);
+              mob_data[i].yaw_store = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
             } else {
               // Player is very close, pick random direction to RUN
               if ((dir_rand >> 2) & 1) {
@@ -5196,7 +5196,7 @@ void handleServerTick (int64_t time_since_last_tick) {
 
           // Calculate yaw from direction
           double angle = atan2(dz, dx) * 256.0 / (2.0 * 3.14159265358979);
-          yaw = (uint8_t)(((int)(angle + 0.5) - 75) & 255);
+          yaw = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
         }
       }
 
