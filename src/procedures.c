@@ -822,7 +822,15 @@ void broadcastMobMetadata (int client_fd, int entity_id) {
 
       break;
 
-
+    case E_ENDERMAN:
+      metadata = malloc(sizeof *metadata);
+      metadata[0] = (EntityData){
+        17,                    // Enderman screaming flag
+        8,                     // Type (Boolean)
+        { (uint8_t)(mob->anger_timer > 0 ? 0x01 : 0x00) },
+      };
+      length = 1;
+      break;
 
     default: return;
   }
@@ -4505,6 +4513,13 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
       mob->anger_timer = 40; // 2 seconds of anger (40 ticks at 20 TPS)
     }
 
+    // Endermen get angry when hit by a player
+    if (attacker_id > 0 && mob->type == E_ENDERMAN) {
+      mob->anger_timer = 40 * TICKS_PER_SECOND; // 40 seconds of anger
+      mob->move_timer = 0;
+      broadcastMobMetadata(-1, entity_id);
+    }
+
     // Process health change on the server
     if (mob_health <= damage) {
 
@@ -4815,11 +4830,14 @@ void handleServerTick (int64_t time_since_last_tick) {
 
     uint32_t r = fast_rand();
 
+    uint8_t enderman_was_angry = (mob_data[i].type == E_ENDERMAN && mob_data[i].anger_timer > 0);
+
     if (mob_data[i].anger_timer > 0) mob_data[i].anger_timer --;
 
     uint8_t neutral_roaming = (
       (mob_data[i].type == 148 && mob_data[i].anger_timer <= 0) ||
-      (mob_data[i].type == E_PIGLIN && mob_data[i].anger_timer <= 0)
+      (mob_data[i].type == E_PIGLIN && mob_data[i].anger_timer <= 0) ||
+      (mob_data[i].type == E_ENDERMAN && mob_data[i].anger_timer <= 0)
     );
     uint8_t roaming = passive || neutral_roaming;
 
@@ -4843,6 +4861,50 @@ void handleServerTick (int64_t time_since_last_tick) {
         closest_dist_double = curr_dist;
         closest_player = &player_data[j];
       }
+    }
+
+    // Enderman stare mechanic: they agro when you look at them
+    if (mob_data[i].type == E_ENDERMAN && closest_player != NULL) {
+      double dx = mob_data[i].x - closest_player->x;
+      double dz = mob_data[i].z - closest_player->z;
+      double dist_sq = dx * dx + dz * dz;
+      if (dist_sq < 4096.0) {
+        double angle_rad = atan2(dz, dx);
+        int16_t target_yaw = (int16_t)(angle_rad * 128.0 / 3.14159265358979);
+        target_yaw = (uint8_t)((target_yaw - 75) & 255);
+        uint8_t player_yaw = (uint8_t)(int8_t)closest_player->yaw;
+        int16_t diff = (int16_t)((int16_t)player_yaw - target_yaw);
+        if (diff > 127) diff -= 256;
+        if (diff < -128) diff += 256;
+        uint8_t staring = 0;
+        if (abs(diff) <= 30) {
+          double dy = mob_data[i].y - (closest_player->y + 1.6);
+          double horiz_dist = sqrt(dist_sq);
+          if (horiz_dist > 0.5) {
+            double pitch_rad = atan2(dy, horiz_dist);
+            int8_t target_pitch = (int8_t)(pitch_rad * 128.0 / 3.14159265358979);
+            int16_t pitch_diff = (int16_t)((int16_t)(int8_t)closest_player->pitch - (int16_t)target_pitch);
+            if (abs((int)pitch_diff) <= 20) staring = 1;
+          }
+        }
+        if (staring) {
+          if (mob_data[i].anger_timer <= 0) {
+            mob_data[i].anger_timer--;
+            if (mob_data[i].anger_timer <= -(int)(1.0f * TICKS_PER_SECOND)) {
+              mob_data[i].anger_timer = 30 * TICKS_PER_SECOND;
+              mob_data[i].move_timer = 0;
+            }
+          }
+        } else if (mob_data[i].anger_timer < 0) {
+          mob_data[i].anger_timer = 0;
+        }
+      }
+    }
+
+    // Broadcast enderman anger metadata on state change
+    if (mob_data[i].type == E_ENDERMAN) {
+      uint8_t is_angry = (mob_data[i].anger_timer > 0);
+      if (is_angry != enderman_was_angry) broadcastMobMetadata(-1, entity_id);
     }
 
     // If no players are online, skip AI updates (mobs stay idle)
@@ -5095,6 +5157,13 @@ void handleServerTick (int64_t time_since_last_tick) {
       // Zombified piglins should not acquire/chase from as far away as zombies.
       double vision_range = mob_data[i].type == 148 ? 10.0 : 16.0;
       double attack_range = mob_data[i].type == 148 ? 2.0 : 3.0;
+
+      // Endermen are extremely fast with long vision
+      if (mob_data[i].type == E_ENDERMAN) {
+        zombie_move = move_amount * 6.0;
+        vision_range = 64.0;
+        attack_range = 3.0;
+      }
 
       // If we're within attack range, hurt the player
       if (dist_to_player < attack_range && y_diff < 2.0) {
@@ -5524,6 +5593,7 @@ ssize_t writeEntityData (int client_fd, EntityData *data) {
 
   switch (data->type) {
     case 0: // Byte
+    case 8: // Boolean (written as a single byte)
       return writeByte(client_fd, data->value.byte);
     case 21: // Pose
       writeVarInt(client_fd, data->value.pose);
