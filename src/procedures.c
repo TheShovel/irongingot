@@ -639,14 +639,20 @@ void spawnPlayer (PlayerData *player) {
   // Sync client clock time
   sc_updateTime(player->client_fd, world_time);
 
-  // Sync client weather
-  if (world_weather_clear) {
-    sc_gameEvent(player->client_fd, 2, 0.0f);
+  // Sync client weather (only Overworld has weather)
+  if (player->dimension == DIMENSION_OVERWORLD) {
+    if (world_weather_clear) {
+      sc_gameEvent(player->client_fd, 2, 0.0f);
+    } else {
+      sc_gameEvent(player->client_fd, 1, 0.0f);
+    }
+    sc_gameEvent(player->client_fd, 7, world_rain_level);
+    sc_gameEvent(player->client_fd, 8, world_thunder_level);
   } else {
-    sc_gameEvent(player->client_fd, 1, 0.0f);
+    sc_gameEvent(player->client_fd, 2, 0.0f);
+    sc_gameEvent(player->client_fd, 7, 0.0f);
+    sc_gameEvent(player->client_fd, 8, 0.0f);
   }
-  sc_gameEvent(player->client_fd, 7, world_rain_level);
-  sc_gameEvent(player->client_fd, 8, world_thunder_level);
 
   #ifdef ENABLE_PLAYER_FLIGHT
   if (GAMEMODE != 1 && GAMEMODE != 3) {
@@ -4433,13 +4439,19 @@ void handleServerTick (int64_t time_since_last_tick) {
       for (int i = 0; i < MAX_PLAYERS; i++) {
         if (player_data[i].client_fd == -1) continue;
         if (player_data[i].flags & 0x20) continue;
-        if (world_weather_clear) {
+        if (player_data[i].dimension != DIMENSION_OVERWORLD) {
           sc_gameEvent(player_data[i].client_fd, 2, 0.0f);
+          sc_gameEvent(player_data[i].client_fd, 7, 0.0f);
+          sc_gameEvent(player_data[i].client_fd, 8, 0.0f);
+        } else if (world_weather_clear) {
+          sc_gameEvent(player_data[i].client_fd, 2, 0.0f);
+          sc_gameEvent(player_data[i].client_fd, 7, 0.0f);
+          sc_gameEvent(player_data[i].client_fd, 8, 0.0f);
         } else {
           sc_gameEvent(player_data[i].client_fd, 1, 0.0f);
+          sc_gameEvent(player_data[i].client_fd, 7, world_rain_level);
+          sc_gameEvent(player_data[i].client_fd, 8, world_thunder_level);
         }
-        sc_gameEvent(player_data[i].client_fd, 7, world_rain_level);
-        sc_gameEvent(player_data[i].client_fd, 8, world_thunder_level);
       }
     }
   }

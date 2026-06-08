@@ -2612,9 +2612,9 @@ int cs_chat (int client_fd) {
       for (int i = 0; i < MAX_PLAYERS; i++) {
         if (player_data[i].client_fd == -1) continue;
         if (player_data[i].flags & 0x20) continue;
-        sc_gameEvent(player_data[i].client_fd, 2, 0.0f); // End rain
-        sc_gameEvent(player_data[i].client_fd, 7, 0.0f); // Rain level
-        sc_gameEvent(player_data[i].client_fd, 8, 0.0f); // Thunder level
+        sc_gameEvent(player_data[i].client_fd, 2, 0.0f);
+        sc_gameEvent(player_data[i].client_fd, 7, 0.0f);
+        sc_gameEvent(player_data[i].client_fd, 8, 0.0f);
       }
       sc_systemChat(client_fd, "§aWeather set to clear.", 23);
     } else if (!strncmp(arg, "rain", 4) && (arg[4] == '\0' || arg[4] == ' ')) {
@@ -2627,9 +2627,15 @@ int cs_chat (int client_fd) {
       for (int i = 0; i < MAX_PLAYERS; i++) {
         if (player_data[i].client_fd == -1) continue;
         if (player_data[i].flags & 0x20) continue;
-        sc_gameEvent(player_data[i].client_fd, 1, 0.0f); // Begin rain
-        sc_gameEvent(player_data[i].client_fd, 7, 1.0f); // Rain level
-        sc_gameEvent(player_data[i].client_fd, 8, 0.0f); // Thunder level
+        if (player_data[i].dimension != DIMENSION_OVERWORLD) {
+          sc_gameEvent(player_data[i].client_fd, 2, 0.0f);
+          sc_gameEvent(player_data[i].client_fd, 7, 0.0f);
+          sc_gameEvent(player_data[i].client_fd, 8, 0.0f);
+        } else {
+          sc_gameEvent(player_data[i].client_fd, 1, 0.0f);
+          sc_gameEvent(player_data[i].client_fd, 7, 1.0f);
+          sc_gameEvent(player_data[i].client_fd, 8, 0.0f);
+        }
       }
       sc_systemChat(client_fd, "§aWeather set to rain.", 22);
     } else if (!strncmp(arg, "thunder", 7) && (arg[7] == '\0' || arg[7] == ' ')) {
@@ -2644,9 +2650,15 @@ int cs_chat (int client_fd) {
       for (int i = 0; i < MAX_PLAYERS; i++) {
         if (player_data[i].client_fd == -1) continue;
         if (player_data[i].flags & 0x20) continue;
-        sc_gameEvent(player_data[i].client_fd, 1, 0.0f); // Begin rain
-        sc_gameEvent(player_data[i].client_fd, 7, 1.0f); // Rain level
-        sc_gameEvent(player_data[i].client_fd, 8, 1.0f); // Thunder level
+        if (player_data[i].dimension != DIMENSION_OVERWORLD) {
+          sc_gameEvent(player_data[i].client_fd, 2, 0.0f);
+          sc_gameEvent(player_data[i].client_fd, 7, 0.0f);
+          sc_gameEvent(player_data[i].client_fd, 8, 0.0f);
+        } else {
+          sc_gameEvent(player_data[i].client_fd, 1, 0.0f);
+          sc_gameEvent(player_data[i].client_fd, 7, 1.0f);
+          sc_gameEvent(player_data[i].client_fd, 8, 1.0f);
+        }
       }
       sc_systemChat(client_fd, "§aWeather set to thunder.", 25);
     } else {
