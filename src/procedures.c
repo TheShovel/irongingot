@@ -4868,7 +4868,7 @@ void handleServerTick (int64_t time_since_last_tick) {
       double dx = mob_data[i].x - closest_player->x;
       double dz = mob_data[i].z - closest_player->z;
       double dist_sq = dx * dx + dz * dz;
-      if (dist_sq < 4096.0) {
+      if (dist_sq < 256.0) {
         double angle_rad = atan2(dz, dx);
         int16_t target_yaw = (int16_t)(angle_rad * 128.0 / 3.14159265358979);
         target_yaw = (uint8_t)((target_yaw - 75) & 255);
