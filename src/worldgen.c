@@ -39,6 +39,12 @@
 #ifndef B_end_stone
 #define B_end_stone B_stone
 #endif
+#ifndef B_mossy_cobblestone
+#define B_mossy_cobblestone B_cobblestone
+#endif
+#ifndef B_spawner
+#define B_spawner B_cobweb
+#endif
 #ifndef W_the_end
 #define W_the_end W_plains
 #endif
@@ -765,6 +771,176 @@ static uint16_t getMineshaftBlockAt(int x, int y, int z) {
 }
 
 // ============================================================
+// Dungeons
+// ============================================================
+// Small underground cobblestone rooms with a central spawner and loot chests.
+// Cells are spaced widely enough that each dungeon fits entirely within its own
+// cell, so lookup only needs to inspect the cell containing a queried block.
+#define DUNGEON_SPACING 96
+#define DUNGEON_MARGIN 24
+#define DUNGEON_NONE 0xFFFF
+
+static uint8_t getDungeonCell(int cell_x, int cell_z, int *center_x, int *center_z, int *floor_y, uint64_t *out_key) {
+  uint64_t key = splitmix64(
+    ((uint64_t)(uint32_t)cell_x * 0xD1B54A32D192ED03ULL) ^
+    ((uint64_t)(uint32_t)cell_z * 0x94D049BB133111EBULL) ^
+    ((uint64_t)(uint32_t)world_seed * 0x9E3779B97F4A7C15ULL) ^
+    0xA0D6E0B51E5A7C3FULL
+  );
+
+  // Roughly one dungeon every ~135 blocks on average.
+  if (key & 1ULL) return 0;
+
+  int range = DUNGEON_SPACING - DUNGEON_MARGIN * 2;
+  *center_x = cell_x * DUNGEON_SPACING + DUNGEON_MARGIN + (int)((key >> 8) % (uint64_t)range);
+  *center_z = cell_z * DUNGEON_SPACING + DUNGEON_MARGIN + (int)((key >> 24) % (uint64_t)range);
+
+  int surface = getHeightAt(*center_x, *center_z);
+  int max_floor_y = surface - 12;
+  if (max_floor_y < 8) return 0;
+
+  int candidate_y = 10 + (int)((key >> 40) % 36); // Y 10..45 before surface clamping.
+  if (candidate_y > max_floor_y) candidate_y = max_floor_y;
+  if (candidate_y > 50) candidate_y = 50;
+  if (candidate_y < 8) candidate_y = 8;
+
+  *floor_y = candidate_y;
+  if (out_key != NULL) *out_key = key;
+  return 1;
+}
+
+static uint16_t getDungeonWallBlockAt(int x, int y, int z, uint64_t key) {
+  uint64_t h = splitmix64(
+    ((uint64_t)(uint32_t)x * 0x632BE59BD9B4E019ULL) ^
+    ((uint64_t)(uint32_t)y * 0x85157AF5ULL) ^
+    ((uint64_t)(uint32_t)z * 0x9E3779B1ULL) ^
+    key
+  );
+
+  if ((h & 7ULL) == 0) return B_mossy_cobblestone;
+  if ((h & 31ULL) == 1) return B_stone;
+  return B_cobblestone;
+}
+
+static uint8_t getDungeonChestAtRelative(int rx, int ry, int rz, int half_x, int half_z, uint64_t key, uint8_t *direction, uint8_t *variant) {
+  if (ry != 1) return 0;
+
+  if (rx == -half_x + 1 && rz == -half_z + 1) {
+    if (direction != NULL) *direction = 1; // south-facing in the chest state order used by chunk packing.
+    if (variant != NULL) *variant = 0;
+    return 1;
+  }
+
+  // Most dungeons get a second chest in the opposite corner.
+  if (((key >> 50) & 3ULL) != 0 && rx == half_x - 1 && rz == half_z - 1) {
+    if (direction != NULL) *direction = 0; // north-facing.
+    if (variant != NULL) *variant = 1;
+    return 1;
+  }
+
+  return 0;
+}
+
+static uint16_t getDungeonBlockAt(int x, int y, int z) {
+  if (y < 8 || y > 58) return DUNGEON_NONE;
+
+  int cell_x = div_floor(x, DUNGEON_SPACING);
+  int cell_z = div_floor(z, DUNGEON_SPACING);
+  int cx, cz, floor_y;
+  uint64_t key;
+  if (!getDungeonCell(cell_x, cell_z, &cx, &cz, &floor_y, &key)) return DUNGEON_NONE;
+
+  int half_x = 4 + (int)((key >> 3) & 1ULL);
+  int half_z = 4 + (int)((key >> 4) & 1ULL);
+  int rx = x - cx;
+  int ry = y - floor_y;
+  int rz = z - cz;
+
+  if (rx < -half_x || rx > half_x || rz < -half_z || rz > half_z || ry < 0 || ry > 5) return DUNGEON_NONE;
+
+  uint8_t chest_dir = 0;
+  uint8_t chest_variant = 0;
+  if (getDungeonChestAtRelative(rx, ry, rz, half_x, half_z, key, &chest_dir, &chest_variant)) {
+    (void)chest_variant;
+    return 0x8000 | B_chest | ((uint16_t)chest_dir << 9);
+  }
+
+  if (ry == 1 && rx == 0 && rz == 0) return B_spawner;
+
+  uint8_t wall = (ry == 0 || ry == 5 || rx == -half_x || rx == half_x || rz == -half_z || rz == half_z);
+  if (wall) {
+    // A couple of arched openings let caves/mineshafts naturally connect.
+    if (ry >= 1 && ry <= 3) {
+      if (rx == 0 && rz == -half_z && ((key >> 52) & 1ULL)) return B_air;
+      if (rx == 0 && rz ==  half_z && ((key >> 53) & 1ULL)) return B_air;
+      if (rz == 0 && rx == -half_x && ((key >> 54) & 1ULL)) return B_air;
+      if (rz == 0 && rx ==  half_x && ((key >> 55) & 1ULL)) return B_air;
+    }
+    return getDungeonWallBlockAt(x, y, z, key);
+  }
+
+  if (ry >= 2 && ry <= 4) {
+    uint64_t h = splitmix64(
+      ((uint64_t)(uint32_t)x * 0x45D9F3BULL) ^
+      ((uint64_t)(uint32_t)y * 0x27D4EB2DULL) ^
+      ((uint64_t)(uint32_t)z * 0x119DE1F3ULL) ^
+      key
+    );
+    if ((h & 0x7F) == 0x2A) return B_cobweb;
+  }
+
+  return B_air;
+}
+
+uint8_t getDungeonChestInfo(short x, uint8_t y, short z, uint8_t *direction, uint8_t *variant) {
+  int cell_x = div_floor(x, DUNGEON_SPACING);
+  int cell_z = div_floor(z, DUNGEON_SPACING);
+  int cx, cz, floor_y;
+  uint64_t key;
+  if (!getDungeonCell(cell_x, cell_z, &cx, &cz, &floor_y, &key)) return 0;
+
+  int half_x = 4 + (int)((key >> 3) & 1ULL);
+  int half_z = 4 + (int)((key >> 4) & 1ULL);
+  int rx = (int)x - cx;
+  int ry = (int)y - floor_y;
+  int rz = (int)z - cz;
+
+  if (rx < -half_x || rx > half_x || rz < -half_z || rz > half_z || ry < 0 || ry > 5) return 0;
+  return getDungeonChestAtRelative(rx, ry, rz, half_x, half_z, key, direction, variant);
+}
+
+uint8_t getNearbyDungeonSpawners(int px, int py, int pz, int radius, DungeonSpawnerInfo *out, uint8_t max_spawners) {
+  if (out == NULL || max_spawners == 0 || radius <= 0) return 0;
+
+  int min_cell_x = div_floor(px - radius - DUNGEON_MARGIN, DUNGEON_SPACING);
+  int max_cell_x = div_floor(px + radius + DUNGEON_MARGIN, DUNGEON_SPACING);
+  int min_cell_z = div_floor(pz - radius - DUNGEON_MARGIN, DUNGEON_SPACING);
+  int max_cell_z = div_floor(pz + radius + DUNGEON_MARGIN, DUNGEON_SPACING);
+
+  uint8_t count = 0;
+  for (int cz_cell = min_cell_z; cz_cell <= max_cell_z && count < max_spawners; cz_cell++) {
+    for (int cx_cell = min_cell_x; cx_cell <= max_cell_x && count < max_spawners; cx_cell++) {
+      int cx, cz, floor_y;
+      uint64_t key;
+      if (!getDungeonCell(cx_cell, cz_cell, &cx, &cz, &floor_y, &key)) continue;
+      (void)key;
+
+      int sy = floor_y + 1;
+      if (abs(cx - px) > radius || abs(cz - pz) > radius) continue;
+      if (abs(sy - py) > 12) continue;
+
+      out[count].x = (short)cx;
+      out[count].y = (uint8_t)sy;
+      out[count].z = (short)cz;
+      out[count].mob_type = E_ZOMBIE;
+      count++;
+    }
+  }
+
+  return count;
+}
+
+// ============================================================
 // Strongholds
 // ============================================================
 // Deterministic underground strongholds. Each stronghold fits fully inside its
@@ -1130,6 +1306,9 @@ uint16_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor
 
   uint16_t stronghold_block = getStrongholdBlockAt(x, y, z);
   if (stronghold_block != STRONGHOLD_NONE) return stronghold_block;
+
+  uint16_t dungeon_block = getDungeonBlockAt(x, y, z);
+  if (dungeon_block != DUNGEON_NONE) return dungeon_block;
 
   if (y >= 64 && y >= height) switch (anchor.biome) {
     case W_plains: { // Generate oak trees and grass in plains

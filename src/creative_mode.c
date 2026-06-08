@@ -341,6 +341,7 @@ static const CreativeItem creative_items[] = {
   {I_ghast_tear, "Ghast Tear"},
   {I_nether_star, "Nether Star"},
   {I_nether_wart, "Nether Wart"},
+  {I_enderman_spawn_egg, "Enderman Spawn Egg"},
 };
 
 #define CREATIVE_ITEM_COUNT (sizeof(creative_items) / sizeof(CreativeItem))

@@ -26,6 +26,13 @@ typedef struct {
   uint8_t variant;
 } ChunkFeature;
 
+typedef struct {
+  short x;
+  uint8_t y;
+  short z;
+  uint8_t mob_type;
+} DungeonSpawnerInfo;
+
 uint32_t getChunkHash (short x, short z);
 uint8_t getChunkBiome (short x, short z);
 uint8_t getHeightAt (int x, int z);
@@ -40,6 +47,8 @@ uint32_t getBiomeKeywordMask(uint8_t biome_id);
 uint32_t getQueryKeywordMask(const char* name, uint8_t name_len);
 uint8_t getBiomeAtBlockCoords(int x, int z);
 uint8_t getVillageHousePositions(int x, int z, short *house_x, short *house_z, uint8_t max_houses);
+uint8_t getDungeonChestInfo(short x, uint8_t y, short z, uint8_t *direction, uint8_t *variant);
+uint8_t getNearbyDungeonSpawners(int px, int py, int pz, int radius, DungeonSpawnerInfo *out, uint8_t max_spawners);
 
 extern WORLDGEN_THREAD_LOCAL uint16_t chunk_section[4096];
 uint16_t buildChunkSection (int cx, int cy, int cz, uint8_t dimension);

@@ -25,6 +25,10 @@
 #include "creative_mode.h"
 #include "terminal_ui.h"
 
+#ifndef B_spawner
+#define B_spawner B_cobweb
+#endif
+
 // World spawn point (block coordinates)
 #define SPAWN_BLOCK_X 8
 #define SPAWN_BLOCK_Z 8
@@ -2762,6 +2766,56 @@ static uint8_t tryCreatePortal(short x, uint8_t y, short z, uint8_t dimension) {
          tryCreatePortalInPlane(x, y, z, 0, 1, dimension);
 }
 
+static void syncDimensionEntities(PlayerData *player, uint8_t old_dim) {
+  // 1. Tell other players in the OLD dimension to remove this player
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (player_data[i].client_fd == -1 || player_data[i].client_fd == player->client_fd) continue;
+    if (player_data[i].dimension == old_dim) {
+      sc_removeEntity(player_data[i].client_fd, player->client_fd);
+    }
+  }
+
+  // 2. Tell other players in the NEW dimension to spawn this player
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (player_data[i].client_fd == -1 || player_data[i].client_fd == player->client_fd) continue;
+    if (player_data[i].dimension == player->dimension) {
+      sc_spawnEntityPlayer(player_data[i].client_fd, *player);
+      sendPlayerMetadata(player_data[i].client_fd, player);
+      sendPlayerEquipment(player_data[i].client_fd, player);
+    }
+  }
+
+  // 3. Send all players and mobs in the NEW dimension to the player
+  // (Existing players)
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (player_data[i].client_fd == -1 || player_data[i].client_fd == player->client_fd) continue;
+    if (player_data[i].flags & 0x20) continue;
+    if (player_data[i].dimension == player->dimension) {
+      sc_spawnEntityPlayer(player->client_fd, player_data[i]);
+      sendPlayerMetadata(player->client_fd, &player_data[i]);
+      sendPlayerEquipment(player->client_fd, &player_data[i]);
+    }
+  }
+
+  // (Mobs)
+  uint8_t uuid[16];
+  uint32_t r = fast_rand();
+  memcpy(uuid, &r, 4);
+  memset(uuid + 4, 0, 12);
+  for (int i = 0; i < MAX_MOBS; i++) {
+    if (mob_data[i].type == 0) continue;
+    if ((mob_data[i].data & 31) == 0) continue;
+    if (mob_data[i].dimension != player->dimension) continue;
+    memcpy(uuid + 4, &i, 4);
+    sc_spawnEntity(
+      player->client_fd, -2 - i, uuid,
+      mob_data[i].type, mob_data[i].x, mob_data[i].y, mob_data[i].z,
+      0, 0
+    );
+    broadcastMobMetadata(player->client_fd, -2 - i);
+  }
+}
+
 static void switchPlayerToDimension(PlayerData *player, uint8_t new_dim) {
   uint8_t old_dim = player->dimension;
   if (old_dim == new_dim) return;
@@ -2935,6 +2989,8 @@ static void switchPlayerToDimension(PlayerData *player, uint8_t new_dim) {
   sc_synchronizePlayerPosition(player->client_fd,
     (float)player->x + 0.5f, (float)player->y, (float)player->z + 0.5f,
     player->yaw * 180.0f / 127.0f, player->pitch * 90.0f / 127.0f);
+
+  syncDimensionEntities(player, old_dim);
 }
 
 void switchPlayerDimension(PlayerData *player) {
@@ -2945,16 +3001,106 @@ void switchPlayerDimension(PlayerData *player) {
 void handlePortalTravel(PlayerData *player) {
   if (player->client_fd == -1) return;
   if (player->flags & 0x20) return;
-  if (server_ticks % 5 != 0) return;
 
-  uint16_t block = getBlockAt2(player->x, player->y, player->z, player->dimension);
-  if (block == B_nether_portal) {
+  uint16_t block_feet = getBlockAt2(player->x, player->y, player->z, player->dimension);
+  uint16_t block_waist = getBlockAt2(player->x, player->y + 1, player->z, player->dimension);
+
+  if (block_feet == B_nether_portal || block_waist == B_nether_portal) {
     switchPlayerDimension(player);
-  } else if (player->dimension == DIMENSION_OVERWORLD && block == B_end_portal) {
+  } else if (player->dimension == DIMENSION_OVERWORLD && (block_feet == B_end_portal || block_waist == B_end_portal)) {
     switchPlayerToDimension(player, DIMENSION_END);
-  } else if (player->dimension == DIMENSION_END && block == B_end_portal) {
+  } else if (player->dimension == DIMENSION_END && (block_feet == B_end_portal || block_waist == B_end_portal)) {
     // Exit portal in the End takes player back to overworld
     switchPlayerToDimension(player, DIMENSION_OVERWORLD);
+  }
+}
+
+typedef struct {
+  uint16_t item;
+  uint8_t min_count;
+  uint8_t max_count;
+  uint8_t weight;
+} ChestLootEntry;
+
+static uint8_t chestLootSlotEmpty(uint8_t *slots, uint8_t slot) {
+  uint16_t item = 0;
+  uint8_t count = 0;
+  memcpy(&item, slots + slot * 3, sizeof(item));
+  memcpy(&count, slots + slot * 3 + 2, sizeof(count));
+  return item == 0 || count == 0;
+}
+
+static void writeChestLootSlot(uint8_t *slots, uint8_t slot, uint16_t item, uint8_t count) {
+  memcpy(slots + slot * 3, &item, sizeof(item));
+  memcpy(slots + slot * 3 + 2, &count, sizeof(count));
+}
+
+static const ChestLootEntry *pickChestLootEntry(const ChestLootEntry *entries, size_t entry_count, uint64_t *seed) {
+  uint16_t total_weight = 0;
+  for (size_t i = 0; i < entry_count; i++) total_weight += entries[i].weight;
+  if (total_weight == 0) return NULL;
+
+  *seed = splitmix64(*seed);
+  uint16_t roll = (uint16_t)(*seed % total_weight);
+  for (size_t i = 0; i < entry_count; i++) {
+    if (roll < entries[i].weight) return &entries[i];
+    roll -= entries[i].weight;
+  }
+  return &entries[entry_count - 1];
+}
+
+static void addChestLootStack(uint8_t *slots, const ChestLootEntry *entry, uint64_t *seed) {
+  if (entry == NULL || entry->item == 0) return;
+
+  *seed = splitmix64(*seed);
+  uint8_t count_range = (entry->max_count >= entry->min_count) ? (entry->max_count - entry->min_count + 1) : 1;
+  uint8_t count = entry->min_count + (uint8_t)(*seed % count_range);
+
+  *seed = splitmix64(*seed);
+  uint8_t start_slot = (uint8_t)(*seed % 27);
+  for (uint8_t attempt = 0; attempt < 27; attempt++) {
+    uint8_t slot = (uint8_t)((start_slot + attempt) % 27);
+    if (!chestLootSlotEmpty(slots, slot)) continue;
+    writeChestLootSlot(slots, slot, entry->item, count);
+    return;
+  }
+}
+
+static void populateDungeonChestLoot(uint8_t *slots, short x, int16_t y, short z, uint8_t variant) {
+  uint64_t seed = splitmix64(
+    ((uint64_t)(uint16_t)x << 48) ^
+    ((uint64_t)(uint16_t)z << 32) ^
+    ((uint64_t)(uint16_t)y << 16) ^
+    ((uint64_t)variant << 8) ^
+    (uint64_t)world_seed ^
+    0xD06E0BADC0FFEEULL
+  );
+
+  static const ChestLootEntry guaranteed[] = {
+    { I_diamond, 1, 2, 5 },
+    { I_emerald, 2, 5, 5 },
+  };
+
+  static const ChestLootEntry loot_table[] = {
+    { I_bread, 2, 6, 10 },
+    { I_wheat, 3, 8, 8 },
+    { I_string, 2, 7, 8 },
+    { I_bone, 2, 8, 8 },
+    { I_arrow, 4, 12, 8 },
+    { I_coal, 3, 10, 7 },
+    { I_redstone, 3, 9, 6 },
+    { I_lapis_lazuli, 2, 6, 5 },
+    { I_iron_ingot, 1, 5, 7 },
+    { I_gold_ingot, 1, 4, 5 },
+    { I_bucket, 1, 1, 3 },
+  };
+
+  addChestLootStack(slots, pickChestLootEntry(guaranteed, sizeof(guaranteed) / sizeof(guaranteed[0]), &seed), &seed);
+
+  seed = splitmix64(seed);
+  uint8_t rolls = 5 + (uint8_t)(seed % 5); // 5..9 additional stacks.
+  for (uint8_t i = 0; i < rolls; i++) {
+    addChestLootStack(slots, pickChestLootEntry(loot_table, sizeof(loot_table) / sizeof(loot_table[0]), &seed), &seed);
   }
 }
 
@@ -3007,7 +3153,15 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
         break;
       }
       if (chest_idx < 0) {
-        // Village chest — create block_changes entry on first interaction
+        // Generated chest — create block_changes entry on first interaction.
+        uint8_t dungeon_direction = 0;
+        uint8_t dungeon_variant = 0;
+        uint8_t is_dungeon_chest = (
+          player->dimension == DIMENSION_OVERWORLD &&
+          y >= 0 && y < 256 &&
+          getDungeonChestInfo(x, (uint8_t)y, z, &dungeon_direction, &dungeon_variant)
+        );
+
         pthread_mutex_lock(&block_changes_mutex);
         int slots_needed = 15;
         int last_real = -1;
@@ -3032,25 +3186,30 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
           block_changes[base].x = x; block_changes[base].y = y; block_changes[base].z = z;
           block_changes[base].block = B_chest; block_changes[base].dimension = player->dimension;
           memset(&block_changes[base + 1], 0, 14 * sizeof(BlockChange));
-          // Populate with 3 random common items
           uint8_t *_slot = (uint8_t *)&block_changes[base + 1];
-          uint32_t _loot_seed = (uint32_t)(x * 2743 ^ y * 7451 ^ z * 5659);
-          int _set = _loot_seed % 4;
-          static const uint16_t _items[4][3] = {
-            {134, 882, 912},   // oak_log, stone_pickaxe, bread
-            {36,  883, 857},   // oak_planks, stone_axe, apple
-            {35,  881, 939},   // cobblestone, stone_shovel, cooked_porkchop
-            {310, 905, 1066},  // torch, stick, cooked_beef
-          };
-          static const uint8_t _counts[4][3] = {
-            {4, 1, 3}, {6, 1, 2}, {5, 1, 2}, {3, 4, 3}
-          };
-          for (int _s = 0; _s < 3; _s++) {
-            uint16_t _id = _items[_set][_s];
-            uint8_t _cnt = _counts[_set][_s] + (_loot_seed >> (_s * 5)) % 3;
-            _slot[_s * 3 + 0] = _id & 0xFF;
-            _slot[_s * 3 + 1] = (_id >> 8) & 0xFF;
-            _slot[_s * 3 + 2] = _cnt;
+          if (is_dungeon_chest) {
+            populateDungeonChestLoot(_slot, x, y, z, dungeon_variant);
+            special_block_set_state(x, y, z, player->dimension, B_chest, oriented_encode_state(dungeon_direction));
+          } else {
+            // Populate village/generated surface chests with 3 random common items.
+            uint32_t _loot_seed = (uint32_t)(x * 2743 ^ y * 7451 ^ z * 5659);
+            int _set = _loot_seed % 4;
+            static const uint16_t _items[4][3] = {
+              {134, 882, 912},   // oak_log, stone_pickaxe, bread
+              {36,  883, 857},   // oak_planks, stone_axe, apple
+              {35,  881, 939},   // cobblestone, stone_shovel, cooked_porkchop
+              {310, 905, 1066},  // torch, stick, cooked_beef
+            };
+            static const uint8_t _counts[4][3] = {
+              {4, 1, 3}, {6, 1, 2}, {5, 1, 2}, {3, 4, 3}
+            };
+            for (int _s = 0; _s < 3; _s++) {
+              uint16_t _id = _items[_set][_s];
+              uint8_t _cnt = _counts[_set][_s] + (_loot_seed >> (_s * 5)) % 3;
+              _slot[_s * 3 + 0] = _id & 0xFF;
+              _slot[_s * 3 + 1] = (_id >> 8) & 0xFF;
+              _slot[_s * 3 + 2] = _cnt;
+            }
           }
           if (i >= block_changes_count) block_changes_count = i + 1;
           chest_idx = base;
@@ -3694,6 +3853,24 @@ static uint8_t canMobStepTo (double x, double y, double z, uint8_t dimension) {
   return canMobOccupyPosition(x, y, z, dimension) && hasMobFloorBelow(x, y, z, dimension);
 }
 
+static uint8_t countMobsNearPosition(double x, double y, double z, uint8_t dimension, double radius) {
+  uint8_t count = 0;
+  double radius_sq = radius * radius;
+
+  for (int i = 0; i < MAX_MOBS; i++) {
+    if (mob_data[i].type == 0) continue;
+    if ((mob_data[i].data & 31) == 0) continue;
+    if (mob_data[i].dimension != dimension) continue;
+
+    double dx = mob_data[i].x - x;
+    double dy = mob_data[i].y - y;
+    double dz = mob_data[i].z - z;
+    if (dx * dx + dy * dy + dz * dz <= radius_sq) count++;
+  }
+
+  return count;
+}
+
 static uint8_t getNetherSpawnSurfaceY (short x, short z) {
   for (int y = 120; y >= 5; y --) {
     uint16_t surface_block = getBlockAt2(x, y, z, DIMENSION_NETHER);
@@ -3742,6 +3919,38 @@ static void getRandomSpawnOffset(int min_dist, int spawn_range, int16_t *out_dx,
   *out_dx = dir_x[dir] * dist + side_x * side_offset;
   *out_dz = dir_z[dir] * dist + side_z * side_offset;
 
+}
+
+static void spawnDungeonMobs(PlayerData *player) {
+  if (player->dimension != DIMENSION_OVERWORLD) return;
+
+  uint32_t interval = (uint32_t)(4.0f * TICKS_PER_SECOND);
+  if (interval == 0) interval = 1;
+  if (server_ticks % interval != 0) return;
+
+  DungeonSpawnerInfo spawners[4];
+  uint8_t spawner_count = getNearbyDungeonSpawners(player->x, player->y, player->z, 16, spawners, 4);
+  for (uint8_t i = 0; i < spawner_count; i++) {
+    DungeonSpawnerInfo *spawner = &spawners[i];
+
+    // If the spawner block was mined, stop spawning from this generated room.
+    if (getBlockAt2(spawner->x, spawner->y, spawner->z, DIMENSION_OVERWORLD) != B_spawner) continue;
+    if (countMobsNearPosition((double)spawner->x + 0.5, spawner->y, (double)spawner->z + 0.5, DIMENSION_OVERWORLD, 9.0) >= 4) continue;
+
+    for (uint8_t attempt = 0; attempt < 8; attempt++) {
+      int dx = (int)(fast_rand() % 9) - 4;
+      int dz = (int)(fast_rand() % 9) - 4;
+      if (dx == 0 && dz == 0) continue;
+
+      short spawn_x = spawner->x + dx;
+      short spawn_z = spawner->z + dz;
+      uint8_t spawn_y = spawner->y;
+      if (!canMobStepTo((double)spawn_x + 0.5, spawn_y, (double)spawn_z + 0.5, DIMENSION_OVERWORLD)) continue;
+
+      spawnMob(spawner->mob_type, spawn_x, spawn_y, spawn_z, 10, DIMENSION_OVERWORLD);
+      break;
+    }
+  }
 }
 
 static void spawnVillageVillagers(PlayerData *player) {
@@ -3885,22 +4094,18 @@ static void spawnFishInWater(PlayerData *player) {
   }
 }
 
+static uint8_t getEndSpawnSurfaceY (short x, short z) {
+  for (int y = 255; y >= 5; y --) {
+    uint16_t surface_block = getBlockAt2(x, y, z, DIMENSION_END);
+    if (surface_block == B_air) continue;
+    if (!isPassableSpawnBlock(getBlockAt2(x, y + 1, z, DIMENSION_END))) continue;
+    if (!isPassableSpawnBlock(getBlockAt2(x, y + 2, z, DIMENSION_END))) continue;
+    return (uint8_t)y;
+  }
+  return 0;
+}
+
 static void spawnMobsAroundPlayer (PlayerData *player) {
-
-  // Passive mobs and villagers don't spawn in the End
-  if (player->dimension == DIMENSION_END) return;
-
-  spawnVillageVillagers(player);
-  spawnFishInWater(player);
-
-  // Passive mob types: Chicken(25), Cow(28), Pig(95), Sheep(106)
-  static const uint8_t passive_types[] = { 25, 28, 95, 106 };
-  static const uint8_t num_passive_types = 4;
-
-  // Hostile mob types: Zombie(145) - spawns only at night
-  static const uint8_t hostile_types[] = { 145 };
-  static const uint8_t num_hostile_types = 1;
-
   int max_mobs = config.mob_spawn_max_per_player;
   int spawn_range = config.mob_spawn_range;
   int min_dist = config.mob_spawn_min_distance;
@@ -3910,6 +4115,40 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
   if ((int)existing >= max_mobs) return;
 
   uint8_t slots_left = (uint8_t)(max_mobs - existing);
+
+  // Endermen spawn in the End
+  if (player->dimension == DIMENSION_END) {
+    uint8_t endermen_to_spawn = (fast_rand() % slots_left) + 1;
+    if (endermen_to_spawn > slots_left / 2) endermen_to_spawn = slots_left / 2;
+    if (endermen_to_spawn < 1) endermen_to_spawn = 1;
+
+    for (uint8_t s = 0; s < endermen_to_spawn; s ++) {
+      int16_t offset_x, offset_z;
+      getRandomSpawnOffset(min_dist, spawn_range, &offset_x, &offset_z);
+      short spawn_x = player->x + offset_x;
+      short spawn_z = player->z + offset_z;
+
+      uint8_t surface_y = getEndSpawnSurfaceY(spawn_x, spawn_z);
+      if (surface_y == 0) continue;
+
+      // Enderman (147) spawns in the End
+      spawnMob(E_ENDERMAN, spawn_x, surface_y + 1, spawn_z, 20, player->dimension);
+    }
+
+    return;
+  }
+
+  spawnVillageVillagers(player);
+  spawnFishInWater(player);
+  spawnDungeonMobs(player);
+
+  // Passive mob types: Chicken(25), Cow(28), Pig(95), Sheep(106)
+  static const uint8_t passive_types[] = { 25, 28, 95, 106 };
+  static const uint8_t num_passive_types = 4;
+
+  // Hostile mob types: Zombie(145) - spawns only at night
+  static const uint8_t hostile_types[] = { 145 };
+  static const uint8_t num_hostile_types = 1;
 
   // Determine if it's night (world_time >= 12000)
   uint8_t is_night = (world_time >= 12000);
@@ -4289,6 +4528,9 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
           case E_PIGLIN: 
             givePlayerItem(player, getRandomCreativeItem(), 1);
             break;
+          case E_ENDERMAN:
+            if ((fast_rand() & 3) == 0) givePlayerItem(player, I_ender_pearl, 1);
+            break;
           case 145: givePlayerItem(player, I_rotten_flesh, (fast_rand() % 3)); break;
           case 148:
             givePlayerItem(player, I_rotten_flesh, fast_rand() % 3);
@@ -4456,13 +4698,11 @@ void handleServerTick (int64_t time_since_last_tick) {
     }
   }
 
-  // Check for portal travel every 5 ticks
-  if (server_ticks % 5 == 0) {
-    for (int i = 0; i < MAX_PLAYERS; i++) {
-      if (player_data[i].client_fd == -1) continue;
-      if (player_data[i].flags & 0x20) continue;
-      handlePortalTravel(&player_data[i]);
-    }
+  // Check for portal travel
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (player_data[i].client_fd == -1) continue;
+    if (player_data[i].flags & 0x20) continue;
+    handlePortalTravel(&player_data[i]);
   }
 
   // Process queued fluid updates (spread across ticks for gradual flow)

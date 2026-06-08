@@ -973,15 +973,14 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
     sc_blockUpdate(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].block);
   }
 
-  // Send updates for village-generated doors and chests (not in block changes).
+  // Send updates for generated doors and chests (not in block changes).
   // Chunk data has packed values; correct state and special_block entries
-  // are applied here.
+  // are applied here. This covers village houses as well as underground dungeons.
   #ifdef ALLOW_DOORS
-  int processed_village[64][3];
-  int num_village = 0;
+  int processed_generated[64][3];
+  int num_generated = 0;
   for (int i = 0; i < terrain_sections; i++) {
     int section_y = (dimension == DIMENSION_NETHER) ? i * 16 : i * 16;
-    if (section_y > 200 || section_y + 16 < 60) continue;
     uint16_t *section = cached_sections[i];
     for (int j = 0; j < 4096; j++) {
       uint16_t raw = section[j];
@@ -994,10 +993,10 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
       int wy = section_y + (address >> 8);
 
       int skip = 0;
-      for (int p = 0; p < num_village; p++)
-        if (processed_village[p][0] == wx &&
-            processed_village[p][1] == wy &&
-            processed_village[p][2] == wz) { skip = 1; break; }
+      for (int p = 0; p < num_generated; p++)
+        if (processed_generated[p][0] == wx &&
+            processed_generated[p][1] == wy &&
+            processed_generated[p][2] == wz) { skip = 1; break; }
       if (skip) continue;
 
       for (int k = 0; k < block_changes_snapshot_count && !skip; k++) {
@@ -1015,11 +1014,11 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
           special_block_set_state(wx, wy, wz, dimension, block_type, oriented_encode_state(direction));
         uint16_t st = special_block_get_state(wx, wy, wz, dimension);
         sendOrientedUpdate(client_fd, wx, wy, wz, block_type, oriented_get_direction(st));
-        if (num_village < 62) {
-          processed_village[num_village][0] = wx;
-          processed_village[num_village][1] = wy;
-          processed_village[num_village][2] = wz;
-          num_village++;
+        if (num_generated < 62) {
+          processed_generated[num_generated][0] = wx;
+          processed_generated[num_generated][1] = wy;
+          processed_generated[num_generated][2] = wz;
+          num_generated++;
         }
       } else {
         // Read existing state or init default
@@ -1037,15 +1036,17 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
         sendDoorUpdate(client_fd, wx, wy, wz, block_type, 0, open, dir, hinge);
         sendDoorUpdate(client_fd, wx, wy + 1, wz, block_type, 1, open, dir, hinge);
 
-        if (num_village < 62) {
-          processed_village[num_village][0] = wx;
-          processed_village[num_village][1] = wy;
-          processed_village[num_village][2] = wz;
-          num_village++;
-          processed_village[num_village][0] = wx;
-          processed_village[num_village][1] = wy + 1;
-          processed_village[num_village][2] = wz;
-          num_village++;
+        if (num_generated < 62) {
+          processed_generated[num_generated][0] = wx;
+          processed_generated[num_generated][1] = wy;
+          processed_generated[num_generated][2] = wz;
+          num_generated++;
+        }
+        if (num_generated < 62) {
+          processed_generated[num_generated][0] = wx;
+          processed_generated[num_generated][1] = wy + 1;
+          processed_generated[num_generated][2] = wz;
+          num_generated++;
         }
       }
     }

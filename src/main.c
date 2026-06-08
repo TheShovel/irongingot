@@ -661,6 +661,8 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
         player->z = cz;
         if (noclip_enabled) player->grounded_y = player->y;
 
+        handlePortalTravel(player);
+
         // Only update center chunk when crossing chunk borders.
         // Actual chunk streaming is handled asynchronously by chunk_streamer_worker.
         if (dx != 0 || dz != 0) {
