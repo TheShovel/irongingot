@@ -439,6 +439,24 @@ extern PlayerAppearance player_appearance[MAX_PLAYERS];
 
 extern MobData mob_data[MAX_MOBS];
 
+// Projectile types
+#define E_ENDER_PEARL 42
+
+#define MAX_PROJECTILES 16
+
+typedef struct {
+  uint8_t active;
+  uint8_t type;
+  int owner_index;
+  uint8_t dimension;
+  double x, y, z;
+  double vx, vy, vz;
+  uint64_t spawn_tick;
+  uint8_t uuid[16];
+} ProjectileData;
+
+extern ProjectileData projectile_data[MAX_PROJECTILES];
+
 // Thread pool functions
 void init_global_thread_pool(void);
 ThreadPool* get_global_thread_pool(void);

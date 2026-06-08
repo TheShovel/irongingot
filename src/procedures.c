@@ -2274,7 +2274,7 @@ void playPickupAnimation (PlayerData *player, uint16_t item, double x, double y,
   // Spawn a new item entity at the input coordinates
   // ID -1 is safe, as elsewhere it's reserved as a placeholder
   // The player's name is used as the UUID as it's cheap and unique enough
-  sc_spawnEntity(player->client_fd, -1, (uint8_t *)player->name, 69, x + 0.5, y + 0.5, z + 0.5, 0, 0);
+  sc_spawnEntity(player->client_fd, -1, (uint8_t *)player->name, 69, x + 0.5, y + 0.5, z + 0.5, 0, 0, 0, 0, 0);
 
   // Write a Set Entity Metadata packet for the item
   // Using startPacket/endPacket to properly handle compression
@@ -2818,7 +2818,7 @@ static void syncDimensionEntities(PlayerData *player, uint8_t old_dim) {
     sc_spawnEntity(
       player->client_fd, -2 - i, uuid,
       mob_data[i].type, mob_data[i].x, mob_data[i].y, mob_data[i].z,
-      0, 0
+      0, 0, 0, 0, 0
     );
     broadcastMobMetadata(player->client_fd, -2 - i);
   }
@@ -3356,6 +3356,60 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
 
   if (handleBucketUse(player, x, y, z, face, count, item)) return;
 
+  // Handle throwable items when no block is targeted
+  if (face == 255 && *item == I_ender_pearl && *count > 0) {
+    // Find a free projectile slot
+    int slot = -1;
+    for (int i = 0; i < MAX_PROJECTILES; i++) {
+      if (!projectile_data[i].active) { slot = i; break; }
+    }
+    if (slot >= 0) {
+      int owner_idx = getPlayerIndexByPointer(player);
+      ProjectileData *p = &projectile_data[slot];
+      p->active = 1;
+      p->type = E_ENDER_PEARL;
+      p->owner_index = owner_idx;
+      p->dimension = player->dimension;
+      p->x = (double)player->x + 0.5;
+      p->y = (double)player->y + 1.3;
+      p->z = (double)player->z + 0.5;
+
+      double speed = 1.5;
+      double pitch_rad = player->pitch * M_PI / 128.0;
+      double yaw_rad = player->yaw * M_PI / 128.0;
+      p->vx = -sin(yaw_rad) * cos(pitch_rad) * speed;
+      p->vy = -sin(pitch_rad) * speed;
+      p->vz = cos(yaw_rad) * cos(pitch_rad) * speed;
+
+      p->spawn_tick = server_ticks;
+
+      uint32_t r = fast_rand();
+      memcpy(p->uuid, &r, 4);
+      memset(p->uuid + 4, 0, 12);
+
+      int16_t nvx = (int16_t)(p->vx * 8000);
+      int16_t nvy = (int16_t)(p->vy * 8000);
+      int16_t nvz = (int16_t)(p->vz * 8000);
+
+      for (int j = 0; j < MAX_PLAYERS; j++) {
+        if (player_data[j].client_fd == -1) continue;
+        if (player_data[j].dimension != player->dimension) continue;
+        sc_spawnEntity(
+          player_data[j].client_fd,
+          -200 - slot, p->uuid,
+          E_ENDER_PEARL, p->x, p->y, p->z,
+          0, 0, nvx, nvy, nvz
+        );
+      }
+
+      *count -= 1;
+      if (*count == 0) *item = 0;
+      sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
+      broadcastPlayerEquipment(player);
+    }
+    return;
+  }
+
   // Don't proceed with block placement if no coordinates were provided
   if (face == 255) return;
 
@@ -3787,7 +3841,8 @@ void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health, uint8_
         uuid, // Use the UUID generated above
         type, mob_data[i].x, mob_data[i].y, mob_data[i].z,
         // Face opposite of the player, as if looking at them when spawning
-        (player_data[j].yaw + 127) & 255, 0
+        (player_data[j].yaw + 127) & 255, 0,
+        0, 0, 0
       );
     }
 
@@ -5345,6 +5400,104 @@ void handleServerTick (int64_t time_since_last_tick) {
       }
     }
 
+  }
+
+  // Tick projectiles (ender pearls, etc.)
+  for (int i = 0; i < MAX_PROJECTILES; i++) {
+    ProjectileData *p = &projectile_data[i];
+    if (!p->active) continue;
+
+    // Apply gravity
+    p->vy -= 0.03;
+
+    // Move projectile
+    double new_x = p->x + p->vx;
+    double new_y = p->y + p->vy;
+    double new_z = p->z + p->vz;
+
+    // Check block collision
+    int bx = (int)floor(new_x);
+    int by = (int)floor(new_y);
+    int bz = (int)floor(new_z);
+    uint16_t block = getBlockAt2(bx, by, bz, p->dimension);
+    uint8_t hit = !isPassableBlock(block);
+
+    if (hit) {
+      // Teleport owner to projectile position
+      PlayerData *owner = NULL;
+      if (p->owner_index >= 0 && p->owner_index < MAX_PLAYERS)
+        owner = &player_data[p->owner_index];
+      if (owner && owner->client_fd != -1 && owner->dimension == p->dimension) {
+        owner->x = (short)p->x;
+        owner->y = (int16_t)p->y;
+        owner->z = (short)p->z;
+
+        // Send Synchronize Player Position to the owner (requires client confirmation)
+        sc_synchronizePlayerPosition(
+          owner->client_fd,
+          p->x, p->y, p->z,
+          owner->yaw * 360.0f / 256.0f,
+          owner->pitch * 360.0f / 256.0f
+        );
+        // Send Teleport Entity to other players to show the owner moving
+        for (int j = 0; j < MAX_PLAYERS; j++) {
+          if (player_data[j].client_fd == -1) continue;
+          if (player_data[j].client_fd == owner->client_fd) continue;
+          sc_teleportEntity(
+            player_data[j].client_fd, owner->client_fd,
+            p->x, p->y, p->z,
+            owner->yaw * 360.0f / 256.0f,
+            owner->pitch * 360.0f / 256.0f
+          );
+        }
+        // Apply fall damage (ender pearl damage bypasses armor)
+        if (owner->health > 0) {
+          hurtEntity(owner->client_fd, -1, D_ender_pearl, 2);
+        }
+      }
+
+      // Remove projectile from all clients
+      for (int j = 0; j < MAX_PLAYERS; j++) {
+        if (player_data[j].client_fd == -1) continue;
+        if (player_data[j].dimension != p->dimension) continue;
+        sc_removeEntity(player_data[j].client_fd, -200 - i);
+      }
+      p->active = 0;
+      continue;
+    }
+
+    // Update position
+    p->x = new_x;
+    p->y = new_y;
+    p->z = new_z;
+
+    // Apply drag (air resistance)
+    p->vx *= 0.99;
+    p->vy *= 0.99;
+    p->vz *= 0.99;
+
+    // Despawn if too old (5 minutes = 6000 ticks)
+    if (server_ticks - p->spawn_tick > 6000) {
+      for (int j = 0; j < MAX_PLAYERS; j++) {
+        if (player_data[j].client_fd == -1) continue;
+        if (player_data[j].dimension != p->dimension) continue;
+        sc_removeEntity(player_data[j].client_fd, -200 - i);
+      }
+      p->active = 0;
+      continue;
+    }
+
+    // Broadcast position update
+    for (int j = 0; j < MAX_PLAYERS; j++) {
+      if (player_data[j].client_fd == -1) continue;
+      if (player_data[j].dimension != p->dimension) continue;
+      sc_teleportEntity(
+        player_data[j].client_fd,
+        -200 - i,
+        p->x, p->y, p->z,
+        0, 0
+      );
+    }
   }
 
   // Spawn friendly mobs around players at configurable interval

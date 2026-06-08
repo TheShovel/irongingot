@@ -1715,7 +1715,8 @@ int sc_spawnEntity (
   int client_fd,
   int id, uint8_t *uuid, int type,
   double x, double y, double z,
-  uint8_t yaw, uint8_t pitch
+  uint8_t yaw, uint8_t pitch,
+  int16_t vx, int16_t vy, int16_t vz
 ) {
 
   startPacket(client_fd, 0x01);
@@ -1737,10 +1738,10 @@ int sc_spawnEntity (
   // Data - mostly unused
   writeByte(client_fd, 0);
 
-  // Velocity
-  writeUint16(client_fd, 0);
-  writeUint16(client_fd, 0);
-  writeUint16(client_fd, 0);
+  // Velocity (units of 1/8000 blocks/tick)
+  writeInt16(client_fd, vx);
+  writeInt16(client_fd, vy);
+  writeInt16(client_fd, vz);
 
   endPacket(client_fd);
 
@@ -1831,7 +1832,8 @@ int sc_spawnEntityPlayer (int client_fd, PlayerData player) {
     player.x > 0 ? (double)player.x + 0.5 : (double)player.x - 0.5,
     player.y,
     player.z > 0 ? (double)player.z + 0.5 : (float)player.z - 0.5,
-    player.yaw, player.pitch
+    player.yaw, player.pitch,
+    0, 0, 0
   );
 }
 

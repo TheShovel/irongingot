@@ -58,7 +58,7 @@ int sc_acknowledgeBlockChange (int client_fd, int sequence);
 int sc_playerInfoUpdateAddPlayer (int client_fd, PlayerData player);
 int sc_playerInfoRemovePlayer (int client_fd, PlayerData player);
 int sc_playerInfoUpdateUpdateGamemode (int client_fd, PlayerData player, uint8_t gamemode);
-int sc_spawnEntity (int client_fd, int id, uint8_t *uuid, int type, double x, double y, double z, uint8_t yaw, uint8_t pitch);
+int sc_spawnEntity (int client_fd, int id, uint8_t *uuid, int type, double x, double y, double z, uint8_t yaw, uint8_t pitch, int16_t vx, int16_t vy, int16_t vz);
 int sc_spawnEntityPlayer (int client_fd, PlayerData player);
 int sc_setEntityMetadata (int client_fd, int id, EntityData *metadata, size_t length);
 int sc_setEquipment (int client_fd, int entity_id, PlayerData *player);

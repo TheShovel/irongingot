@@ -87,6 +87,7 @@ volatile int fluid_queue_head = 0;
 volatile int fluid_queue_tail = 0;
 
 MobData mob_data[MAX_MOBS];
+ProjectileData projectile_data[MAX_PROJECTILES];
 
 // Global thread pool for parallel operations
 static ThreadPool global_thread_pool;

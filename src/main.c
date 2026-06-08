@@ -453,7 +453,7 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
           sc_spawnEntity(
             client_fd, -2 - i, uuid,
             mob_data[i].type, mob_data[i].x, mob_data[i].y, mob_data[i].z,
-            0, 0
+            0, 0, 0, 0, 0
           );
           broadcastMobMetadata(client_fd, -2 - i);
         }
