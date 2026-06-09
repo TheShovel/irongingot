@@ -4175,9 +4175,14 @@ void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health, uint8_
       );
     }
 
-    // Freshly spawned mobs currently don't need metadata updates.
-    // If this changes, uncomment this line.
-    // broadcastMobMetadata(-1, i);
+    // Give skeletons a bow
+    if (type == E_SKELETON) {
+      for (int j = 0; j < MAX_PLAYERS; j ++) {
+        if (player_data[j].client_fd == -1) continue;
+        if (player_data[j].dimension != dimension) continue;
+        sc_setMobEquipment(player_data[j].client_fd, -2 - i, I_bow);
+      }
+    }
 
     break;
   }

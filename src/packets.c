@@ -1824,6 +1824,18 @@ int sc_setEquipment (int client_fd, int entity_id, PlayerData *player) {
   return 0;
 }
 
+// S->C Set Mob Equipment (main hand only)
+int sc_setMobEquipment (int client_fd, int entity_id, uint16_t item) {
+  startPacket(client_fd, 0x5F);
+
+  writeVarInt(client_fd, entity_id);
+  writeByte(client_fd, 0x00);
+  writeItemSlot(client_fd, 1, item);
+
+  endPacket(client_fd);
+  return 0;
+}
+
 // S->C Spawn Entity (from PlayerData)
 int sc_spawnEntityPlayer (int client_fd, PlayerData player) {
   return sc_spawnEntity(

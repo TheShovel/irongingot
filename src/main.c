@@ -459,6 +459,9 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
             0, 0, 0, 0, 0
           );
           broadcastMobMetadata(client_fd, -2 - i);
+          if (mob_data[i].type == E_SKELETON) {
+            sc_setMobEquipment(client_fd, -2 - i, I_bow);
+          }
         }
 
       }

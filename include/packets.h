@@ -62,6 +62,7 @@ int sc_spawnEntity (int client_fd, int id, uint8_t *uuid, int type, double x, do
 int sc_spawnEntityPlayer (int client_fd, PlayerData player);
 int sc_setEntityMetadata (int client_fd, int id, EntityData *metadata, size_t length);
 int sc_setEquipment (int client_fd, int entity_id, PlayerData *player);
+int sc_setMobEquipment (int client_fd, int entity_id, uint16_t item);
 int sc_entityAnimation (int client_fd, int id, uint8_t animation);
 int sc_teleportEntity (int client_fd, int id, double x, double y, double z, float yaw, float pitch);
 int sc_setHeadRotation (int client_fd, int id, uint8_t yaw);
