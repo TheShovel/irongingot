@@ -31,7 +31,60 @@ Runs on as low as **~7MB of RAM** !!!
 
 You can download pre-built binaries from the [Releases page](https://github.com/TheShovel/irongingot/releases), or compile the server yourself. See the **Compilation** section below for instructions.
 
-### Configuration
+## Compilation
+
+Before compiling, you'll need to dump registry data from a vanilla Minecraft server. On Linux, this can be done automatically using the `extract_registries.sh` script. Otherwise, the manual process is as follows: create a folder called `notchian` here, and put a Minecraft server JAR in it. Then, follow [this guide](https://minecraft.wiki/w/Minecraft_Wiki:Projects/wiki.vg_merge/Data_Generators) to dump all of the registries (use the _second_ command with the `--all` flag). Finally, run `build_registries.js` with either [bun](https://bun.sh/), [node](https://nodejs.org/en/download), or [deno](https://docs.deno.com/runtime/getting_started/installation/).
+
+### Dependencies
+
+For the full release build on Debian/Ubuntu, install:
+
+```sh
+sudo apt install build-essential zlib1g-dev libcurl4-openssl-dev musl-tools mingw-w64 zip
+```
+
+For the full release build on Arch Linux, install:
+
+```sh
+sudo pacman -S --needed base-devel zlib curl musl mingw-w64-gcc zip
+```
+
+To also build the Linux ARM64 musl package, install [Zig](https://ziglang.org/download/) and make sure `zig` is on your `PATH`.
+
+On Arch Linux, Zig can be installed with:
+
+```sh
+sudo pacman -S --needed zig
+```
+
+| Build target | Debian/Ubuntu packages | Arch Linux packages |
+|--------------|------------------------|---------------------|
+| **Linux x86_64 glibc** | `gcc`, `zlib1g-dev`, `libcurl4-openssl-dev` | `base-devel`, `zlib`, `curl` |
+| **Linux x86_64 musl** | `musl-tools` | `musl` |
+| **Linux ARM64 musl** | `zig` (cross-compiles with bundled zlib) | `zig` (cross-compiles with bundled zlib) |
+| **Windows x86_64 cross-compile** | `mingw-w64` (uses bundled zlib) | `mingw-w64-gcc` (uses bundled zlib) |
+| **Windows native/MSYS2** | `mingw-w64-x86_64-gcc`, `mingw-w64-x86_64-zlib` | N/A |
+
+### Build Commands
+
+Before building, generate `include/registries.h` as described above.
+
+- **All release packages:** `./build_all.sh`
+  - writes packages to `build/`
+  - builds `irongingot-v<VERSION>-linux-glibc.zip`
+  - builds `irongingot-v<VERSION>-linux-musl.zip` when `musl-gcc` is available
+  - builds `irongingot-v<VERSION>-linux-arm64-musl.zip` when `zig` is available
+  - builds `irongingot-v<VERSION>-windows.zip` when a MinGW cross-compiler is available
+- **Set release version:** `VERSION=1.2.3 ./build_all.sh`
+- **Linux x86_64 glibc only:** `./build.sh` — dynamically linked, ~30MB RAM usage
+- **Linux x86_64 musl only:** `./build.sh --musl` — statically linked, ~7MB RAM usage
+- **Windows native:** MSYS2 MINGW64 shell, install `mingw-w64-x86_64-gcc`, run `./build.sh`
+- **Windows 32-bit:** MSYS2 MINGW64 shell, install `mingw-w64-cross-gcc`, run `./build.sh --9x`
+
+> [!TIP]
+> The musl builds are **strongly recommended** for production use. They are fully static and are intended to provide the lower memory usage described above, including the ARM64 package.
+
+## Configuration
 
 Edit `server.conf` to customize your server:
 
@@ -46,33 +99,7 @@ motd = A irongingot server
 brand = irongingot
 ```
 
-## Compilation
-
-Before compiling, you'll need to dump registry data from a vanilla Minecraft server. On Linux, this can be done automatically using the `extract_registries.sh` script. Otherwise, the manual process is as follows: create a folder called `notchian` here, and put a Minecraft server JAR in it. Then, follow [this guide](https://minecraft.wiki/w/Minecraft_Wiki:Projects/wiki.vg_merge/Data_Generators) to dump all of the registries (use the _second_ command with the `--all` flag). Finally, run `build_registries.js` with either [bun](https://bun.sh/), [node](https://nodejs.org/en/download), or [deno](https://docs.deno.com/runtime/getting_started/installation/).
-
-### Dependencies
-
-| Platform | Required Packages |
-|----------|-------------------|
-| **Linux (glibc)** | `gcc`, `zlib1g-dev`, `libcurl4-openssl-dev` (Debian/Ubuntu) or `zlib`, `curl` (Arch) |
-| **Linux (musl)** | `musl-tools` (Debian/Ubuntu), `musl` (Arch), or `musl-gcc` (Fedora) |
-| **Windows (cross-compile)** | `mingw-w64` (zlib is bundled, no extra package needed) |
-| **Windows (native/MSYS2)** | `mingw-w64-x86_64-gcc`, `mingw-w64-x86_64-zlib` |
-
-### Build Commands
-
-- **Linux + Windows (cross-compile):** `./build_all.sh` — outputs to `build/` (includes both glibc and musl binaries if musl-tools are installed)
-- **Linux (glibc):** `./build.sh` — dynamically linked, ~30MB RAM usage
-- **Linux (musl, recommended):** `./build.sh --musl` — statically linked, ~7MB RAM usage
-- **Windows (native):** MSYS2 MINGW64 shell, install `mingw-w64-x86_64-gcc`, run `./build.sh`
-- **Windows (32-bit):** MSYS2 MINGW64 shell, install `mingw-w64-cross-gcc`, run `./build.sh --9x`
-
-> [!TIP]
-> The musl build is **strongly recommended** for production use. It produces a fully static binary with ~75% lower memory footprint.
-
-## Configuration
-
-Most settings are in `server.conf`. Key options:
+Key options include:
 
 - **Performance:** `chunk_cache_size`, `tick_interval`, `broadcast_all_movement`
 - **Features:** `allow_chests`, `do_fluid_flow`, `enable_flight`, `allow_doors`

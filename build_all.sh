@@ -25,7 +25,27 @@ SRC_FILES=(
   src/cubiomes/util.c
 )
 
+# Bundled zlib sources for static/cross builds.
+ZLIB_SRCS=(
+  third_party/zlib/adler32.c
+  third_party/zlib/compress.c
+  third_party/zlib/crc32.c
+  third_party/zlib/deflate.c
+  third_party/zlib/gzclose.c
+  third_party/zlib/gzlib.c
+  third_party/zlib/gzread.c
+  third_party/zlib/gzwrite.c
+  third_party/zlib/infback.c
+  third_party/zlib/inffast.c
+  third_party/zlib/inflate.c
+  third_party/zlib/inftrees.c
+  third_party/zlib/trees.c
+  third_party/zlib/uncompr.c
+  third_party/zlib/zutil.c
+)
+
 INCLUDES="-Iinclude -Isrc/cubiomes"
+MUSL_INCLUDES="$INCLUDES -Ithird_party/zlib"
 CFLAGS="-O3 -ffast-math"
 LIBS="-lm -lz -pthread"
 MOJANG_SKIN_CFLAGS=""
@@ -69,24 +89,6 @@ MUSL_BUILT=0
 if command -v musl-gcc &>/dev/null; then
   echo "=== Building Linux binary (musl) ==="
   # Bundle zlib sources to avoid glibc headers conflict
-  ZLIB_SRCS=(
-    third_party/zlib/adler32.c
-    third_party/zlib/compress.c
-    third_party/zlib/crc32.c
-    third_party/zlib/deflate.c
-    third_party/zlib/gzclose.c
-    third_party/zlib/gzlib.c
-    third_party/zlib/gzread.c
-    third_party/zlib/gzwrite.c
-    third_party/zlib/infback.c
-    third_party/zlib/inffast.c
-    third_party/zlib/inflate.c
-    third_party/zlib/inftrees.c
-    third_party/zlib/trees.c
-    third_party/zlib/uncompr.c
-    third_party/zlib/zutil.c
-  )
-  MUSL_INCLUDES="$INCLUDES -Ithird_party/zlib"
   musl-gcc ${SRC_FILES[@]} ${ZLIB_SRCS[@]} $CFLAGS -D_GNU_SOURCE $MUSL_INCLUDES -o build/irongingot-musl -static -fno-link-libatomic -lpthread -lm
   echo "Linux musl binary: build/irongingot-musl"
   MUSL_BUILT=1
@@ -123,6 +125,26 @@ if [ "$MUSL_BUILT" -eq 1 ]; then
   echo "Linux musl release: build/irongingot-v${VERSION}-linux-musl.zip"
 fi
 
+# ─── Linux ARM64 build (musl, cross-compile with Zig) ───
+if command -v zig &>/dev/null; then
+  echo "=== Building Linux ARM64 binary (musl) ==="
+  zig cc -target aarch64-linux-musl ${SRC_FILES[@]} ${ZLIB_SRCS[@]} $CFLAGS -D_GNU_SOURCE $MUSL_INCLUDES -o build/irongingot-arm64-musl -static -pthread -lm
+  echo "Linux ARM64 musl binary: build/irongingot-arm64-musl"
+
+  echo "=== Packaging Linux ARM64 release (musl) ==="
+  ARM64_MUSL_DIR="build/irongingot-v${VERSION}-linux-arm64-musl"
+  rm -rf "$ARM64_MUSL_DIR"
+  mkdir -p "$ARM64_MUSL_DIR"
+  cp build/irongingot-arm64-musl "$ARM64_MUSL_DIR/"
+  cp server.conf "$ARM64_MUSL_DIR/"
+  cp serverIcon.png "$ARM64_MUSL_DIR/"
+  (cd build && zip -rq "irongingot-v${VERSION}-linux-arm64-musl.zip" "irongingot-v${VERSION}-linux-arm64-musl")
+  rm -rf "$ARM64_MUSL_DIR"
+  echo "Linux ARM64 musl release: build/irongingot-v${VERSION}-linux-arm64-musl.zip"
+else
+  echo "SKIP: zig not found. Install Zig to cross-compile Linux ARM64 musl builds."
+fi
+
 # ─── Windows build (cross-compile with mingw) ───
 echo "=== Building Windows binary ==="
 
@@ -136,24 +158,6 @@ fi
 
 if [ -n "$WIN_CC" ]; then
   # Bundle zlib sources (no system package needed)
-  ZLIB_SRCS=(
-    third_party/zlib/adler32.c
-    third_party/zlib/compress.c
-    third_party/zlib/crc32.c
-    third_party/zlib/deflate.c
-    third_party/zlib/gzclose.c
-    third_party/zlib/gzlib.c
-    third_party/zlib/gzread.c
-    third_party/zlib/gzwrite.c
-    third_party/zlib/infback.c
-    third_party/zlib/inffast.c
-    third_party/zlib/inflate.c
-    third_party/zlib/inftrees.c
-    third_party/zlib/trees.c
-    third_party/zlib/uncompr.c
-    third_party/zlib/zutil.c
-  )
-
   WIN_INCLUDES="$INCLUDES -Ithird_party/zlib"
 
   $WIN_CC ${SRC_FILES[@]} ${ZLIB_SRCS[@]} $CFLAGS $WIN_INCLUDES -o build/irongingot.exe -static -lws2_32 -pthread -lm
