@@ -212,6 +212,7 @@
 #define STATE_PLAY 5
 
 // Entity type identifiers
+#define E_SKELETON 110
 #define E_VILLAGER 134
 #define E_PIGLIN 96
 #define E_ZOMBIE 145

@@ -3277,6 +3277,68 @@ static uint8_t shootBowArrow(PlayerData *player) {
   return 1;
 }
 
+static void shootSkeletonArrow(int mob_index, double target_x, double target_y, double target_z) {
+  int slot = -1;
+  for (int i = 0; i < MAX_PROJECTILES; i++) {
+    if (!projectile_data[i].active) { slot = i; break; }
+  }
+  if (slot < 0) return;
+
+  MobData *mob = &mob_data[mob_index];
+  ProjectileData *p = &projectile_data[slot];
+  p->active = 1;
+  p->type = E_ARROW;
+  p->owner_index = -1;
+  p->dimension = mob->dimension;
+  p->x = mob->x;
+  p->y = mob->y + 1.6;
+  p->z = mob->z;
+
+  double dx = target_x - p->x;
+  double dy = target_y - p->y;
+  double dz = target_z - p->z;
+  double dist = sqrt(dx * dx + dy * dy + dz * dz);
+  if (dist < 0.001) { p->active = 0; return; }
+
+  // Add random spread to make it fair — offset scales with distance
+  double spread = 0.6 + dist * 0.06;
+  target_x += ((double)(fast_rand() % 201) - 100.0) / 100.0 * spread;
+  target_y += ((double)(fast_rand() % 201) - 100.0) / 100.0 * spread;
+  target_z += ((double)(fast_rand() % 201) - 100.0) / 100.0 * spread;
+
+  dx = target_x - p->x;
+  dy = target_y - p->y;
+  dz = target_z - p->z;
+  dist = sqrt(dx * dx + dy * dy + dz * dz);
+  if (dist < 0.001) { p->active = 0; return; }
+
+  double speed = 2.0;
+  p->vx = (dx / dist) * speed;
+  p->vy = (dy / dist) * speed;
+  p->vz = (dz / dist) * speed;
+  p->spawn_tick = server_ticks;
+  p->damage = 2;
+  p->stuck = 0;
+  makeProjectileUuid(p, slot);
+
+  int16_t nvx = (int16_t)(p->vx * 8000);
+  int16_t nvy = (int16_t)(p->vy * 8000);
+  int16_t nvz = (int16_t)(p->vz * 8000);
+  uint8_t yaw_byte = 0, pitch_byte = 0;
+  projectileAngles(p->vx, p->vy, p->vz, NULL, NULL, &yaw_byte, &pitch_byte);
+
+  for (int j = 0; j < MAX_PLAYERS; j++) {
+    if (player_data[j].client_fd == -1) continue;
+    if (player_data[j].dimension != mob->dimension) continue;
+    sc_spawnEntity(
+      player_data[j].client_fd,
+      projectileEntityId(slot), p->uuid,
+      E_ARROW, p->x, p->y, p->z,
+      yaw_byte, pitch_byte, nvx, nvy, nvz
+    );
+  }
+}
+
 static uint8_t projectileHitsPlayer(ProjectileData *p, double x, double y, double z, PlayerData *player) {
   if (player->client_fd == -1) return 0;
   if (player->flags & 0x20) return 0;
@@ -4499,9 +4561,9 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
   static const uint8_t passive_types[] = { 25, 28, 95, 106 };
   static const uint8_t num_passive_types = 4;
 
-  // Hostile mob types: Zombie(145) - spawns only at night
-  static const uint8_t hostile_types[] = { 145 };
-  static const uint8_t num_hostile_types = 1;
+  // Hostile mob types: Zombie(145), Skeleton(110) - spawn only at night
+  static const uint8_t hostile_types[] = { 145, E_SKELETON };
+  static const uint8_t num_hostile_types = 2;
 
   // Determine if it's night (world_time >= 12000)
   uint8_t is_night = (world_time >= 12000);
@@ -4839,8 +4901,8 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
       }
     }
 
-    // Push zombies back 2 blocks when hit by a player
-    if (attacker_id > 0 && mob->type == 145) {
+    // Push zombies and skeletons back 2 blocks when hit by a player
+    if (attacker_id > 0 && (mob->type == 145 || mob->type == E_SKELETON)) {
       PlayerData *attacker;
       if (!getPlayerData(attacker_id, &attacker)) {
         double dx = mob->x - attacker->x;
@@ -4892,6 +4954,10 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
             if ((fast_rand() & 3) == 0) givePlayerItem(player, I_ender_pearl, 1);
             break;
           case 145: givePlayerItem(player, I_rotten_flesh, (fast_rand() % 3)); break;
+          case E_SKELETON:
+            if ((fast_rand() & 1) == 0) givePlayerItem(player, I_bone, 1);
+            if ((fast_rand() % 3) == 0) givePlayerItem(player, I_arrow, 1 + (fast_rand() % 2));
+            break;
           case 148:
             givePlayerItem(player, I_rotten_flesh, fast_rand() % 3);
             if ((fast_rand() & 3) == 0) givePlayerItem(player, I_gold_ingot, 1);
@@ -5184,9 +5250,10 @@ void handleServerTick (int64_t time_since_last_tick) {
     // Currently has no effect on hostile mobs
     uint8_t panic = (mob_data[i].data >> 6) & 3;
 
-    // Burn overworld zombies if above ground during sunlight.
+    // Burn overworld zombies and skeletons if above ground during sunlight.
     // Nether mobs should not burn based on overworld time of day.
-    if (mob_data[i].dimension == DIMENSION_OVERWORLD && mob_data[i].type == 145 &&
+    if (mob_data[i].dimension == DIMENSION_OVERWORLD &&
+        (mob_data[i].type == 145 || mob_data[i].type == E_SKELETON) &&
         (world_time < 13000 || world_time > 23460) && mob_data[i].y > 48) {
       hurtEntity(entity_id, -1, D_on_fire, 2);
     }
@@ -5511,55 +5578,113 @@ void handleServerTick (int64_t time_since_last_tick) {
 
     } else { // Hostile mob movement handling
 
-      // Zombies move 2x faster and have attack cooldown
-      double zombie_move = (mob_data[i].type == 145) ? move_amount * 2.0 : move_amount;
+      double move_speed = move_amount;
+      double vision_range = 16.0;
+      double attack_range = 3.0;
 
-      double dist_to_player = sqrt(closest_dist_double);
-      double y_diff = fabs(old_y - closest_player->y);
+      // Zombies move 2x faster
+      if (mob_data[i].type == 145) move_speed = move_amount * 2.0;
 
-      // Zombified piglins should not acquire/chase from as far away as zombies.
-      double vision_range = mob_data[i].type == 148 ? 10.0 : 16.0;
-      double attack_range = mob_data[i].type == 148 ? 2.0 : 3.0;
+      // Zombified piglins have shorter range
+      if (mob_data[i].type == 148) {
+        vision_range = 10.0;
+        attack_range = 2.0;
+      }
 
       // Endermen are extremely fast with long vision
       if (mob_data[i].type == E_ENDERMAN) {
-        zombie_move = move_amount * 6.0;
+        move_speed = move_amount * 6.0;
         vision_range = 64.0;
         attack_range = 3.0;
       }
 
-      // If we're within attack range, hurt the player
-      if (dist_to_player < attack_range && y_diff < 2.0) {
-        // Attack cooldown check - zombies can't attack more than once per second
-        if (mob_data[i].move_timer <= 0) {
-          // Only attack if the player is still connected
-          if (closest_player->client_fd != -1) {
-            hurtEntity(closest_player->client_fd, entity_id, D_generic, 1);
+      double dist_to_player = sqrt(closest_dist_double);
+      double y_diff = fabs(old_y - closest_player->y);
+
+      // Skeleton AI: maintain distance and shoot arrows
+      if (mob_data[i].type == E_SKELETON) {
+        // Skeleton melee attack if cornered (very close)
+        if (dist_to_player < 2.0 && y_diff < 2.0) {
+          if (mob_data[i].move_timer <= 0) {
+            if (closest_player->client_fd != -1) {
+              hurtEntity(closest_player->client_fd, entity_id, D_generic, 1);
+            }
+            mob_data[i].move_timer = 20;
           }
-          mob_data[i].move_timer = 20; // 1 second cooldown (20 ticks)
         }
-      }
 
-      // Decrement attack cooldown timer
-      if (mob_data[i].move_timer > 0) mob_data[i].move_timer--;
+        // Shoot arrows when player is 2-15 blocks away
+        if (dist_to_player > 2.0 && dist_to_player <= 15.0 && y_diff < 4.0) {
+          if (mob_data[i].move_timer <= 0) {
+            if (closest_player->client_fd != -1) {
+              shootSkeletonArrow(i, closest_player->x, closest_player->y + 1.6, closest_player->z);
+            }
+            mob_data[i].move_timer = 20;
+          }
+        }
 
-      // Move towards the closest player if within vision range
-      if (dist_to_player <= vision_range) {
-        double dx = closest_player->x - old_x;
-        double dz = closest_player->z - old_z;
-        double len = sqrt(dx * dx + dz * dz);
+        // Decrement attack cooldown
+        if (mob_data[i].move_timer > 0) mob_data[i].move_timer--;
 
-        if (len > 0.001) {
-          // Normalize and scale movement for smooth pursuit
-          double move_x = (dx / len) * zombie_move;
-          double move_z = (dz / len) * zombie_move;
+        // Skeletons maintain ~10 block distance from player
+        if (dist_to_player <= vision_range) {
+          double dx = closest_player->x - old_x;
+          double dz = closest_player->z - old_z;
+          double len = sqrt(dx * dx + dz * dz);
 
-          new_x += move_x;
-          new_z += move_z;
+          if (len > 0.001) {
+            double move_dir = 1.0;
+            // Back away if too close
+            if (dist_to_player < 6.0) move_dir = -1.0;
+            // Strafe if at good range
+            if (dist_to_player >= 6.0 && dist_to_player <= 12.0) {
+              // Strafe perpendicular to the player
+              double perp_x = -dz / len;
+              double perp_z = dx / len;
+              new_x += perp_x * move_amount * 2.0;
+              new_z += perp_z * move_amount * 2.0;
+              double angle = atan2(dz, dx) * 256.0 / (2.0 * 3.14159265358979);
+              yaw = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
+            } else {
+              double move_x = (dx / len) * move_amount * 2.0 * move_dir;
+              double move_z = (dz / len) * move_amount * 2.0 * move_dir;
+              new_x += move_x;
+              new_z += move_z;
+              double angle = atan2(dz, dx) * 256.0 / (2.0 * 3.14159265358979);
+              yaw = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
+            }
+          }
+        }
+      } else {
+        // Standard hostile melee AI (zombies, piglins, endermen)
 
-          // Calculate yaw from direction
-          double angle = atan2(dz, dx) * 256.0 / (2.0 * 3.14159265358979);
-          yaw = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
+        // If we're within attack range, hurt the player
+        if (dist_to_player < attack_range && y_diff < 2.0) {
+          if (mob_data[i].move_timer <= 0) {
+            if (closest_player->client_fd != -1) {
+              hurtEntity(closest_player->client_fd, entity_id, D_generic, 1);
+            }
+            mob_data[i].move_timer = 20;
+          }
+        }
+
+        // Decrement attack cooldown timer
+        if (mob_data[i].move_timer > 0) mob_data[i].move_timer--;
+
+        // Move towards the closest player if within vision range
+        if (dist_to_player <= vision_range) {
+          double dx = closest_player->x - old_x;
+          double dz = closest_player->z - old_z;
+          double len = sqrt(dx * dx + dz * dz);
+
+          if (len > 0.001) {
+            double move_x = (dx / len) * move_speed;
+            double move_z = (dz / len) * move_speed;
+            new_x += move_x;
+            new_z += move_z;
+            double angle = atan2(dz, dx) * 256.0 / (2.0 * 3.14159265358979);
+            yaw = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
+          }
         }
       }
 
