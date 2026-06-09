@@ -18,14 +18,20 @@ Runs on as low as **~7MB of RAM** !!!
 
 ## What's New
 
+Compared with the original bareiron, **irongingot** targets modern vanilla Minecraft and is much more feature-complete: it keeps the low-memory design, but adds configurable gameplay, richer terrain, structures, dimensions, mobs, inventories, and desktop/server-focused builds instead of ESP32 support.
+
+- **More dimensions** - Nether and End support with portal travel, dimension-aware chunks, spawn fixes, and void death handling
+- **More structures** - Villages, mineshafts, dungeons, strongholds, and Nether structure support
+- **More mobs and entities** - Villagers, piglins, endermen, fish, arrows, and ender pearls
+- **More interactions** - Chests, buckets, lava/water flow, flint and steel, farming, smelting, ores, bows, and creative inventory support
 - **Doors and stairs** - They work now
 - **Trees and vegetation** - Biome-appropriate trees, flowers, and grass generate in the world
-- **Better terrain** - Improved world generation with better caves, mountains, and ore distribution
+- **Better terrain** - Improved world generation with better caves, mountains, ore distribution, and dimension-specific terrain
 - **Config file** - Change settings in `server.conf` instead of recompiling
-- **Multithreaded chunk gen** - Chunk generation runs on a separate thread
-- **Infinite block changes** - Optional unlimited building with dynamic memory allocation
-- **Musl libc support** - Build with `--musl` flag for ~7MB RAM usage (vs ~30MB with glibc)
-- **Performance fixes** - Various optimizations for chunk streaming and packet handling
+- **Terminal UI** - Server status and logs are shown in a terminal interface
+- **Multithreaded chunk gen** - Chunk generation runs in worker threads
+- **Musl libc support** - Build with `--musl` for ~7MB RAM usage, plus ARM64 musl cross-build support with Zig
+- **Performance fixes** - Various optimizations for chunk streaming, fluid updates, packet handling, and CPU usage
 
 ## Quick Start
 
