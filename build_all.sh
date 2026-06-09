@@ -61,8 +61,8 @@ mkdir -p build
 
 # ─── Linux build (glibc) ───
 echo "=== Building Linux binary (glibc) ==="
-gcc ${SRC_FILES[@]} $CFLAGS $MOJANG_SKIN_CFLAGS $INCLUDES -o build/bareiron $LIBS -pthread $MOJANG_SKIN_LIBS
-echo "Linux binary: build/bareiron"
+gcc ${SRC_FILES[@]} $CFLAGS $MOJANG_SKIN_CFLAGS $INCLUDES -o build/irongingot $LIBS -pthread $MOJANG_SKIN_LIBS
+echo "Linux binary: build/irongingot"
 
 # ─── Linux build (musl) ───
 MUSL_BUILT=0
@@ -87,8 +87,8 @@ if command -v musl-gcc &>/dev/null; then
     third_party/zlib/zutil.c
   )
   MUSL_INCLUDES="$INCLUDES -Ithird_party/zlib"
-  musl-gcc ${SRC_FILES[@]} ${ZLIB_SRCS[@]} $CFLAGS -D_GNU_SOURCE $MUSL_INCLUDES -o build/bareiron-musl -static -fno-link-libatomic -lpthread -lm
-  echo "Linux musl binary: build/bareiron-musl"
+  musl-gcc ${SRC_FILES[@]} ${ZLIB_SRCS[@]} $CFLAGS -D_GNU_SOURCE $MUSL_INCLUDES -o build/irongingot-musl -static -fno-link-libatomic -lpthread -lm
+  echo "Linux musl binary: build/irongingot-musl"
   MUSL_BUILT=1
 else
   echo "SKIP: musl-gcc not found. Install with:"
@@ -102,7 +102,7 @@ echo "=== Packaging Linux release (glibc) ==="
 GLIBC_DIR="build/irongingot-v${VERSION}-linux-glibc"
 rm -rf "$GLIBC_DIR"
 mkdir -p "$GLIBC_DIR"
-cp build/bareiron "$GLIBC_DIR/"
+cp build/irongingot "$GLIBC_DIR/"
 cp server.conf "$GLIBC_DIR/"
 cp serverIcon.png "$GLIBC_DIR/"
 (cd build && zip -rq "irongingot-v${VERSION}-linux-glibc.zip" "irongingot-v${VERSION}-linux-glibc")
@@ -115,7 +115,7 @@ if [ "$MUSL_BUILT" -eq 1 ]; then
   MUSL_DIR="build/irongingot-v${VERSION}-linux-musl"
   rm -rf "$MUSL_DIR"
   mkdir -p "$MUSL_DIR"
-  cp build/bareiron-musl "$MUSL_DIR/"
+  cp build/irongingot-musl "$MUSL_DIR/"
   cp server.conf "$MUSL_DIR/"
   cp serverIcon.png "$MUSL_DIR/"
   (cd build && zip -rq "irongingot-v${VERSION}-linux-musl.zip" "irongingot-v${VERSION}-linux-musl")
@@ -156,15 +156,15 @@ if [ -n "$WIN_CC" ]; then
 
   WIN_INCLUDES="$INCLUDES -Ithird_party/zlib"
 
-  $WIN_CC ${SRC_FILES[@]} ${ZLIB_SRCS[@]} $CFLAGS $WIN_INCLUDES -o build/bareiron.exe -static -lws2_32 -pthread -lm
-  echo "Windows binary: build/bareiron.exe"
+  $WIN_CC ${SRC_FILES[@]} ${ZLIB_SRCS[@]} $CFLAGS $WIN_INCLUDES -o build/irongingot.exe -static -lws2_32 -pthread -lm
+  echo "Windows binary: build/irongingot.exe"
 
   # Package Windows release
   echo "=== Packaging Windows release ==="
   WINDOWS_DIR="build/irongingot-v${VERSION}-windows"
   rm -rf "$WINDOWS_DIR"
   mkdir -p "$WINDOWS_DIR"
-  cp build/bareiron.exe "$WINDOWS_DIR/"
+  cp build/irongingot.exe "$WINDOWS_DIR/"
   cp server.conf "$WINDOWS_DIR/"
   cp serverIcon.png "$WINDOWS_DIR/"
   (cd build && zip -r "irongingot-v${VERSION}-windows.zip" "irongingot-v${VERSION}-windows")

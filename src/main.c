@@ -28,6 +28,9 @@
     #include <sys/socket.h>
     #include <netinet/in.h>
     #include <arpa/inet.h>
+    #ifdef __linux__
+      #include <sys/prctl.h>
+    #endif
   #endif
   #include <unistd.h>
   #include <time.h>
@@ -743,6 +746,10 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
 }
 
 int main () {
+  #if defined(__linux__)
+    prctl(PR_SET_NAME, "irongingot", 0, 0, 0);
+  #endif
+
   printTransRightsBanner();
   terminal_ui_init();
   terminal_ui_log("Starting irongingot server");
@@ -1284,7 +1291,7 @@ int main () {
 
 #ifdef ESP_PLATFORM
 
-void bareiron_main (void *pvParameters) {
+void irongingot_main (void *pvParameters) {
   main();
   vTaskDelete(NULL);
 }
@@ -1296,7 +1303,7 @@ static void wifi_event_handler (void *arg, esp_event_base_t event_base, int32_t 
     esp_wifi_connect();
   } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
     printf("Got IP, starting server...\n\n");
-    xTaskCreate(bareiron_main, "bareiron", 4096, NULL, 5, NULL);
+    xTaskCreate(irongingot_main, "irongingot", 4096, NULL, 5, NULL);
   }
 }
 

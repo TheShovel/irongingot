@@ -82,7 +82,7 @@ if [ "$musl" -eq 0 ] && [[ "$OSTYPE" != msys* && "$OSTYPE" != cygwin* && "$OSTYP
   fi
 fi
 
-rm -f "bareiron$exe"
+rm -f "irongingot$exe"
 
 # Source files
 SRC_LIST="src/*.c src/noise/*.c src/cubiomes/biomenoise.c src/cubiomes/biomes.c src/cubiomes/finders.c src/cubiomes/generator.c src/cubiomes/layers.c src/cubiomes/noise.c src/cubiomes/quadbase.c src/cubiomes/util.c"
@@ -91,9 +91,9 @@ ZLIB_INCLUDE="-Ithird_party/zlib"
 
 # musl requires static linking and bundled zlib (to avoid glibc headers conflict)
 if [ "$musl" -eq 1 ]; then
-  eval $compiler $SRC_LIST $ZLIB_SRCS -O3 -ffast-math -D_GNU_SOURCE -Iinclude -Isrc/cubiomes $ZLIB_INCLUDE -o "bareiron$exe" $windows_linker -lm -static -fno-link-libatomic -lpthread
+  eval $compiler $SRC_LIST $ZLIB_SRCS -O3 -ffast-math -D_GNU_SOURCE -Iinclude -Isrc/cubiomes $ZLIB_INCLUDE -o "irongingot$exe" $windows_linker -lm -static -fno-link-libatomic -lpthread
 else
-  eval $compiler $SRC_LIST -O3 -ffast-math $mojang_skin_cflags -Iinclude -Isrc/cubiomes -o "bareiron$exe" $windows_linker -lm -lz -pthread $mojang_skin_libs
+  eval $compiler $SRC_LIST -O3 -ffast-math $mojang_skin_cflags -Iinclude -Isrc/cubiomes -o "irongingot$exe" $windows_linker -lm -lz -pthread $mojang_skin_libs
 fi
 
-echo "Build complete: bareiron$exe"
+echo "Build complete: irongingot$exe"

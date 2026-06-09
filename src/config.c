@@ -89,8 +89,8 @@ void init_config_defaults(void) {
   config.enable_beef_dumps = 0;
 
   // Strings
-  strcpy(config.motd, "A bareiron server");
-  strcpy(config.brand, "bareiron");
+  strcpy(config.motd, "A irongingot server");
+  strcpy(config.brand, "irongingot");
 
   // Runtime (calculated later)
   config.visited_history = 1024;
@@ -260,7 +260,7 @@ int save_config(const char *filename) {
     return -1;
   }
 
-  fprintf(f, "# Bareiron Server Configuration\n");
+  fprintf(f, "# irongingot Server Configuration\n");
   fprintf(f, "# Generated automatically - edit as needed\n\n");
 
   fprintf(f, "# ============================================\n");

@@ -47,15 +47,15 @@ jobs:
 
       - name: Build project
         run: |
-          cosmocc src/*.c -O2 -Iinclude -o bareiron.exe
+          cosmocc src/*.c -O2 -Iinclude -o irongingot.exe
 
       - name: Upload release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
           name: Latest build
-          body: "This is a rolling release of bareiron, compiled from the latest commit on the main branch.\n\nThe executable (`bareiron.exe`) is a Cosmopolitan-built polyglot, and should run on Windows and Linux (and Mac?), despite the file extension."
-          files: bareiron.exe
+          body: "This is a rolling release of irongingot, compiled from the latest commit on the main branch.\n\nThe executable (`irongingot.exe`) is a Cosmopolitan-built polyglot, and should run on Windows and Linux (and Mac?), despite the file extension."
+          files: irongingot.exe
           prerelease: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

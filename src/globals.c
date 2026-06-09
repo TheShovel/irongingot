@@ -56,15 +56,15 @@ int32_t world_weather_clear_time = 0;
 int32_t world_weather_rain_time = 0;
 int32_t world_weather_thunder_time = 0;
 
-char motd[MOTD_MAX_LEN] = { "A bareiron server" };
-uint8_t motd_len = sizeof("A bareiron server") - 1;
+char motd[MOTD_MAX_LEN] = { "A irongingot server" };
+uint8_t motd_len = sizeof("A irongingot server") - 1;
 
 char favicon[FAVICON_MAX_LEN] = { 0 };
 uint16_t favicon_len = 0;
 
 #ifdef SEND_BRAND
-  char brand[BRAND_MAX_LEN] = { "bareiron" };
-  uint8_t brand_len = sizeof("bareiron") - 1;
+  char brand[BRAND_MAX_LEN] = { "irongingot" };
+  uint8_t brand_len = sizeof("irongingot") - 1;
 #endif
 
 uint16_t client_count;

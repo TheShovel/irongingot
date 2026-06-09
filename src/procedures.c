@@ -4183,12 +4183,13 @@ static uint8_t canMobStepTo (double x, double y, double z, uint8_t dimension) {
   return canMobOccupyPosition(x, y, z, dimension) && hasMobFloorBelow(x, y, z, dimension);
 }
 
-static uint8_t countMobsNearPosition(double x, double y, double z, uint8_t dimension, double radius) {
+static uint8_t countMobsNearPositionOfType(double x, double y, double z, uint8_t dimension, double radius, uint8_t type) {
   uint8_t count = 0;
   double radius_sq = radius * radius;
 
   for (int i = 0; i < MAX_MOBS; i++) {
     if (mob_data[i].type == 0) continue;
+    if (type != 0 && mob_data[i].type != type) continue;
     if ((mob_data[i].data & 31) == 0) continue;
     if (mob_data[i].dimension != dimension) continue;
 
@@ -4265,9 +4266,10 @@ static void spawnDungeonMobs(PlayerData *player) {
 
     // If the spawner block was mined, stop spawning from this generated room.
     if (getBlockAt2(spawner->x, spawner->y, spawner->z, DIMENSION_OVERWORLD) != B_spawner) continue;
-    if (countMobsNearPosition((double)spawner->x + 0.5, spawner->y, (double)spawner->z + 0.5, DIMENSION_OVERWORLD, 9.0) >= 4) continue;
+    if (countMobsNearPositionOfType((double)spawner->x + 0.5, spawner->y, (double)spawner->z + 0.5, DIMENSION_OVERWORLD, 9.0, spawner->mob_type) >= 4) continue;
 
-    for (uint8_t attempt = 0; attempt < 8; attempt++) {
+    uint8_t spawned = 0;
+    for (uint8_t attempt = 0; attempt < 16 && !spawned; attempt++) {
       int dx = (int)(fast_rand() % 9) - 4;
       int dz = (int)(fast_rand() % 9) - 4;
       if (dx == 0 && dz == 0) continue;
@@ -4278,7 +4280,25 @@ static void spawnDungeonMobs(PlayerData *player) {
       if (!canMobStepTo((double)spawn_x + 0.5, spawn_y, (double)spawn_z + 0.5, DIMENSION_OVERWORLD)) continue;
 
       spawnMob(spawner->mob_type, spawn_x, spawn_y, spawn_z, 10, DIMENSION_OVERWORLD);
-      break;
+      spawned = 1;
+    }
+
+    if (spawned) continue;
+
+    // Fallback: scan the room interior so unlucky random choices or wall/chest
+    // positions don't make a valid spawner appear to do nothing.
+    for (int dz = -3; dz <= 3 && !spawned; dz++) {
+      for (int dx = -3; dx <= 3 && !spawned; dx++) {
+        if (dx == 0 && dz == 0) continue;
+
+        short spawn_x = spawner->x + dx;
+        short spawn_z = spawner->z + dz;
+        uint8_t spawn_y = spawner->y;
+        if (!canMobStepTo((double)spawn_x + 0.5, spawn_y, (double)spawn_z + 0.5, DIMENSION_OVERWORLD)) continue;
+
+        spawnMob(spawner->mob_type, spawn_x, spawn_y, spawn_z, 10, DIMENSION_OVERWORLD);
+        spawned = 1;
+      }
     }
   }
 }
@@ -4440,6 +4460,10 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
   int spawn_range = config.mob_spawn_range;
   int min_dist = config.mob_spawn_min_distance;
 
+  // Dungeon spawners are block-driven and should keep working even when the
+  // normal ambient mob cap/range has already been reached.
+  spawnDungeonMobs(player);
+
   // Count existing mobs near this player
   uint8_t existing = countMobsNearPlayer(player);
   if ((int)existing >= max_mobs) return;
@@ -4470,7 +4494,6 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
 
   spawnVillageVillagers(player);
   spawnFishInWater(player);
-  spawnDungeonMobs(player);
 
   // Passive mob types: Chicken(25), Cow(28), Pig(95), Sheep(106)
   static const uint8_t passive_types[] = { 25, 28, 95, 106 };
