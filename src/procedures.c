@@ -843,6 +843,16 @@ void broadcastMobMetadata (int client_fd, int entity_id) {
       length = 1;
       break;
 
+    case E_CREEPER:
+      metadata = malloc(sizeof *metadata);
+      metadata[0] = (EntityData){
+        16,                    // Creeper state (ignited flag)
+        1,                     // Type (VarInt)
+        { .varint = mob->move_timer > 0 ? 1 : -1 }, // 1 = ignited, -1 = idle
+      };
+      length = 1;
+      break;
+
     default: return;
   }
 
@@ -4566,9 +4576,10 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
   static const uint8_t passive_types[] = { 25, 28, 95, 106 };
   static const uint8_t num_passive_types = 4;
 
-  // Hostile mob types: Zombie(145), Skeleton(110) - spawn only at night
-  static const uint8_t hostile_types[] = { 145, E_SKELETON };
-  static const uint8_t num_hostile_types = 2;
+  // Hostile mob types: Zombie(145), Skeleton(110), Creeper(30) - spawn only at night.
+  // Enderman(39) is weighted rare (~1/9 chance per hostile spawn).
+  static const uint8_t hostile_types[] = { 145, 145, 145, 145, E_SKELETON, E_SKELETON, E_SKELETON, E_CREEPER, E_ENDERMAN };
+  static const uint8_t num_hostile_types = 9;
 
   // Determine if it's night (world_time >= 12000)
   uint8_t is_night = (world_time >= 12000);
@@ -4673,9 +4684,11 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
       if (!isPassableSpawnBlock(getBlockAt(spawn_x, surface_y + 2, spawn_z))) continue;
 
       uint8_t type = hostile_types[fast_rand() % num_hostile_types];
+      uint8_t health = 10;
+      if (type == E_ENDERMAN) health = 40;
+      else if (type == E_CREEPER) health = 20;
 
-      // Zombies spawn with 10 HP
-      spawnMob(type, spawn_x, surface_y + 1, spawn_z, 10, player->dimension);
+      spawnMob(type, spawn_x, surface_y + 1, spawn_z, health, player->dimension);
     }
   }
 
@@ -4954,6 +4967,9 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
           case E_TROPICAL_FISH: givePlayerItem(player, I_tropical_fish, 1); break;
           case E_PIGLIN: 
             givePlayerItem(player, getRandomCreativeItem(), 1);
+            break;
+          case E_CREEPER:
+            givePlayerItem(player, I_gunpowder, 1 + (fast_rand() % 2));
             break;
           case E_ENDERMAN:
             if ((fast_rand() & 3) == 0) givePlayerItem(player, I_ender_pearl, 1);
@@ -5596,13 +5612,6 @@ void handleServerTick (int64_t time_since_last_tick) {
         attack_range = 2.0;
       }
 
-      // Endermen are extremely fast with long vision
-      if (mob_data[i].type == E_ENDERMAN) {
-        move_speed = move_amount * 6.0;
-        vision_range = 64.0;
-        attack_range = 3.0;
-      }
-
       double dist_to_player = sqrt(closest_dist_double);
       double y_diff = fabs(old_y - closest_player->y);
 
@@ -5660,8 +5669,114 @@ void handleServerTick (int64_t time_since_last_tick) {
             }
           }
         }
+      } else if (mob_data[i].type == E_CREEPER) {
+        // Creeper AI: chase, fuse, explode
+
+        // If fusing, count down the fuse
+        if (mob_data[i].move_timer > 0) {
+          mob_data[i].move_timer--;
+
+          // If player moved away, cancel fuse
+          if (dist_to_player > 7.0 || y_diff > 3.0) {
+            mob_data[i].move_timer = 0;
+            broadcastMobMetadata(-1, entity_id); // stop flashing
+          } else if (mob_data[i].move_timer <= 0) {
+            // Fuse complete — explode!
+            // Broadcast metadata (stop flashing)
+            broadcastMobMetadata(-1, entity_id);
+
+            // Damage all players within blast radius
+            for (int p = 0; p < MAX_PLAYERS; p++) {
+              if (player_data[p].client_fd == -1) continue;
+              if (player_data[p].dimension != mob_data[i].dimension) continue;
+              double pdx = mob_data[i].x - player_data[p].x;
+              double pdz = mob_data[i].z - player_data[p].z;
+              double pdy = fabs(mob_data[i].y - player_data[p].y);
+              double pdist = sqrt(pdx * pdx + pdz * pdz);
+              if (pdist < 4.0 && pdy < 3.0) {
+                uint8_t dmg = (uint8_t)((4.0 - pdist) * 7.0);
+                if (dmg < 1) dmg = 1;
+                hurtEntity(player_data[p].client_fd, entity_id, D_explosion, dmg);
+              }
+            }
+
+            // Damage nearby mobs
+            for (int mi = 0; mi < MAX_MOBS; mi++) {
+              if (mi == i || mob_data[mi].type == 0) continue;
+              if ((mob_data[mi].data & 31) == 0) continue;
+              if (mob_data[mi].dimension != mob_data[i].dimension) continue;
+              double mdx = mob_data[i].x - mob_data[mi].x;
+              double mdz = mob_data[i].z - mob_data[mi].z;
+              double mdist = sqrt(mdx * mdx + mdz * mdz);
+              if (mdist < 3.0 && fabs(mob_data[i].y - mob_data[mi].y) < 3.0) {
+                uint8_t dmg = (uint8_t)((3.0 - mdist) * 5.0);
+                if (dmg < 1) dmg = 1;
+                hurtEntity(-2 - mi, entity_id, D_explosion, dmg);
+              }
+            }
+
+            // Kill the creeper with explosion damage for drops
+            hurtEntity(entity_id, -1, D_explosion, 99);
+          }
+        } else {
+          // Not fusing — chase player
+          if (dist_to_player <= vision_range) {
+            double dx = closest_player->x - old_x;
+            double dz = closest_player->z - old_z;
+            double len = sqrt(dx * dx + dz * dz);
+
+            if (len > 0.001) {
+              // Start fusing when close enough
+              if (dist_to_player < 3.0 && y_diff < 2.0) {
+                mob_data[i].move_timer = 30;
+                broadcastMobMetadata(-1, entity_id);
+              } else {
+                // Chase the player
+                double move_x = (dx / len) * move_amount * 2.0;
+                double move_z = (dz / len) * move_amount * 2.0;
+                new_x += move_x;
+                new_z += move_z;
+                double angle = atan2(dz, dx) * 256.0 / (2.0 * 3.14159265358979);
+                yaw = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
+              }
+            }
+          }
+        }
+      } else if (mob_data[i].type == E_ENDERMAN) {
+        // Enderman AI
+        double enderman_speed = move_amount * 6.0;
+        double enderman_vision = 64.0;
+
+        // If we're within attack range, hurt the player
+        if (dist_to_player < 3.0 && y_diff < 2.0) {
+          if (mob_data[i].move_timer <= 0) {
+            if (closest_player->client_fd != -1) {
+              hurtEntity(closest_player->client_fd, entity_id, D_generic, 1);
+            }
+            mob_data[i].move_timer = 20;
+          }
+        }
+
+        // Decrement attack cooldown timer
+        if (mob_data[i].move_timer > 0) mob_data[i].move_timer--;
+
+        // Move towards the closest player if within vision range
+        if (dist_to_player <= enderman_vision) {
+          double dx = closest_player->x - old_x;
+          double dz = closest_player->z - old_z;
+          double len = sqrt(dx * dx + dz * dz);
+
+          if (len > 0.001) {
+            double move_x = (dx / len) * enderman_speed;
+            double move_z = (dz / len) * enderman_speed;
+            new_x += move_x;
+            new_z += move_z;
+            double angle = atan2(dz, dx) * 256.0 / (2.0 * 3.14159265358979);
+            yaw = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
+          }
+        }
       } else {
-        // Standard hostile melee AI (zombies, piglins, endermen)
+        // Standard hostile melee AI (zombies, piglins)
 
         // If we're within attack range, hurt the player
         if (dist_to_player < attack_range && y_diff < 2.0) {
@@ -6266,6 +6381,9 @@ ssize_t writeEntityData (int client_fd, EntityData *data) {
     case 0: // Byte
     case 8: // Boolean (written as a single byte)
       return writeByte(client_fd, data->value.byte);
+    case 1: // VarInt
+      writeVarInt(client_fd, data->value.varint);
+      return 0;
     case 21: // Pose
       writeVarInt(client_fd, data->value.pose);
       return 0;
@@ -6281,6 +6399,9 @@ int sizeEntityData (EntityData *data) {
   switch (data->type) {
     case 0: // Byte
       value_size = 1;
+      break;
+    case 1: // VarInt
+      value_size = sizeVarInt(data->value.varint);
       break;
     case 21: // Pose
       value_size = sizeVarInt(data->value.pose);

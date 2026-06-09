@@ -212,6 +212,7 @@
 #define STATE_PLAY 5
 
 // Entity type identifiers
+#define E_CREEPER 30
 #define E_SKELETON 110
 #define E_VILLAGER 134
 #define E_PIGLIN 96
@@ -415,12 +416,14 @@ typedef struct {
 
 union EntityDataValue {
   uint8_t byte;
+  int varint;
   int pose;
 };
 
 typedef struct {
   uint8_t index;
   // 0 - Byte
+  // 1 - VarInt
   // 21 - Pose
   int type;
   union EntityDataValue value;
