@@ -439,7 +439,8 @@ extern PlayerAppearance player_appearance[MAX_PLAYERS];
 
 extern MobData mob_data[MAX_MOBS];
 
-// Projectile types
+// Projectile entity type identifiers for protocol 772 (1.21.8)
+#define E_ARROW 6
 #define E_ENDER_PEARL 42
 
 #define MAX_PROJECTILES 16
@@ -452,6 +453,8 @@ typedef struct {
   double x, y, z;
   double vx, vy, vz;
   uint64_t spawn_tick;
+  uint8_t damage;
+  uint8_t stuck;
   uint8_t uuid[16];
 } ProjectileData;
 

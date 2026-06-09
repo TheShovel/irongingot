@@ -52,6 +52,11 @@ static int is_in_safe_area(short bx, short bz, uint8_t dimension) {
 
 // Forward declaration for parallel player updates
 static void handlePlayerUpdatesParallel(int64_t time_since_last_tick, ThreadPool* pool);
+static void setPlayerActiveHand(PlayerData *player, uint8_t active);
+static uint8_t shootBowArrow(PlayerData *player);
+
+static uint32_t player_bow_draw_start[MAX_PLAYERS];
+static uint32_t player_bow_last_use_tick[MAX_PLAYERS];
 
 static int getPlayerIndexByPointer(PlayerData *player) {
   if (!player) return -1;
@@ -304,6 +309,8 @@ int reservePlayerData (int client_fd, uint8_t *uuid, char *name) {
         player_data[i].visited_x[j] = 32767;
         player_data[i].visited_z[j] = 32767;
       }
+      player_bow_draw_start[i] = 0;
+      player_bow_last_use_tick[i] = 0;
       player_noclip[i] = 0;
       loadPlayerAppearance(i, uuid, name);
       initCreativeModeUI(i);  // Initialize creative mode UI for this player
@@ -326,6 +333,8 @@ int reservePlayerData (int client_fd, uint8_t *uuid, char *name) {
       memcpy(player_data[i].uuid, uuid, 16);
       memcpy(player_data[i].name, name, 16);
       resetPlayerData(&player_data[i]);
+      player_bow_draw_start[i] = 0;
+      player_bow_last_use_tick[i] = 0;
       player_noclip[i] = 0;
       loadPlayerAppearance(i, uuid, name);
       initCreativeModeUI(i);  // Initialize creative mode UI for this player
@@ -372,6 +381,8 @@ void handlePlayerDisconnect (int client_fd) {
     PlayerData leaving_player = player_data[i];
     // Mark the player as being offline
     player_data[i].client_fd = -1;
+    player_bow_draw_start[i] = 0;
+    player_bow_last_use_tick[i] = 0;
     player_noclip[i] = 0;
     // Prepare leave message for broadcast
     uint8_t player_name_len = strlen(player_data[i].name);
@@ -1871,6 +1882,7 @@ uint8_t getItemStackSize (uint16_t item) {
     item == I_netherite_hoe ||
     // Shears
     item == I_shears ||
+    item == I_bow ||
     // Filled buckets
     item == I_water_bucket ||
     item == I_lava_bucket
@@ -2390,8 +2402,18 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
     return;
   }
 
-  // "Finish eating" action, called any time eating stops
+  // "Release use item" action, sent when eating stops or a bow is released
   if (action == 5) {
+    int player_idx = getPlayerIndexByPointer(player);
+    if (player_idx >= 0 && player_bow_draw_start[player_idx] != 0) {
+      if (player->inventory_items[player->hotbar] == I_bow) {
+        shootBowArrow(player);
+      } else {
+        player_bow_draw_start[player_idx] = 0;
+        player_bow_last_use_tick[player_idx] = 0;
+        setPlayerActiveHand(player, 0);
+      }
+    }
     // Reset eating timer and clear eating flag
     player->flagval_16 = 0;
     player->flags &= ~0x10;
@@ -3095,6 +3117,7 @@ static void populateDungeonChestLoot(uint8_t *slots, short x, int16_t y, short z
     { I_string, 2, 7, 8 },
     { I_bone, 2, 8, 8 },
     { I_arrow, 4, 12, 8 },
+    { I_bow, 1, 1, 4 },
     { I_coal, 3, 10, 7 },
     { I_redstone, 3, 9, 6 },
     { I_lapis_lazuli, 2, 6, 5 },
@@ -3110,6 +3133,228 @@ static void populateDungeonChestLoot(uint8_t *slots, short x, int16_t y, short z
   for (uint8_t i = 0; i < rolls; i++) {
     addChestLootStack(slots, pickChestLootEntry(loot_table, sizeof(loot_table) / sizeof(loot_table[0]), &seed), &seed);
   }
+}
+
+static int projectileEntityId(int slot) {
+  return -200 - slot;
+}
+
+static void removeProjectileFromClients(int slot, uint8_t dimension) {
+  int entity_id = projectileEntityId(slot);
+  for (int j = 0; j < MAX_PLAYERS; j++) {
+    if (player_data[j].client_fd == -1) continue;
+    if (player_data[j].dimension != dimension) continue;
+    sc_removeEntity(player_data[j].client_fd, entity_id);
+  }
+}
+
+static int findPlayerArrowSlot(PlayerData *player) {
+  for (int i = 0; i < 41; i++) {
+    if (player->inventory_items[i] == I_arrow && player->inventory_count[i] > 0) return i;
+  }
+  return -1;
+}
+
+static uint8_t playerHasArrowAvailable(PlayerData *player) {
+  return getConfiguredGameMode() == 1 || findPlayerArrowSlot(player) >= 0;
+}
+
+static void makeProjectileUuid(ProjectileData *p, int slot) {
+  uint32_t r = fast_rand();
+  memcpy(p->uuid, &r, 4);
+  memcpy(p->uuid + 4, &server_ticks, 4);
+  memcpy(p->uuid + 8, &slot, 4);
+  memset(p->uuid + 12, 0, 4);
+}
+
+static void projectileAngles(double vx, double vy, double vz, float *yaw_deg, float *pitch_deg, uint8_t *yaw_byte, uint8_t *pitch_byte) {
+  double horizontal = sqrt(vx * vx + vz * vz);
+  double yaw = atan2(vx, vz) * 180.0 / M_PI;
+  double pitch = atan2(vy, horizontal) * 180.0 / M_PI;
+
+  if (yaw_deg) *yaw_deg = (float)yaw;
+  if (pitch_deg) *pitch_deg = (float)pitch;
+  if (yaw_byte) *yaw_byte = (uint8_t)((int)(yaw * 256.0 / 360.0) & 255);
+  if (pitch_byte) *pitch_byte = (uint8_t)((int)(pitch * 256.0 / 360.0) & 255);
+}
+
+static void syncPlayerInventorySlot(PlayerData *player, int slot) {
+  if (slot < 0 || slot > 40) return;
+  uint8_t client_slot = serverSlotToClientSlot(0, (uint8_t)slot);
+  if (client_slot == 255) return;
+  sc_setContainerSlot(player->client_fd, 0, client_slot, player->inventory_count[slot], player->inventory_items[slot]);
+  sc_setContainerSlot(player->client_fd, -2, client_slot, player->inventory_count[slot], player->inventory_items[slot]);
+}
+
+static void setPlayerActiveHand(PlayerData *player, uint8_t active) {
+  EntityData metadata[] = {{
+    8,                 // Living Entity active hand flags
+    0,                 // Byte
+    { active ? 0x01 : 0x00 },
+  }};
+
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (player_data[i].client_fd == -1) continue;
+    if (player_data[i].flags & 0x20) continue;
+    if (player_data[i].dimension != player->dimension) continue;
+    sc_setEntityMetadata(player_data[i].client_fd, player->client_fd, metadata, 1);
+  }
+}
+
+static uint8_t shootBowArrow(PlayerData *player) {
+  int owner_idx = getPlayerIndexByPointer(player);
+  if (owner_idx < 0) return 0;
+
+  uint32_t draw_start = player_bow_draw_start[owner_idx];
+  player_bow_draw_start[owner_idx] = 0;
+  player_bow_last_use_tick[owner_idx] = 0;
+  setPlayerActiveHand(player, 0);
+
+  uint32_t charge_ticks = draw_start == 0 ? (uint32_t)TICKS_PER_SECOND : server_ticks - draw_start;
+  if (charge_ticks < 3) charge_ticks = 3;
+
+  int creative = getConfiguredGameMode() == 1;
+  int arrow_slot = findPlayerArrowSlot(player);
+  if (!creative && arrow_slot < 0) return 0;
+
+  int slot = -1;
+  for (int i = 0; i < MAX_PROJECTILES; i++) {
+    if (!projectile_data[i].active) { slot = i; break; }
+  }
+  if (slot < 0) return 0;
+
+  double charge = (double)charge_ticks / (double)TICKS_PER_SECOND;
+  double power = (charge * charge + 2.0 * charge) / 3.0;
+  if (power > 1.0) power = 1.0;
+  if (power < 0.2) power = 0.2;
+
+  ProjectileData *p = &projectile_data[slot];
+  p->active = 1;
+  p->type = E_ARROW;
+  p->owner_index = owner_idx;
+  p->dimension = player->dimension;
+  p->x = (double)player->x + 0.5;
+  p->y = (double)player->y + 1.62;
+  p->z = (double)player->z + 0.5;
+
+  double speed = power * 3.0;
+  double pitch_rad = player->pitch * M_PI / 254.0;
+  double yaw_rad = player->yaw * M_PI / 127.0;
+  p->vx = -sin(yaw_rad) * cos(pitch_rad) * speed;
+  p->vy = -sin(pitch_rad) * speed;
+  p->vz = cos(yaw_rad) * cos(pitch_rad) * speed;
+  p->spawn_tick = server_ticks;
+  p->damage = (uint8_t)(3 + power * 5.0);
+  p->stuck = 0;
+  makeProjectileUuid(p, slot);
+
+  if (arrow_slot >= 0) {
+    player->inventory_count[arrow_slot]--;
+    if (player->inventory_count[arrow_slot] == 0) player->inventory_items[arrow_slot] = 0;
+    syncPlayerInventorySlot(player, arrow_slot);
+    if (arrow_slot == player->hotbar || arrow_slot == 40) broadcastPlayerEquipment(player);
+  }
+
+  int16_t nvx = (int16_t)(p->vx * 8000);
+  int16_t nvy = (int16_t)(p->vy * 8000);
+  int16_t nvz = (int16_t)(p->vz * 8000);
+  uint8_t yaw_byte = 0;
+  uint8_t pitch_byte = 0;
+  projectileAngles(p->vx, p->vy, p->vz, NULL, NULL, &yaw_byte, &pitch_byte);
+
+  for (int j = 0; j < MAX_PLAYERS; j++) {
+    if (player_data[j].client_fd == -1) continue;
+    if (player_data[j].dimension != player->dimension) continue;
+    sc_spawnEntity(
+      player_data[j].client_fd,
+      projectileEntityId(slot), p->uuid,
+      E_ARROW, p->x, p->y, p->z,
+      yaw_byte, pitch_byte, nvx, nvy, nvz
+    );
+    sc_entityAnimation(player_data[j].client_fd, player->client_fd, 0);
+  }
+
+  return 1;
+}
+
+static uint8_t projectileHitsPlayer(ProjectileData *p, double x, double y, double z, PlayerData *player) {
+  if (player->client_fd == -1) return 0;
+  if (player->flags & 0x20) return 0;
+  if (player->dimension != p->dimension) return 0;
+
+  double px = (double)player->x + 0.5;
+  double pz = (double)player->z + 0.5;
+  double dx = x - px;
+  double dz = z - pz;
+  if (dx * dx + dz * dz > 0.45) return 0;
+  return y >= (double)player->y && y <= (double)player->y + 1.9;
+}
+
+static uint8_t projectileHitsMob(ProjectileData *p, double x, double y, double z, MobData *mob) {
+  if (mob->type == 0) return 0;
+  if ((mob->data & 31) == 0) return 0;
+  if (mob->dimension != p->dimension) return 0;
+
+  double dx = x - mob->x;
+  double dz = z - mob->z;
+  if (dx * dx + dz * dz > 0.55) return 0;
+  return y >= mob->y && y <= mob->y + 1.9;
+}
+
+static void syncStoppedArrow(int slot, ProjectileData *p) {
+  float yaw = 0;
+  float pitch = 0;
+  projectileAngles(p->vx, p->vy, p->vz, &yaw, &pitch, NULL, NULL);
+
+  for (int j = 0; j < MAX_PLAYERS; j++) {
+    if (player_data[j].client_fd == -1) continue;
+    if (player_data[j].dimension != p->dimension) continue;
+    sc_teleportEntity(player_data[j].client_fd, projectileEntityId(slot), p->x, p->y, p->z, yaw, pitch);
+    sc_setEntityVelocity(player_data[j].client_fd, projectileEntityId(slot), 0, 0, 0);
+  }
+}
+
+static uint8_t tryPickupStuckArrow(int slot, ProjectileData *p) {
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    PlayerData *player = &player_data[i];
+    if (player->client_fd == -1) continue;
+    if (player->flags & 0x20) continue;
+    if (player->dimension != p->dimension) continue;
+
+    double px = (double)player->x + 0.5;
+    double py = (double)player->y + 1.0;
+    double pz = (double)player->z + 0.5;
+    double dx = p->x - px;
+    double dy = p->y - py;
+    double dz = p->z - pz;
+    if (dx * dx + dy * dy + dz * dz > 2.25) continue;
+
+    if (givePlayerItem(player, I_arrow, 1) != 0) continue;
+
+    for (int j = 0; j < MAX_PLAYERS; j++) {
+      if (player_data[j].client_fd == -1) continue;
+      if (player_data[j].dimension != p->dimension) continue;
+      sc_pickupItem(player_data[j].client_fd, projectileEntityId(slot), player->client_fd, 1);
+    }
+    removeProjectileFromClients(slot, p->dimension);
+    p->active = 0;
+    return 1;
+  }
+
+  return 0;
+}
+
+static int findArrowHitEntity(ProjectileData *p, double x, double y, double z) {
+  for (int i = 0; i < MAX_MOBS; i++) {
+    if (projectileHitsMob(p, x, y, z, &mob_data[i])) return -2 - i;
+  }
+
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (i == p->owner_index) continue;
+    if (projectileHitsPlayer(p, x, y, z, &player_data[i])) return player_data[i].client_fd;
+  }
+
+  return 0;
 }
 
 void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t face) {
@@ -3356,6 +3601,18 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
 
   if (handleBucketUse(player, x, y, z, face, count, item)) return;
 
+  if (*item == I_bow && *count > 0) {
+    int player_idx = getPlayerIndexByPointer(player);
+    if (player_idx < 0) return;
+    if (!playerHasArrowAvailable(player)) return;
+    if (player_bow_draw_start[player_idx] == 0) {
+      player_bow_draw_start[player_idx] = server_ticks == 0 ? 1 : server_ticks;
+      setPlayerActiveHand(player, 1);
+    }
+    player_bow_last_use_tick[player_idx] = server_ticks == 0 ? 1 : server_ticks;
+    return;
+  }
+
   // Handle throwable items when no block is targeted
   if (face == 255 && *item == I_ender_pearl && *count > 0) {
     int owner_idx = getPlayerIndexByPointer(player);
@@ -3386,17 +3643,16 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       p->z = (double)player->z + 0.5;
 
       double speed = 1.5;
-      double pitch_rad = player->pitch * M_PI / 128.0;
-      double yaw_rad = player->yaw * M_PI / 128.0;
+      double pitch_rad = player->pitch * M_PI / 254.0;
+      double yaw_rad = player->yaw * M_PI / 127.0;
       p->vx = -sin(yaw_rad) * cos(pitch_rad) * speed;
       p->vy = -sin(pitch_rad) * speed;
       p->vz = cos(yaw_rad) * cos(pitch_rad) * speed;
 
       p->spawn_tick = server_ticks;
-
-      uint32_t r = fast_rand();
-      memcpy(p->uuid, &r, 4);
-      memset(p->uuid + 4, 0, 12);
+      p->damage = 0;
+      p->stuck = 0;
+      makeProjectileUuid(p, slot);
 
       int16_t nvx = (int16_t)(p->vx * 8000);
       int16_t nvy = (int16_t)(p->vy * 8000);
@@ -3407,7 +3663,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
         if (player_data[j].dimension != player->dimension) continue;
         sc_spawnEntity(
           player_data[j].client_fd,
-          -200 - slot, p->uuid,
+          projectileEntityId(slot), p->uuid,
           E_ENDER_PEARL, p->x, p->y, p->z,
           0, 0, nvx, nvy, nvz
         );
@@ -4430,7 +4686,7 @@ void interactEntity (int entity_id, int interactor_id) {
 
 void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t damage) {
 
-  if (attacker_id > 0) { // Attacker is a player
+  if (attacker_id > 0 && damage_type != D_arrow) { // Attacker is a player
 
     PlayerData *player;
     if (getPlayerData(attacker_id, &player)) return;
@@ -4784,6 +5040,24 @@ void handleServerTick (int64_t time_since_last_tick) {
     if (player_data[i].client_fd == -1) continue;
     if (player_data[i].flags & 0x20) continue;
     handlePortalTravel(&player_data[i]);
+  }
+
+  // Some clients repeatedly send Use Item while a bow is held instead of only
+  // sending one Use Item followed by Player Action/release. Treat a short gap
+  // in those packets as releasing the bow so holding charges and releasing fires once.
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (player_bow_draw_start[i] == 0) continue;
+    PlayerData *player = &player_data[i];
+    if (player->client_fd == -1 || player->flags & 0x20 || player->inventory_items[player->hotbar] != I_bow) {
+      player_bow_draw_start[i] = 0;
+      player_bow_last_use_tick[i] = 0;
+      if (player->client_fd != -1) setPlayerActiveHand(player, 0);
+      continue;
+    }
+    if (
+      player_bow_last_use_tick[i] != player_bow_draw_start[i] &&
+      server_ticks - player_bow_last_use_tick[i] > 4
+    ) shootBowArrow(player);
   }
 
   // Process queued fluid updates (spread across ticks for gradual flow)
@@ -5413,28 +5687,110 @@ void handleServerTick (int64_t time_since_last_tick) {
 
   }
 
-  // Tick projectiles (ender pearls, etc.)
+  // Tick projectiles (arrows, ender pearls, etc.)
   for (int i = 0; i < MAX_PROJECTILES; i++) {
     ProjectileData *p = &projectile_data[i];
     if (!p->active) continue;
 
+    uint8_t is_arrow = p->type == E_ARROW;
+
+    if (is_arrow && p->stuck) {
+      if (tryPickupStuckArrow(i, p)) continue;
+      if (server_ticks - p->spawn_tick > (uint32_t)(15 * TICKS_PER_SECOND)) {
+        removeProjectileFromClients(i, p->dimension);
+        p->active = 0;
+      }
+      continue;
+    }
+
     // Apply gravity
-    p->vy -= 0.03;
+    p->vy -= is_arrow ? 0.05 : 0.03;
 
-    // Move projectile
-    double new_x = p->x + p->vx;
-    double new_y = p->y + p->vy;
-    double new_z = p->z + p->vz;
+    double start_x = p->x;
+    double start_y = p->y;
+    double start_z = p->z;
+    double target_x = p->x + p->vx;
+    double target_y = p->y + p->vy;
+    double target_z = p->z + p->vz;
+    double speed = sqrt(p->vx * p->vx + p->vy * p->vy + p->vz * p->vz);
+    int steps = (int)ceil(speed * 2.0);
+    if (steps < 1) steps = 1;
+    if (steps > 8) steps = 8;
 
-    // Check block collision
-    int bx = (int)floor(new_x);
-    int by = (int)floor(new_y);
-    int bz = (int)floor(new_z);
-    uint16_t block = getBlockAt2(bx, by, bz, p->dimension);
-    uint8_t hit = !isPassableBlock(block);
+    uint8_t hit_block = 0;
+    int hit_entity = 0;
+    double new_x = target_x;
+    double new_y = target_y;
+    double new_z = target_z;
+    double last_passable_x = start_x;
+    double last_passable_y = start_y;
+    double last_passable_z = start_z;
 
-    if (hit) {
-      // Teleport owner to projectile position
+    for (int step = 1; step <= steps; step++) {
+      double t = (double)step / (double)steps;
+      double sx = start_x + (target_x - start_x) * t;
+      double sy = start_y + (target_y - start_y) * t;
+      double sz = start_z + (target_z - start_z) * t;
+
+      int bx = (int)floor(sx);
+      int by = (int)floor(sy);
+      int bz = (int)floor(sz);
+      uint16_t block = getBlockAt2(bx, by, bz, p->dimension);
+      if (!isPassableBlock(block)) {
+        hit_block = 1;
+        new_x = last_passable_x;
+        new_y = last_passable_y;
+        new_z = last_passable_z;
+        break;
+      }
+
+      last_passable_x = sx;
+      last_passable_y = sy;
+      last_passable_z = sz;
+
+      if (is_arrow && server_ticks - p->spawn_tick > 2) {
+        hit_entity = findArrowHitEntity(p, sx, sy, sz);
+        if (hit_entity != 0) {
+          new_x = sx;
+          new_y = sy;
+          new_z = sz;
+          break;
+        }
+      }
+    }
+
+    if (is_arrow && hit_entity != 0) {
+      p->x = new_x;
+      p->y = new_y;
+      p->z = new_z;
+
+      int attacker_id = -1;
+      if (p->owner_index >= 0 && p->owner_index < MAX_PLAYERS) {
+        PlayerData *owner = &player_data[p->owner_index];
+        if (owner->client_fd != -1 && owner->dimension == p->dimension) attacker_id = owner->client_fd;
+      }
+      hurtEntity(hit_entity, attacker_id, D_arrow, p->damage == 0 ? 4 : p->damage);
+
+      removeProjectileFromClients(i, p->dimension);
+      p->active = 0;
+      continue;
+    }
+
+    if (is_arrow && hit_block) {
+      p->x = new_x;
+      p->y = new_y;
+      p->z = new_z;
+      p->vx = target_x - start_x;
+      p->vy = target_y - start_y;
+      p->vz = target_z - start_z;
+      p->stuck = 1;
+      p->spawn_tick = server_ticks;
+      syncStoppedArrow(i, p);
+      continue;
+    }
+
+    if (hit_block) {
+      // Ender pearls teleport their owner to the last safe projectile position.
       PlayerData *owner = NULL;
       if (p->owner_index >= 0 && p->owner_index < MAX_PLAYERS)
         owner = &player_data[p->owner_index];
@@ -5472,46 +5828,42 @@ void handleServerTick (int64_t time_since_last_tick) {
         }
       }
 
-      // Remove projectile from all clients
-      for (int j = 0; j < MAX_PLAYERS; j++) {
-        if (player_data[j].client_fd == -1) continue;
-        if (player_data[j].dimension != p->dimension) continue;
-        sc_removeEntity(player_data[j].client_fd, -200 - i);
-      }
+      removeProjectileFromClients(i, p->dimension);
       p->active = 0;
       continue;
     }
 
     // Update position
-    p->x = new_x;
-    p->y = new_y;
-    p->z = new_z;
+    p->x = target_x;
+    p->y = target_y;
+    p->z = target_z;
 
     // Apply drag (air resistance)
     p->vx *= 0.99;
     p->vy *= 0.99;
     p->vz *= 0.99;
 
-    // Despawn if too old (5 minutes = 6000 ticks)
-    if (server_ticks - p->spawn_tick > 6000) {
-      for (int j = 0; j < MAX_PLAYERS; j++) {
-        if (player_data[j].client_fd == -1) continue;
-        if (player_data[j].dimension != p->dimension) continue;
-        sc_removeEntity(player_data[j].client_fd, -200 - i);
-      }
+    // Despawn old projectiles
+    uint32_t max_age = is_arrow ? 1200 : 6000;
+    if (server_ticks - p->spawn_tick > max_age) {
+      removeProjectileFromClients(i, p->dimension);
       p->active = 0;
       continue;
     }
 
     // Broadcast position update
+    float yaw = 0;
+    float pitch = 0;
+    if (is_arrow) projectileAngles(p->vx, p->vy, p->vz, &yaw, &pitch, NULL, NULL);
+
     for (int j = 0; j < MAX_PLAYERS; j++) {
       if (player_data[j].client_fd == -1) continue;
       if (player_data[j].dimension != p->dimension) continue;
       sc_teleportEntity(
         player_data[j].client_fd,
-        -200 - i,
+        projectileEntityId(i),
         p->x, p->y, p->z,
-        0, 0
+        yaw, pitch
       );
     }
   }

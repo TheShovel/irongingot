@@ -1750,7 +1750,7 @@ int sc_spawnEntity (
 
 // S->C Set Entity Velocity
 int sc_setEntityVelocity (int client_fd, int id, int16_t vx, int16_t vy, int16_t vz) {
-  startPacket(client_fd, 0x1C);
+  startPacket(client_fd, 0x5E);
 
   writeVarInt(client_fd, id); // Entity ID
   writeInt16(client_fd, vx);

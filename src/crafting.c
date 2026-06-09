@@ -313,6 +313,17 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
       break;
 
     case 3:
+      // Arrow recipe: flint above stick above feather
+      if (
+        first_item == I_flint &&
+        first_row == 0 &&
+        player->craft_items[first + 3] == I_stick &&
+        player->craft_items[first + 6] == I_feather
+      ) {
+        *item = I_arrow;
+        *count = 4;
+        return;
+      }
       // Bucket recipe: iron ingots in a V shape
       if (
         first_item == I_iron_ingot &&
@@ -571,6 +582,28 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
       break;
 
     case 6:
+      // Bow recipe: 3 sticks and 3 string in a curved shape (either direction)
+      if (
+        (
+          player->craft_items[1] == I_stick &&
+          player->craft_items[3] == I_stick &&
+          player->craft_items[7] == I_stick &&
+          player->craft_items[2] == I_string &&
+          player->craft_items[5] == I_string &&
+          player->craft_items[8] == I_string
+        ) || (
+          player->craft_items[1] == I_stick &&
+          player->craft_items[5] == I_stick &&
+          player->craft_items[7] == I_stick &&
+          player->craft_items[0] == I_string &&
+          player->craft_items[3] == I_string &&
+          player->craft_items[6] == I_string
+        )
+      ) {
+        *item = I_bow;
+        *count = 1;
+        return;
+      }
       // Door recipes (2x3 pattern of planks) - all plank types
       if (config.allow_doors &&
           isPlankItem(first_item) && first_col == 0 && first_row == 0 &&
