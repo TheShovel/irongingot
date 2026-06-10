@@ -31,6 +31,7 @@ void sendPlayerEquipment (int client_fd, PlayerData *player);
 void broadcastPlayerMetadata (PlayerData *player);
 void broadcastPlayerEquipment (PlayerData *player);
 void broadcastMobMetadata (int client_fd, int entity_id);
+void broadcastMobSound (int entity_id, int sound_id, int category, float volume, float pitch);
 
 uint8_t serverSlotToClientSlot (int window_id, uint8_t slot);
 uint8_t clientSlotToServerSlot (int window_id, uint8_t slot);

@@ -2739,6 +2739,46 @@ int sc_entityEvent (int client_fd, int entity_id, uint8_t status) {
   return 0;
 }
 
+// S->C Entity Sound Effect (0x6D)
+int sc_soundEntity (int client_fd, int sound_id, int category, int entity_id, float volume, float pitch) {
+
+  startPacket(client_fd, 0x6D);
+
+  // Holder<SoundEvent> encoding: registry_id + 1 for references
+  writeVarInt(client_fd, sound_id + 1);
+  writeVarInt(client_fd, category);
+  writeVarInt(client_fd, entity_id);
+  writeFloat(client_fd, volume);
+  writeFloat(client_fd, pitch);
+  uint64_t seed = (uint64_t)fast_rand() << 32 | fast_rand();
+  writeUint64(client_fd, seed);
+
+  endPacket(client_fd);
+
+  return 0;
+}
+
+// S->C Sound Effect at position (0x6E)
+int sc_soundEffect (int client_fd, int sound_id, int category, double x, double y, double z, float volume, float pitch) {
+
+  startPacket(client_fd, 0x6E);
+
+  // Holder<SoundEvent> encoding: registry_id + 1 for references
+  writeVarInt(client_fd, sound_id + 1);
+  writeVarInt(client_fd, category);
+  writeUint32(client_fd, (uint32_t)(int)(x * 8.0));
+  writeUint32(client_fd, (uint32_t)(int)(y * 8.0));
+  writeUint32(client_fd, (uint32_t)(int)(z * 8.0));
+  writeFloat(client_fd, volume);
+  writeFloat(client_fd, pitch);
+  uint64_t seed = (uint64_t)fast_rand() << 32 | fast_rand();
+  writeUint64(client_fd, seed);
+
+  endPacket(client_fd);
+
+  return 0;
+}
+
 // S->C Remove Entities, but for only one entity per packet
 int sc_removeEntity (int client_fd, int entity_id) {
 

@@ -73,6 +73,8 @@ int sc_setHealth (int client_fd, uint8_t health, uint8_t food, uint16_t saturati
 int sc_respawn (int client_fd, uint8_t dimension);
 int sc_systemChat (int client_fd, char* message, uint16_t len);
 int sc_entityEvent (int client_fd, int entity_id, uint8_t status);
+int sc_soundEntity (int client_fd, int sound_id, int category, int entity_id, float volume, float pitch);
+int sc_soundEffect (int client_fd, int sound_id, int category, double x, double y, double z, float volume, float pitch);
 int sc_removeEntity (int client_fd, int entity_id);
 int sc_pickupItem (int client_fd, int collected, int collector, uint8_t count);
 int sc_registries (int client_fd);

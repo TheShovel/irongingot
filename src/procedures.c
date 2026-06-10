@@ -809,6 +809,31 @@ void broadcastPlayerEquipment (PlayerData *player) {
 
 // Sends a mob's entity metadata to the given player.
 // If client_fd is -1, broadcasts to all player
+// Broadcasts a sound effect from a mob entity to all players in the same dimension.
+// Volume 1.0 = normal, pitch 1.0 = normal.
+void broadcastMobSound (int entity_id, int sound_id, int category, float volume, float pitch) {
+  int mob_index = -entity_id - 2;
+  if (mob_index < 0 || mob_index >= MAX_MOBS) return;
+  MobData *mob = &mob_data[mob_index];
+
+  for (int i = 0; i < MAX_PLAYERS; i ++) {
+    int client_fd = player_data[i].client_fd;
+    if (client_fd == -1) continue;
+    if (player_data[i].dimension != mob->dimension) continue;
+
+    uint8_t target_in_play = 0;
+    for (int k = 0; k < MAX_PLAYERS; k ++) {
+      if (client_states[k].client_fd == client_fd) {
+        target_in_play = (client_states[k].state == STATE_PLAY);
+        break;
+      }
+    }
+    if (!target_in_play) continue;
+
+    sc_soundEntity(client_fd, sound_id, category, entity_id, volume, pitch);
+  }
+}
+
 void broadcastMobMetadata (int client_fd, int entity_id) {
 
   int mob_index = -entity_id - 2;
@@ -4732,6 +4757,7 @@ void interactEntity (int entity_id, int interactor_id) {
       }
 
       broadcastMobMetadata(-1, entity_id);
+      broadcastMobSound(entity_id, S_SHEEP_SHEAR, SOUND_CATEGORY_NEUTRAL, 1.0f, 1.0f);
 
       break;
 
@@ -4754,6 +4780,8 @@ void interactEntity (int entity_id, int interactor_id) {
           if (player_data[i].flags & 0x20) continue;
           sc_entityAnimation(player_data[i].client_fd, interactor_id, 0);
         }
+
+        broadcastMobSound(entity_id, S_VILLAGER_TRADE, SOUND_CATEGORY_NEUTRAL, 1.0f, 1.0f);
       }
       break;
 
@@ -4783,6 +4811,8 @@ void interactEntity (int entity_id, int interactor_id) {
           if (player_data[i].flags & 0x20) continue;
           sc_entityAnimation(player_data[i].client_fd, interactor_id, 0);
         }
+
+        broadcastMobSound(entity_id, S_PIGLIN_ADMIRE, SOUND_CATEGORY_NEUTRAL, 1.0f, 1.0f);
       }
       break;
   }
@@ -4904,6 +4934,28 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
       mob->move_dz = 0;
     }
 
+    // Hurt sound for passive mobs
+    if (mob->type == 25 || mob->type == 28 || mob->type == 95 ||
+        mob->type == 106 || mob->type == E_VILLAGER ||
+        mob->type == E_COD || mob->type == E_SALMON ||
+        mob->type == E_PUFFERFISH || mob->type == E_TROPICAL_FISH) {
+      int hurt_sound = -1;
+      switch (mob->type) {
+        case 25: hurt_sound = S_CHICKEN_HURT; break;
+        case 28: hurt_sound = S_COW_HURT; break;
+        case 95: hurt_sound = S_PIG_HURT; break;
+        case 106: hurt_sound = S_SHEEP_HURT; break;
+        case E_VILLAGER: hurt_sound = S_VILLAGER_HURT; break;
+        case E_COD: hurt_sound = S_COD_HURT; break;
+        case E_SALMON: hurt_sound = S_SALMON_HURT; break;
+        case E_PUFFERFISH: hurt_sound = S_PUFFERFISH_HURT; break;
+        case E_TROPICAL_FISH: hurt_sound = S_TROPICAL_FISH_HURT; break;
+      }
+      if (hurt_sound > 0) {
+        broadcastMobSound(entity_id, hurt_sound, SOUND_CATEGORY_NEUTRAL, 1.0f, 1.0f);
+      }
+    }
+
     // Hitting one zombified piglin angers nearby zombified piglins, but keep
     // the alert radius modest so one hit does not pull mobs from far away.
     if (attacker_id > 0 && mob->type == 148) {
@@ -4937,6 +4989,7 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
     // Piglins get angry when hit by a player
     if (attacker_id > 0 && mob->type == E_PIGLIN) {
       mob->anger_timer = 40; // 2 seconds of anger (40 ticks at 20 TPS)
+      broadcastMobSound(entity_id, S_PIGLIN_ANGRY, SOUND_CATEGORY_NEUTRAL, 1.0f, 1.0f);
     }
 
     // Endermen get angry when hit by a player
@@ -4944,6 +4997,25 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
       mob->anger_timer = 40 * TICKS_PER_SECOND; // 40 seconds of anger
       mob->move_timer = 0;
       broadcastMobMetadata(-1, entity_id);
+      broadcastMobSound(entity_id, S_ENDERMAN_SCREAM, SOUND_CATEGORY_HOSTILE, 1.0f, 1.0f);
+    }
+
+    // Hurt sound for hostile/neutral mobs when hit
+    if (attacker_id > 0) {
+      int hurt_sound = -1;
+      int hurt_cat = SOUND_CATEGORY_HOSTILE;
+      switch (mob->type) {
+        case 145: hurt_sound = S_ZOMBIE_HURT; break;
+        case E_SKELETON: hurt_sound = S_SKELETON_HURT; break;
+        case E_SPIDER: hurt_sound = S_SPIDER_HURT; break;
+        case E_CREEPER: hurt_sound = S_CREEPER_HURT; break;
+        case E_ENDERMAN: hurt_sound = S_ENDERMAN_HURT; break;
+        case E_PIGLIN: hurt_sound = S_PIGLIN_HURT; hurt_cat = SOUND_CATEGORY_NEUTRAL; break;
+        case 148: hurt_sound = S_ZOMBIFIED_PIGLIN_HURT; break;
+      }
+      if (hurt_sound > 0) {
+        broadcastMobSound(entity_id, hurt_sound, hurt_cat, 1.0f, (float)(fast_rand() % 20 + 90) / 100.0f);
+      }
     }
 
     // Process health change on the server
@@ -5349,6 +5421,44 @@ void handleServerTick (int64_t time_since_last_tick) {
       mob_data[i].data = (mob_data[i].data & ~(3 << 6)) | ((panic - 1) << 6);
     }
 
+    // Random ambient sounds - passive mobs vocalize more often
+    {
+      int ambient_chance = (passive || is_fish) ? 500 : 1500;
+      if (r % ambient_chance == 0) {
+        int ambient_sound = -1;
+        int ambient_cat = SOUND_CATEGORY_NEUTRAL;
+        switch (mob_data[i].type) {
+          case E_ZOMBIE: ambient_sound = S_ZOMBIE_AMBIENT; ambient_cat = SOUND_CATEGORY_HOSTILE; break;
+          case E_SKELETON: ambient_sound = S_SKELETON_AMBIENT; ambient_cat = SOUND_CATEGORY_HOSTILE; break;
+          case E_SPIDER: ambient_sound = S_SPIDER_AMBIENT; ambient_cat = SOUND_CATEGORY_HOSTILE; break;
+          case E_CREEPER: break; // No ambient sound for creepers
+          case E_ENDERMAN:
+            if (mob_data[i].anger_timer <= 0) { ambient_sound = S_ENDERMAN_AMBIENT; ambient_cat = SOUND_CATEGORY_HOSTILE; }
+            break;
+          case E_PIGLIN:
+            ambient_sound = mob_data[i].anger_timer > 0 ? S_PIGLIN_ANGRY : S_PIGLIN_AMBIENT;
+            ambient_cat = SOUND_CATEGORY_NEUTRAL;
+            break;
+          case 148:
+            ambient_sound = mob_data[i].anger_timer > 0 ? S_ZOMBIFIED_PIGLIN_ANGRY : S_ZOMBIFIED_PIGLIN_AMBIENT;
+            ambient_cat = SOUND_CATEGORY_HOSTILE;
+            break;
+          case 25: ambient_sound = S_CHICKEN_AMBIENT; break;  // Chicken
+          case 28: ambient_sound = S_COW_AMBIENT; break;      // Cow
+          case 95: ambient_sound = S_PIG_AMBIENT; break;      // Pig
+          case 106: ambient_sound = S_SHEEP_AMBIENT; break;   // Sheep
+          case E_VILLAGER: ambient_sound = S_VILLAGER_AMBIENT; break;
+          case E_COD: ambient_sound = S_COD_AMBIENT; break;
+          case E_SALMON: ambient_sound = S_SALMON_AMBIENT; break;
+          case E_TROPICAL_FISH: ambient_sound = S_TROPICAL_FISH_AMBIENT; break;
+          default: break;
+        }
+        if (ambient_sound > 0) {
+          broadcastMobSound(entity_id, ambient_sound, ambient_cat, 1.0f, (float)(fast_rand() % 20 + 90) / 100.0f);
+        }
+      }
+    }
+
     // Find the player closest to this mob
     PlayerData* closest_player = NULL;
     double closest_dist_double = 2147483647.0;
@@ -5394,6 +5504,7 @@ void handleServerTick (int64_t time_since_last_tick) {
             if (mob_data[i].anger_timer <= -(int)(1.0f * TICKS_PER_SECOND)) {
               mob_data[i].anger_timer = 30 * TICKS_PER_SECOND;
               mob_data[i].move_timer = 0;
+              broadcastMobSound(entity_id, S_ENDERMAN_STARE, SOUND_CATEGORY_HOSTILE, 1.0f, 1.0f);
             }
           }
         } else if (mob_data[i].anger_timer < 0) {
@@ -5405,7 +5516,12 @@ void handleServerTick (int64_t time_since_last_tick) {
     // Broadcast enderman anger metadata on state change
     if (mob_data[i].type == E_ENDERMAN) {
       uint8_t is_angry = (mob_data[i].anger_timer > 0);
-      if (is_angry != enderman_was_angry) broadcastMobMetadata(-1, entity_id);
+      if (is_angry != enderman_was_angry) {
+        broadcastMobMetadata(-1, entity_id);
+        if (is_angry) {
+          broadcastMobSound(entity_id, S_ENDERMAN_SCREAM, SOUND_CATEGORY_HOSTILE, 1.0f, 1.0f);
+        }
+      }
     }
 
     // If no players are online, skip AI updates (mobs stay idle)
@@ -5462,9 +5578,17 @@ void handleServerTick (int64_t time_since_last_tick) {
           }
         }
         
-        // Fish out of water take damage
+        // Fish out of water take damage and flop
         if (!found_water && server_ticks % 10 == 0) {
           hurtEntity(entity_id, -1, D_generic, 1);
+          int flop_sound = -1;
+          switch (mob_data[i].type) {
+            case E_COD: flop_sound = S_COD_FLOP; break;
+            case E_SALMON: flop_sound = S_SALMON_FLOP; break;
+            case E_PUFFERFISH: flop_sound = S_PUFFERFISH_FLOP; break;
+            case E_TROPICAL_FISH: flop_sound = S_TROPICAL_FISH_FLOP; break;
+          }
+          if (flop_sound > 0) broadcastMobSound(entity_id, flop_sound, SOUND_CATEGORY_NEUTRAL, 1.0f, 1.0f);
         }
       }
       
@@ -5687,6 +5811,7 @@ void handleServerTick (int64_t time_since_last_tick) {
           if (mob_data[i].move_timer <= 0) {
             if (closest_player->client_fd != -1) {
               shootSkeletonArrow(i, closest_player->x, closest_player->y + 1.6, closest_player->z);
+              broadcastMobSound(entity_id, S_SKELETON_SHOOT, SOUND_CATEGORY_HOSTILE, 1.0f, 1.0f);
             }
             mob_data[i].move_timer = 20;
           }
@@ -5742,6 +5867,9 @@ void handleServerTick (int64_t time_since_last_tick) {
 
             // Destroy blocks in a 3-block radius
             doExplosion(mob_data[i].x, mob_data[i].y, mob_data[i].z, 3.0f, mob_data[i].dimension);
+
+            // Explosion sound
+            broadcastMobSound(entity_id, S_GENERIC_EXPLODE, SOUND_CATEGORY_HOSTILE, 4.0f, 1.0f);
 
             // Damage all players within blast radius
             for (int p = 0; p < MAX_PLAYERS; p++) {
@@ -5807,6 +5935,7 @@ void handleServerTick (int64_t time_since_last_tick) {
               if (dist_to_player < 3.0 && y_diff < 2.0 && has_los) {
                 mob_data[i].move_timer = 30;
                 broadcastMobMetadata(-1, entity_id);
+                broadcastMobSound(entity_id, S_CREEPER_PRIMED, SOUND_CATEGORY_HOSTILE, 1.0f, 1.0f);
               } else {
                 // Chase the player
                 double move_x = (dx / len) * move_amount * 2.0;
