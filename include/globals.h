@@ -144,7 +144,7 @@
 
 // Generic sounds
 #define S_GENERIC_EXPLODE 615
-#define S_ITEM_SHIELD_BLOCK 820
+#define S_ITEM_SHIELD_BLOCK 1298
 
 // Initial world generation seed, will be hashed on startup
 // Used in generating terrain and biomes
