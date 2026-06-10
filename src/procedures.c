@@ -5007,6 +5007,29 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
 
 }
 
+// Creates an explosion that destroys blocks in a spherical radius
+void doExplosion (double x, double y, double z, float power, uint8_t dimension) {
+  int radius = (int)ceilf(power);
+  int rad_sq = (int)(power * power);
+
+  for (int bx = (int)x - radius; bx <= (int)x + radius; bx++) {
+    for (int by = (int)y - radius; by <= (int)y + radius; by++) {
+      for (int bz = (int)z - radius; bz <= (int)z + radius; bz++) {
+        double dx = bx + 0.5 - x;
+        double dy = by + 0.5 - y;
+        double dz = bz + 0.5 - z;
+        int dist_sq = (int)(dx * dx + dy * dy + dz * dz);
+        if (dist_sq > rad_sq) continue;
+
+        uint16_t block = getBlockAt2(bx, by, bz, dimension);
+        if (block != 0 && block != 7) { // skip air and bedrock
+          makeBlockChange((short)bx, (int16_t)by, (short)bz, 0, dimension);
+        }
+      }
+    }
+  }
+}
+
 // Simulates events scheduled for regular intervals
 // Takes the time since the last tick in microseconds as the only arguemnt
 void handleServerTick (int64_t time_since_last_tick) {
@@ -5685,6 +5708,9 @@ void handleServerTick (int64_t time_since_last_tick) {
             // Broadcast metadata (stop flashing)
             broadcastMobMetadata(-1, entity_id);
 
+            // Destroy blocks in a 3-block radius
+            doExplosion(mob_data[i].x, mob_data[i].y, mob_data[i].z, 3.0f, mob_data[i].dimension);
+
             // Damage all players within blast radius
             for (int p = 0; p < MAX_PLAYERS; p++) {
               if (player_data[p].client_fd == -1) continue;
@@ -5713,6 +5739,13 @@ void handleServerTick (int64_t time_since_last_tick) {
                 if (dmg < 1) dmg = 1;
                 hurtEntity(-2 - mi, entity_id, D_explosion, dmg);
               }
+            }
+
+            // Spawn smoke particles
+            for (int p = 0; p < MAX_PLAYERS; p++) {
+              if (player_data[p].client_fd == -1) continue;
+              if (player_data[p].dimension != mob_data[i].dimension) continue;
+              sc_entityEvent(player_data[p].client_fd, entity_id, 60);
             }
 
             // Kill the creeper with explosion damage for drops
