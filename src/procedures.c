@@ -5020,6 +5020,7 @@ void doExplosion (double x, double y, double z, float power, uint8_t dimension) 
         double dz = bz + 0.5 - z;
         int dist_sq = (int)(dx * dx + dy * dy + dz * dz);
         if (dist_sq > rad_sq) continue;
+        if (is_in_safe_area((short)bx, (short)bz, dimension)) continue;
 
         uint16_t block = getBlockAt2(bx, by, bz, dimension);
         if (block != 0 && block != 7) { // skip air and bedrock
