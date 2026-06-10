@@ -4576,10 +4576,10 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
   static const uint8_t passive_types[] = { 25, 28, 95, 106 };
   static const uint8_t num_passive_types = 4;
 
-  // Hostile mob types: Zombie(145), Skeleton(110), Creeper(30) - spawn only at night.
-  // Enderman(39) is weighted rare (~1/9 chance per hostile spawn).
-  static const uint8_t hostile_types[] = { 145, 145, 145, 145, E_SKELETON, E_SKELETON, E_SKELETON, E_CREEPER, E_ENDERMAN };
-  static const uint8_t num_hostile_types = 9;
+  // Hostile mob types: Zombie(145), Skeleton(110), Spider(119), Creeper(30) - spawn only at night.
+  // Enderman(39) is weighted rare (~1/11 chance per hostile spawn).
+  static const uint8_t hostile_types[] = { 145, 145, 145, 145, E_SKELETON, E_SKELETON, E_SKELETON, E_SPIDER, E_SPIDER, E_CREEPER, E_ENDERMAN };
+  static const uint8_t num_hostile_types = 11;
 
   // Determine if it's night (world_time >= 12000)
   uint8_t is_night = (world_time >= 12000);
@@ -4686,6 +4686,7 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
       uint8_t type = hostile_types[fast_rand() % num_hostile_types];
       uint8_t health = 10;
       if (type == E_ENDERMAN) health = 40;
+      else if (type == E_SPIDER) health = 16;
       else if (type == E_CREEPER) health = 20;
 
       spawnMob(type, spawn_x, surface_y + 1, spawn_z, health, player->dimension);
@@ -4974,6 +4975,10 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
           case E_ENDERMAN:
             if ((fast_rand() & 3) == 0) givePlayerItem(player, I_ender_pearl, 1);
             break;
+          case E_SPIDER:
+            givePlayerItem(player, I_string, fast_rand() % 3);
+            if ((fast_rand() & 3) == 0) givePlayerItem(player, I_spider_eye, 1);
+            break;
           case 145: givePlayerItem(player, I_rotten_flesh, (fast_rand() % 3)); break;
           case E_SKELETON:
             if ((fast_rand() & 1) == 0) givePlayerItem(player, I_bone, 1);
@@ -5029,6 +5034,27 @@ void doExplosion (double x, double y, double z, float power, uint8_t dimension) 
       }
     }
   }
+}
+
+// Checks if there is a clear line of sight between two points (no solid blocks in the way)
+static uint8_t hasLineOfSight (double x1, double y1, double z1, double x2, double y2, double z2, uint8_t dimension) {
+  double dx = x2 - x1;
+  double dy = y2 - y1;
+  double dz = z2 - z1;
+  double dist = sqrt(dx * dx + dy * dy + dz * dz);
+  int steps = (int)(dist * 2.0) + 1;
+  if (steps < 1) steps = 1;
+  if (steps > 16) steps = 16; // cap for performance (only used at close range)
+
+  for (int i = 0; i <= steps; i++) {
+    double t = (double)i / (double)steps;
+    int bx = (int)floor(x1 + dx * t);
+    int by = (int)floor(y1 + dy * t);
+    int bz = (int)floor(z1 + dz * t);
+    uint16_t block = getBlockAt2(bx, by, bz, dimension);
+    if (block != 0 && !isPassableBlock(block)) return 0;
+  }
+  return 1;
 }
 
 // Simulates events scheduled for regular intervals
@@ -5638,11 +5664,16 @@ void handleServerTick (int64_t time_since_last_tick) {
 
       double dist_to_player = sqrt(closest_dist_double);
       double y_diff = fabs(old_y - closest_player->y);
+      uint8_t has_los = dist_to_player <= 16.0 && hasLineOfSight(
+        old_x, old_y + 0.5, old_z,
+        closest_player->x, closest_player->y + 1.6, closest_player->z,
+        mob_data[i].dimension
+      );
 
       // Skeleton AI: maintain distance and shoot arrows
       if (mob_data[i].type == E_SKELETON) {
         // Skeleton melee attack if cornered (very close)
-        if (dist_to_player < 2.0 && y_diff < 2.0) {
+        if (dist_to_player < 2.0 && y_diff < 2.0 && has_los) {
           if (mob_data[i].move_timer <= 0) {
             if (closest_player->client_fd != -1) {
               hurtEntity(closest_player->client_fd, entity_id, D_generic, 1);
@@ -5652,7 +5683,7 @@ void handleServerTick (int64_t time_since_last_tick) {
         }
 
         // Shoot arrows when player is 2-15 blocks away
-        if (dist_to_player > 2.0 && dist_to_player <= 15.0 && y_diff < 4.0) {
+        if (dist_to_player > 2.0 && dist_to_player <= 15.0 && y_diff < 4.0 && has_los) {
           if (mob_data[i].move_timer <= 0) {
             if (closest_player->client_fd != -1) {
               shootSkeletonArrow(i, closest_player->x, closest_player->y + 1.6, closest_player->z);
@@ -5773,7 +5804,7 @@ void handleServerTick (int64_t time_since_last_tick) {
 
             if (len > 0.001) {
               // Start fusing when close enough
-              if (dist_to_player < 3.0 && y_diff < 2.0) {
+              if (dist_to_player < 3.0 && y_diff < 2.0 && has_los) {
                 mob_data[i].move_timer = 30;
                 broadcastMobMetadata(-1, entity_id);
               } else {
@@ -5794,7 +5825,7 @@ void handleServerTick (int64_t time_since_last_tick) {
         double enderman_vision = 64.0;
 
         // If we're within attack range, hurt the player
-        if (dist_to_player < 3.0 && y_diff < 2.0) {
+        if (dist_to_player < 3.0 && y_diff < 2.0 && has_los) {
           if (mob_data[i].move_timer <= 0) {
             if (closest_player->client_fd != -1) {
               hurtEntity(closest_player->client_fd, entity_id, D_generic, 1);
@@ -5821,11 +5852,46 @@ void handleServerTick (int64_t time_since_last_tick) {
             yaw = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
           }
         }
+      } else if (mob_data[i].type == E_SPIDER) {
+        // Spider AI: chase and melee attack
+        double spider_speed = move_amount * 2.0;
+
+        // If we're within attack range, hurt the player
+        if (dist_to_player < 2.0 && y_diff < 2.0 && has_los) {
+          if (mob_data[i].move_timer <= 0) {
+            if (closest_player->client_fd != -1) {
+              hurtEntity(closest_player->client_fd, entity_id, D_generic, 1);
+            }
+            mob_data[i].move_timer = 20;
+          }
+        }
+
+        // Decrement attack cooldown timer
+        if (mob_data[i].move_timer > 0) mob_data[i].move_timer--;
+
+        // Move towards the closest player if within vision range
+        if (dist_to_player <= vision_range) {
+          double dx = closest_player->x - old_x;
+          double dz = closest_player->z - old_z;
+          double len = sqrt(dx * dx + dz * dz);
+
+          if (len > 0.001) {
+            double nx = dx / len;
+            double nz = dz / len;
+            double move_x = nx * spider_speed;
+            double move_z = nz * spider_speed;
+
+            new_x += move_x;
+            new_z += move_z;
+            double angle = atan2(dz, dx) * 256.0 / (2.0 * 3.14159265358979);
+            yaw = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
+          }
+        }
       } else {
         // Standard hostile melee AI (zombies, piglins)
 
         // If we're within attack range, hurt the player
-        if (dist_to_player < attack_range && y_diff < 2.0) {
+        if (dist_to_player < attack_range && y_diff < 2.0 && has_los) {
           if (mob_data[i].move_timer <= 0) {
             if (closest_player->client_fd != -1) {
               hurtEntity(closest_player->client_fd, entity_id, D_generic, 1);
