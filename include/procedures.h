@@ -75,7 +75,7 @@ void sendStairUpdate (int client_fd, short x, uint8_t y, short z, uint16_t block
 uint16_t getMiningResult (uint16_t held_item, uint16_t block);
 
 void handlePlayerAction (PlayerData *player, int action, short x, short y, short z);
-void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t face);
+void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t face, uint8_t hand);
 
 void checkFluidUpdate (short x, int16_t y, short z, uint16_t block);
 void processFluidQueue (void);

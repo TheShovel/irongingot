@@ -1196,7 +1196,7 @@ int cs_useItem (int client_fd) {
   player->pitch = pitch / 90.0f * 127.0f;
   sc_acknowledgeBlockChange(client_fd, sequence);
 
-  handlePlayerUseItem(player, 0, 0, 0, 255);
+  handlePlayerUseItem(player, 0, 0, 0, 255, hand);
 
   return 0;
 }
@@ -1228,7 +1228,7 @@ int cs_useItemOn (int client_fd) {
   PlayerData *player;
   if (getPlayerData(client_fd, &player)) return 1;
 
-  handlePlayerUseItem(player, x, y, z, face);
+  handlePlayerUseItem(player, x, y, z, face, hand);
 
   return 0;
 }

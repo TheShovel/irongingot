@@ -729,6 +729,11 @@ void sendPlayerMetadata (int client_fd, PlayerData *player) {
   int pose = 0;
   if (sneaking) pose = 5;
 
+  uint8_t hand_state = 0;
+  if ((player->flags & 0x10) || (player->flags & 0x0100)) {
+    hand_state |= 0x01;
+  }
+
   EntityData metadata[] = {
     {
       0,                   // Index (Entity Bit Mask)
@@ -739,6 +744,11 @@ void sendPlayerMetadata (int client_fd, PlayerData *player) {
       6,        // Index (Pose),
       21,       // Type (Pose),
       { pose }, // Value (Standing)
+    },
+    {
+      8,                   // Living Entity State
+      0,                   // Type (Byte)
+      { hand_state },      // Value (Is hand active)
     },
     {
       17,                        // Displayed skin parts
@@ -752,7 +762,7 @@ void sendPlayerMetadata (int client_fd, PlayerData *player) {
     }
   };
 
-  sc_setEntityMetadata(client_fd, player->client_fd, metadata, 4);
+  sc_setEntityMetadata(client_fd, player->client_fd, metadata, 5);
 }
 
 void sendPlayerEquipment (int client_fd, PlayerData *player) {
@@ -2449,9 +2459,13 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
         setPlayerActiveHand(player, 0);
       }
     }
-    // Reset eating timer and clear eating flag
+    // Reset eating timer and clear eating/blocking flags
     player->flagval_16 = 0;
     player->flags &= ~0x10;
+    if (player->flags & 0x0100) {
+      player->flags &= ~0x0100;
+      broadcastPlayerMetadata(player);
+    }
   }
 
   // Ignore further actions not pertaining to mining blocks
@@ -3454,7 +3468,7 @@ static int findArrowHitEntity(ProjectileData *p, double x, double y, double z) {
   return 0;
 }
 
-void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t face) {
+void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t face, uint8_t hand) {
 
   // Check spawn protection for block interactions
   if (face != 255 && is_in_safe_area(x, z, player->dimension)) {
@@ -3465,8 +3479,19 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
   // Get targeted block (if coordinates are provided)
   uint16_t target = face == 255 ? 0 : getBlockAt2(x, y, z, player->dimension);
   // Get held item properties
-  uint8_t *count = &player->inventory_count[player->hotbar];
-  uint16_t *item = &player->inventory_items[player->hotbar];
+  uint8_t *count;
+  uint16_t *item;
+  uint8_t slot;
+
+  if (hand == 0) { // Main hand
+    count = &player->inventory_count[player->hotbar];
+    item = &player->inventory_items[player->hotbar];
+    slot = player->hotbar;
+  } else { // Off hand
+    count = &player->inventory_count[40];
+    item = &player->inventory_items[40];
+    slot = 40;
+  }
 
   // Check interaction with containers when not sneaking
   if (!(player->flags & 0x04) && face != 255) {
@@ -3677,21 +3702,25 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     // Reset eating timer and set eating flag
     player->flagval_16 = 0;
     player->flags |= 0x10;
+  } else if (*item == I_shield) {
+    player->flags |= 0x0100;
+    broadcastPlayerMetadata(player);
+    return;
   } else if (getItemDefensePoints(*item) != 0) {
     // For some reason, this action is sent twice when looking at a block
     // Ignore the variant that has coordinates
     if (face != 255) return;
     // Swap to held piece of armor
-    uint8_t slot = getArmorItemSlot(*item);
-    uint16_t prev_item = player->inventory_items[slot];
-    uint8_t prev_count = player->inventory_count[slot];
-    player->inventory_items[slot] = *item;
-    player->inventory_count[slot] = 1;
-    player->inventory_items[player->hotbar] = prev_item;
-    player->inventory_count[player->hotbar] = prev_count;
+    uint8_t armor_slot = getArmorItemSlot(*item);
+    uint16_t prev_item = player->inventory_items[armor_slot];
+    uint8_t prev_count = player->inventory_count[armor_slot];
+    player->inventory_items[armor_slot] = *item;
+    player->inventory_count[armor_slot] = 1;
+    player->inventory_items[slot] = prev_item;
+    player->inventory_count[slot] = prev_count;
     // Update client inventory
-    sc_setContainerSlot(player->client_fd, -2, serverSlotToClientSlot(0, slot), 1, *item);
-    sc_setContainerSlot(player->client_fd, -2, serverSlotToClientSlot(0, player->hotbar), prev_count, prev_item);
+    sc_setContainerSlot(player->client_fd, -2, serverSlotToClientSlot(0, armor_slot), 1, *item);
+    sc_setContainerSlot(player->client_fd, -2, serverSlotToClientSlot(0, slot), prev_count, prev_item);
     broadcastPlayerEquipment(player);
     return;
   }
@@ -4820,6 +4849,9 @@ void interactEntity (int entity_id, int interactor_id) {
 
 void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t damage) {
 
+  // Whether this attack was blocked by a shield
+  uint8_t damage_blocked = false;
+
   if (attacker_id > 0 && damage_type != D_arrow) { // Attacker is a player
 
     PlayerData *player;
@@ -4854,6 +4886,31 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
     // precision, the 4% reduction factor drops to ~3.9%, although the
     // the resulting effective damage is then also rounded down.
     uint8_t effective_damage = damage * (256 - defense * 10) / 256;
+
+    // Calculate damage reduction from player's shield
+    if (player->flags & 0x0100) {
+      if (
+        damage_type == D_arrow ||
+        damage_type == D_mob_attack ||
+        damage_type == D_player_attack ||
+        damage_type == D_mob_projectile ||
+        damage_type == D_thrown ||
+        damage_type == D_trident ||
+        damage_type == D_explosion ||
+        damage_type == D_player_explosion ||
+        attacker_id != 0 // Any attack from a player or mob
+      ) {
+        effective_damage = 0;
+        damage_blocked = true;
+
+        // Play shield block sound for all nearby players
+        for (int i = 0; i < MAX_PLAYERS; i++) {
+          if (player_data[i].client_fd == -1) continue;
+          if (player_data[i].flags & 0x20) continue;
+          sc_soundEntity(player_data[i].client_fd, S_ITEM_SHIELD_BLOCK, SOUND_CATEGORY_PLAYERS, entity_id, 1.0f, 1.0f);
+        }
+      }
+    }
 
     // Process health change on the server
     if (player->health <= effective_damage) {
@@ -4909,7 +4966,7 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
     } else player->health -= effective_damage;
 
     // Update health on the client
-    sc_setHealth(entity_id, player->health, player->hunger, player->saturation);
+    sc_setHealth(player->client_fd, player->health, player->hunger, player->saturation);
 
   } else { // The attacked entity is a mob
 
@@ -5072,7 +5129,7 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
   for (int i = 0; i < MAX_PLAYERS; i ++) {
     int client_fd = player_data[i].client_fd;
     if (client_fd == -1) continue;
-    sc_damageEvent(client_fd, entity_id, damage_type);
+    if (!damage_blocked) sc_damageEvent(client_fd, entity_id, damage_type);
     // Below this, handle death events
     if (!entity_died) continue;
     sc_entityEvent(client_fd, entity_id, 3);
@@ -6580,6 +6637,14 @@ static void sendPlayerUpdatePackets(int64_t time_since_last_tick) {
       broadcastPlayerEquipment(player);
       player->flags &= ~0x10;
       player->flagval_16 = 0;
+    }
+
+    // If blocking, check if the shield is still held in either hand
+    if (player->flags & 0x0100) {
+      if (player->inventory_items[player->hotbar] != I_shield && player->inventory_items[40] != I_shield) {
+        player->flags &= ~0x0100;
+        broadcastPlayerMetadata(player);
+      }
     }
   }
 

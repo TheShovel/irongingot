@@ -144,6 +144,7 @@
 
 // Generic sounds
 #define S_GENERIC_EXPLODE 615
+#define S_ITEM_SHIELD_BLOCK 820
 
 // Initial world generation seed, will be hashed on startup
 // Used in generating terrain and biomes
@@ -446,7 +447,8 @@ typedef struct {
   // 0x20 - client loading, uses flagval_16 as fallback timer
   // 0x40 - movement update cooldown
   // 0x80 - craft_items lock (for storing pointers)
-  uint8_t flags;
+  // 0x0100 - blocking with a shield
+  uint16_t flags;
   uint8_t dimension;
   uint8_t portal_valid;  // 0 = none, 1 = portal_ow fields track overworld entry
   uint32_t last_bucket_tick;  // Tick of last successful block-targeted bucket action (prevents duplicate via face==255)

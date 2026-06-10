@@ -708,6 +708,25 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
       break;
 
     case 7:
+      // Shield recipe: 1 iron ingot, 6 planks
+      // P I P
+      // P P P
+      //   P
+      if (
+        player->craft_items[1] == I_iron_ingot &&
+        isPlankItem(player->craft_items[0]) &&
+        isPlankItem(player->craft_items[2]) &&
+        isPlankItem(player->craft_items[3]) &&
+        isPlankItem(player->craft_items[4]) &&
+        isPlankItem(player->craft_items[5]) &&
+        isPlankItem(player->craft_items[7]) &&
+        player->craft_items[6] == 0 &&
+        player->craft_items[8] == 0
+      ) {
+        *item = I_shield;
+        *count = 1;
+        return;
+      }
       // Legging recipes
       if (identical && player->craft_items[4] == 0 && player->craft_items[7] == 0) {
         switch (first_item) {
