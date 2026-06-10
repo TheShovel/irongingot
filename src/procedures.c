@@ -5715,14 +5715,26 @@ void handleServerTick (int64_t time_since_last_tick) {
             for (int p = 0; p < MAX_PLAYERS; p++) {
               if (player_data[p].client_fd == -1) continue;
               if (player_data[p].dimension != mob_data[i].dimension) continue;
-              double pdx = mob_data[i].x - player_data[p].x;
-              double pdz = mob_data[i].z - player_data[p].z;
-              double pdy = fabs(mob_data[i].y - player_data[p].y);
+              double pdx = player_data[p].x - mob_data[i].x;
+              double pdz = player_data[p].z - mob_data[i].z;
               double pdist = sqrt(pdx * pdx + pdz * pdz);
+              double pdy = fabs(mob_data[i].y - player_data[p].y);
               if (pdist < 4.0 && pdy < 3.0) {
                 uint8_t dmg = (uint8_t)((4.0 - pdist) * 7.0);
                 if (dmg < 1) dmg = 1;
                 hurtEntity(player_data[p].client_fd, entity_id, D_explosion, dmg);
+
+                // Knockback: push player away from explosion
+                if (pdist > 0.01) {
+                  double force = (4.0 - pdist) / 4.0;
+                  double vx = (pdx / pdist) * force * 2.5;
+                  double vz = (pdz / pdist) * force * 2.5;
+                  double vy = force * 0.6;
+                  sc_setEntityVelocity(
+                    player_data[p].client_fd, player_data[p].client_fd,
+                    (int16_t)(vx * 8000.0), (int16_t)(vy * 8000.0), (int16_t)(vz * 8000.0)
+                  );
+                }
               }
             }
 
