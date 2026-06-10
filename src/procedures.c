@@ -6164,6 +6164,32 @@ void handleServerTick (int64_t time_since_last_tick) {
       (block_above >= B_lava && block_above < B_lava + 4)
     ) hurtEntity(entity_id, -1, D_lava, 8);
 
+    // Footstep sounds when actually moving horizontally
+    if (!is_fish &&
+        mob_data[i].type != E_CREEPER &&
+        mob_data[i].type != E_ENDERMAN &&
+        (fabs(new_x - old_x) > 0.0001 || fabs(new_z - old_z) > 0.0001) &&
+        server_ticks % 12 == 0) {
+      int step_sound = -1;
+      int step_cat = SOUND_CATEGORY_NEUTRAL;
+      switch (mob_data[i].type) {
+        case 25: step_sound = S_CHICKEN_STEP; break;
+        case 28: step_sound = S_COW_STEP; break;
+        case 95: step_sound = S_PIG_STEP; break;
+        case 106: step_sound = S_SHEEP_STEP; break;
+        case E_VILLAGER: step_sound = S_WOOD_STEP; break;
+        case 145: step_sound = S_ZOMBIE_STEP; step_cat = SOUND_CATEGORY_HOSTILE; break;
+        case E_SKELETON: step_sound = S_SKELETON_STEP; step_cat = SOUND_CATEGORY_HOSTILE; break;
+        case E_SPIDER: step_sound = S_SPIDER_STEP; step_cat = SOUND_CATEGORY_HOSTILE; break;
+        case E_PIGLIN: step_sound = S_PIGLIN_STEP; break;
+        case 148: step_sound = S_ZOMBIE_STEP; step_cat = SOUND_CATEGORY_HOSTILE; break;
+        default: break;
+      }
+      if (step_sound > 0) {
+        broadcastMobSound(entity_id, step_sound, step_cat, 1.0f, (float)(fast_rand() % 10 + 95) / 100.0f);
+      }
+    }
+
     // Store new mob position
     mob_data[i].x = new_x;
     mob_data[i].y = new_y;

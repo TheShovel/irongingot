@@ -131,6 +131,17 @@
 #define S_TROPICAL_FISH_HURT 1480
 #define S_TROPICAL_FISH_FLOP 1479
 
+// Step sounds
+#define S_CHICKEN_STEP 311
+#define S_COW_STEP 373
+#define S_PIG_STEP 1142
+#define S_SHEEP_STEP 1296
+#define S_WOOD_STEP 1689
+#define S_ZOMBIE_STEP 1717
+#define S_SKELETON_STEP 1335
+#define S_SPIDER_STEP 1427
+#define S_PIGLIN_STEP 1151
+
 // Generic sounds
 #define S_GENERIC_EXPLODE 615
 
