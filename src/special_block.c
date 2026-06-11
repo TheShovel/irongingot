@@ -193,7 +193,9 @@ uint8_t is_trapdoor_block(uint16_t block) {
 uint8_t is_oriented_block(uint16_t block) {
     return (
         block == B_chest ||
-        block == B_furnace
+        block == B_furnace ||
+        block == B_barrel ||
+        block == B_ender_chest
     );
 }
 
@@ -255,6 +257,13 @@ uint16_t get_oriented_state_id(uint16_t block, uint8_t direction) {
     } else if (block == B_furnace) {
         /* furnace: north=0, south=2, west=4, east=6 */
         return base_id + (uint16_t)(direction * 2);
+    } else if (block == B_barrel) {
+        /* barrel: facing order = north(0),east(2),south(4),west(6),up(8),down(10), +1 for open=true */
+        return base_id + (uint16_t)(direction * 2);
+    } else if (block == B_ender_chest) {
+        /* ender chest: facing order = north(0),south(2),west(4),east(6), +1 for waterlogged=true */
+        static const uint8_t facing_off[4] = {0, 2, 4, 6};
+        return base_id + facing_off[direction];
     }
     return base_id;
 }
@@ -283,6 +292,14 @@ uint8_t oriented_get_direction(uint16_t state) { return state & 3; }
 uint8_t furnace_get_direction(uint16_t state) { return state & 3; }
 uint8_t furnace_get_lit(uint16_t state)   { return (state >> 2) & 1; }
 
+/* Barrel: direction in bits 0-2 (0=north,1=east,2=south,3=west,4=up,5=down), open in bit 3 */
+uint8_t barrel_get_direction(uint16_t state) { return state & 7; }
+uint8_t barrel_get_open(uint16_t state)      { return (state >> 3) & 1; }
+
+/* Ender chest: direction in bits 0-1, waterlogged in bit 2 */
+uint8_t ender_chest_get_direction(uint16_t state) { return state & 3; }
+uint8_t ender_chest_get_waterlogged(uint16_t state) { return (state >> 2) & 1; }
+
 /* Encode helpers */
 uint16_t door_encode_state(uint8_t open, uint8_t hinge, uint8_t direction) {
     return (uint16_t)((direction << 2) | (hinge << 1) | open);
@@ -298,6 +315,12 @@ uint16_t oriented_encode_state(uint8_t direction) {
 }
 uint16_t furnace_encode_state(uint8_t direction, uint8_t lit) {
     return (uint16_t)((lit << 2) | (direction & 3));
+}
+uint16_t barrel_encode_state(uint8_t direction, uint8_t open) {
+    return (uint16_t)((open << 3) | (direction & 7));
+}
+uint16_t ender_chest_encode_state(uint8_t direction, uint8_t waterlogged) {
+    return (uint16_t)((waterlogged << 2) | (direction & 3));
 }
 
 /* ── Interaction helpers ──────────────────────────────────────────── */

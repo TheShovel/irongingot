@@ -37,6 +37,16 @@
  * Chests (B_chest):
  *   Bits 0-1:   direction (0=north, 1=east, 2=south, 3=west)
  *   Bits 2-15:  unused
+ *
+ * Barrels (B_barrel):
+ *   Bits 0-2:   direction (0=north, 1=east, 2=south, 3=west, 4=up, 5=down)
+ *   Bit  3:     open (0=closed, 1=open)
+ *   Bits 4-15:  unused
+ *
+ * Ender Chests (B_ender_chest):
+ *   Bits 0-1:   direction (0=north, 1=east, 2=south, 3=west)
+ *   Bit  2:     waterlogged (0=false, 1=true)
+ *   Bits 3-15:  unused
  */
 
 /* Maximum number of special block state entries we track. */
@@ -88,6 +98,10 @@ uint8_t stair_get_direction(uint16_t state);
 uint8_t oriented_get_direction(uint16_t state);
 uint8_t furnace_get_direction(uint16_t state);
 uint8_t furnace_get_lit(uint16_t state);
+uint8_t barrel_get_direction(uint16_t state);
+uint8_t barrel_get_open(uint16_t state);
+uint8_t ender_chest_get_direction(uint16_t state);
+uint8_t ender_chest_get_waterlogged(uint16_t state);
 
 /* State encode helpers */
 uint16_t door_encode_state(uint8_t open, uint8_t hinge, uint8_t direction);
@@ -95,6 +109,8 @@ uint16_t trapdoor_encode_state(uint8_t open, uint8_t half, uint8_t direction);
 uint16_t stair_encode_state(uint8_t half, uint8_t direction);
 uint16_t oriented_encode_state(uint8_t direction);
 uint16_t furnace_encode_state(uint8_t direction, uint8_t lit);
+uint16_t barrel_encode_state(uint8_t direction, uint8_t open);
+uint16_t ender_chest_encode_state(uint8_t direction, uint8_t waterlogged);
 
 /* Interaction helpers */
 uint8_t is_door_open_at(short x, uint8_t y, short z, uint8_t dimension);

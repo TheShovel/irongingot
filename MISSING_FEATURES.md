@@ -35,8 +35,8 @@ These features are fundamental to a complete Minecraft experience and should be 
 
 ### 4. Essential Containers
 
-- **End Chest** (High) - Cross-dimension storage
-- **Barrel** (Medium) - Simple storage alternative to chests
+- ~~**Ender Chest** (High)~~ - ✅ Cross-dimension storage
+- ~~**Barrel** (Medium)~~ - ✅ Simple storage alternative to chests
 
 ### 5. Basic Commands
 
@@ -182,7 +182,7 @@ These are advanced features or aesthetic improvements.
 **Phase 1 (High Priority):**
 1. Nether Fortresses + Blaze/Ghast mobs
 2. Villager Trading / Job Sites
-3. End Chest + Barrel
+3. ~~End Chest + Barrel~~ ✅ Completed
 4. Basic admin commands (`/gamemode`, `/tp`, `/give`)
 5. Sleeping + Spawn Point mechanics
 

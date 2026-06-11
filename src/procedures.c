@@ -364,6 +364,10 @@ void resetPlayerData (PlayerData *player) {
     player->craft_items[i] = 0;
     player->craft_count[i] = 0;
   }
+  for (int i = 0; i < 27; i ++) {
+    player->ender_chest_items[i] = 0;
+    player->ender_chest_count[i] = 0;
+  }
   player->flags &= ~0x80;
   player->last_attack_time = 0;
   // Initialize XP
@@ -529,6 +533,8 @@ void handlePlayerDisconnect (int client_fd) {
     }
     break;
   }
+  // Save player data to disk when a player disconnects
+  writePlayerDataToDisk();
   // Find the client state entry and reset it
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (client_states[i].client_fd == client_fd) {
@@ -1240,12 +1246,12 @@ uint16_t getBlockChange (short x, int16_t y, short z, uint8_t dimension) {
       continue;
     }
     #endif
-    // Skip stair and furnace state data
-    if (is_stair_block(block_changes[i].block) || block_changes[i].block == B_furnace) {
+    // Skip stair, furnace, and ender_chest state data
+    if (is_stair_block(block_changes[i].block) || block_changes[i].block == B_furnace || block_changes[i].block == B_ender_chest) {
       i += 1;
     }
-    // Skip chest inventory entries
-    if (block_changes[i].block == B_chest) {
+    // Skip chest/barrel inventory entries
+    if (block_changes[i].block == B_chest || block_changes[i].block == B_barrel) {
       if (i + 14 >= block_changes_count) break;
       i += 14;
     }
@@ -1308,12 +1314,12 @@ uint8_t makeBlockChange (short x, int16_t y, short z, uint16_t block, uint8_t di
   // Helper macro to clear old special block entries at a position
   #define CLEAR_OLD_SPECIAL_ENTRIES(idx) \
     do { \
-      if (block_changes[idx].block == B_chest) { \
+      if (block_changes[idx].block == B_chest || block_changes[idx].block == B_barrel) { \
         for (int j = 1; j < 15 && (idx) + j < block_changes_count; j++) block_changes[(idx) + j].block = 0xFF; \
       } else if (is_door_block(block_changes[idx].block)) { \
         if ((idx) + 1 < block_changes_count) block_changes[(idx) + 1].block = 0xFF; \
         if ((idx) + 2 < block_changes_count) block_changes[(idx) + 2].block = 0xFF; \
-      } else if (is_stair_block(block_changes[idx].block) || block_changes[idx].block == B_furnace) { \
+      } else if (is_stair_block(block_changes[idx].block) || block_changes[idx].block == B_furnace || block_changes[idx].block == B_ender_chest) { \
         if ((idx) + 1 < block_changes_count) block_changes[(idx) + 1].block = 0xFF; \
       } \
     } while (0)
@@ -1341,7 +1347,7 @@ uint8_t makeBlockChange (short x, int16_t y, short z, uint16_t block, uint8_t di
       // Clear any old special block state entries
       CLEAR_OLD_SPECIAL_ENTRIES(i);
 
-      if (block == B_chest && block_changes[i].block != B_chest) {
+      if ((block == B_chest || block == B_barrel) && block_changes[i].block != block) {
         block_changes[i].block = 0xFF;
         if (is_base_block) special_block_clear(x, y, z, dimension);
         continue;
@@ -1360,9 +1366,20 @@ uint8_t makeBlockChange (short x, int16_t y, short z, uint16_t block, uint8_t di
           special_block_set_state(x, y, z, dimension, block, stair_encode_state(0, 0));
         } else if (block == B_furnace) {
           special_block_set_state(x, y, z, dimension, block, furnace_encode_state(0, 0));
-        } else if (block == B_chest) {
+        } else if (block == B_chest || block == B_barrel) {
           memset(&block_changes[i + 1], 0, 14 * sizeof(BlockChange));
-          special_block_set_state(x, y, z, dimension, block, oriented_encode_state(0));
+          if (block == B_barrel) {
+            special_block_set_state(x, y, z, dimension, block, barrel_encode_state(0, 0));
+          } else {
+            special_block_set_state(x, y, z, dimension, block, oriented_encode_state(0));
+          }
+        } else if (block == B_ender_chest) {
+          // ender chest uses one state entry (no inventory storage here)
+          block_changes[i + 1].x = 0;
+          block_changes[i + 1].y = 0;
+          block_changes[i + 1].z = z;
+          block_changes[i + 1].block = 0;
+          special_block_set_state(x, y, z, dimension, block, ender_chest_encode_state(0, 0));
         }
       }
       write_from = i;
@@ -1375,11 +1392,11 @@ uint8_t makeBlockChange (short x, int16_t y, short z, uint16_t block, uint8_t di
       return 0;
     }
     // Skip extra entries for special blocks during search
-    if (block_changes[i].block == B_chest) { if (i + 14 >= block_changes_count) break; i += 14; continue; }
+    if (block_changes[i].block == B_chest || block_changes[i].block == B_barrel) { if (i + 14 >= block_changes_count) break; i += 14; continue; }
     #ifdef ALLOW_DOORS
     if (is_door_block(block_changes[i].block)) { if (i + 2 >= block_changes_count) break; i += 2; continue; }
     #endif
-    if (is_stair_block(block_changes[i].block) || block_changes[i].block == B_furnace) { i += 1; }
+    if (is_stair_block(block_changes[i].block) || block_changes[i].block == B_furnace || block_changes[i].block == B_ender_chest) { i += 1; }
   }
 
   // Don't create a new entry if it contains the base terrain block
@@ -1390,7 +1407,8 @@ uint8_t makeBlockChange (short x, int16_t y, short z, uint16_t block, uint8_t di
 
   // Determine how many block_changes entries this block needs
   int slots_needed = 1;
-  if (block == B_chest) slots_needed = 15;
+  if (block == B_chest || block == B_barrel) slots_needed = 15;
+  else if (block == B_ender_chest) slots_needed = 2;
   #ifdef ALLOW_DOORS
   else if (is_door_block(block)) slots_needed = 3;
   #endif
@@ -1435,9 +1453,19 @@ uint8_t makeBlockChange (short x, int16_t y, short z, uint16_t block, uint8_t di
     block_changes[base].block = block;
     block_changes[base].dimension = dimension;
 
-    if (block == B_chest) {
+    if (block == B_chest || block == B_barrel) {
       memset(&block_changes[base + 1], 0, 14 * sizeof(BlockChange));
-      special_block_set_state(x, y, z, dimension, block, oriented_encode_state(0));
+      if (block == B_barrel) {
+        special_block_set_state(x, y, z, dimension, block, barrel_encode_state(0, 0));
+      } else {
+        special_block_set_state(x, y, z, dimension, block, oriented_encode_state(0));
+      }
+    } else if (block == B_ender_chest) {
+      block_changes[base + 1].x = 0;
+      block_changes[base + 1].y = 0;
+      block_changes[base + 1].z = z;
+      block_changes[base + 1].block = 0;
+      special_block_set_state(x, y, z, dimension, block, ender_chest_encode_state(0, 0));
     }
     #ifdef ALLOW_DOORS
     else if (is_door_block(block)) {
@@ -3744,6 +3772,82 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       }
       return;
     }
+    else if (target == B_barrel && config.allow_chests) {
+      // Barrel works like chest (27 slots of storage)
+      int barrel_idx = -1;
+      for (int i = 0; i < block_changes_count; i++) {
+        if (block_changes[i].block != B_barrel) continue;
+        if (block_changes[i].x != x || block_changes[i].y != y || block_changes[i].z != z) continue;
+        barrel_idx = i;
+        break;
+      }
+      if (barrel_idx < 0) {
+        // First interaction with this barrel: create entry
+        pthread_mutex_lock(&block_changes_mutex);
+        int slots_needed = 15;
+        int last_real = -1;
+        for (int i = 0; i <= block_changes_count + slots_needed; i++) {
+          #ifdef INFINITE_BLOCK_CHANGES
+          if (i >= block_changes_capacity - slots_needed) {
+            if (!config.infinite_block_changes) break;
+            int new_cap = block_changes_capacity * 2;
+            if (new_cap <= block_changes_capacity) new_cap = block_changes_capacity + slots_needed + 1;
+            BlockChange *nb = (BlockChange *)realloc(block_changes, new_cap * sizeof(BlockChange));
+            if (!nb) break;
+            block_changes = nb;
+            for (int j = block_changes_capacity; j < new_cap; j++) block_changes[j].block = 0xFF;
+            block_changes_capacity = new_cap;
+          }
+          #else
+          if (i >= MAX_BLOCK_CHANGES) break;
+          #endif
+          if (i < block_changes_count && block_changes[i].block != 0xFF) { last_real = i; continue; }
+          if (i - last_real != slots_needed) continue;
+          int base = last_real + 1;
+          block_changes[base].x = x; block_changes[base].y = y; block_changes[base].z = z;
+          block_changes[base].block = B_barrel; block_changes[base].dimension = player->dimension;
+          memset(&block_changes[base + 1], 0, 14 * sizeof(BlockChange));
+          special_block_set_state(x, y, z, player->dimension, B_barrel, barrel_encode_state(0, 0));
+          if (i >= block_changes_count) block_changes_count = i + 1;
+          barrel_idx = base;
+          break;
+        }
+        pthread_mutex_unlock(&block_changes_mutex);
+        if (barrel_idx < 0) return;
+      }
+      memcpy(player->craft_items, &barrel_idx, sizeof(barrel_idx));
+      player->flags |= 0x80;
+      // Open barrel animation (open=true)
+      uint16_t st = special_block_get_state(x, y, z, player->dimension);
+      uint8_t dir = barrel_get_direction(st);
+      special_block_set_state(x, y, z, player->dimension, B_barrel, barrel_encode_state(dir, 1));
+      sc_blockEvent(player->client_fd, x, y, z, 1, 1, B_barrel);
+      sc_openScreen(player->client_fd, 2, "Barrel", 6);
+      uint8_t *base = (uint8_t *)&block_changes[barrel_idx + 1];
+      for (int i = 0; i < 27; i++) {
+        uint16_t item;
+        uint8_t count;
+        memcpy(&item, base + i * 3, 2);
+        memcpy(&count, base + i * 3 + 2, 1);
+        sc_setContainerSlot(player->client_fd, 2, i, count, item);
+      }
+      return;
+    }
+    else if (target == B_ender_chest && config.allow_chests) {
+      // Ender chest uses per-player inventory
+      player->flags |= 0x80;
+      // Store ender chest position in craft_items for close animation
+      player->craft_items[0] = 0xFFFF; // marker: not a block_changes index
+      player->craft_items[1] = (uint16_t)(int16_t)x;
+      player->craft_items[2] = (uint16_t)y;
+      player->craft_items[3] = (uint16_t)(int16_t)z;
+      sc_blockEvent(player->client_fd, x, y, z, 1, 1, B_ender_chest);
+      sc_openScreen(player->client_fd, 2, "Ender Chest", 11);
+      for (int i = 0; i < 27; i++) {
+        sc_setContainerSlot(player->client_fd, 2, i, player->ender_chest_count[i], player->ender_chest_items[i]);
+      }
+      return;
+    }
     #endif
     #ifdef ALLOW_DOORS
     else if (config.allow_doors && isDoorBlock(target)) {
@@ -3770,7 +3874,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       open ^= 1;
       state = door_encode_state(open, hinge, direction);
       special_block_set_state(door_x, door_y, door_z, player->dimension, target, state);
-      
+
       // Also update upper half's state in the special block table
       // Use getBlockAt2 so village door upper halves are detected
       uint16_t above = getBlockAt2(door_x, door_y + 1, door_z, player->dimension);
@@ -4153,9 +4257,9 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     }
   }
 
-  // Special handling for oriented block placement (chests, furnaces)
+  // Special handling for oriented block placement (chests, furnaces, barrels, ender chests)
   if (isOrientedBlock(block)) {
-    if (block == B_chest && !config.allow_chests) return;
+    if ((block == B_chest || block == B_ender_chest) && !config.allow_chests) return;
     // Determine placement position
     switch (face) {
       case 0: y -= 1; break;
@@ -4167,15 +4271,25 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       default: break;
     }
 
-    // Determine direction based on player facing
     uint8_t direction;
-    if (player->yaw >= -96 && player->yaw < -32) direction = 3;   // East
-    else if (player->yaw >= -32 && player->yaw < 32) direction = 1; // South
-    else if (player->yaw >= 32 && player->yaw < 96) direction = 2;  // West
-    else direction = 0;                                             // North
-
-    // Chests and furnaces face TOWARDS the player
-    direction ^= 1;
+    if (block == B_barrel) {
+      // Barrels can face in 6 directions (lid faces toward the player)
+      // The clicked block face tells us which side the player is on:
+      // the barrel is placed on the side of that face, so the lid
+      // should face the player — which is the direction of the face.
+      // face: 0=bottom,1=top,2=north,3=south,4=west,5=east
+      // barrel direction: 4=up,5=down,2=south,0=north,1=east,3=west
+      static const uint8_t face_to_barrel[6] = {5, 4, 0, 2, 3, 1};
+      direction = face_to_barrel[face & 7];
+    } else {
+      // Chests, furnaces, ender chests: horizontal only (4 directions)
+      if (player->yaw >= -96 && player->yaw < -32) direction = 3;   // East
+      else if (player->yaw >= -32 && player->yaw < 32) direction = 1; // South
+      else if (player->yaw >= 32 && player->yaw < 96) direction = 2;  // West
+      else direction = 0;                                             // North
+      // Chests and furnaces face TOWARDS the player
+      direction ^= 1;
+    }
 
     // Check if the block's placement conditions are met
     if (
@@ -4190,15 +4304,24 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       if (makeBlockChange(x, y, z, block, player->dimension)) return;
 
       // Update state with direction in the unified special block table
-      uint16_t state = oriented_encode_state(direction);
+      uint16_t state;
+      if (block == B_barrel) {
+        state = barrel_encode_state(direction, 0);
+      } else if (block == B_ender_chest) {
+        state = ender_chest_encode_state(direction, 0);
+      } else {
+        state = oriented_encode_state(direction);
+      }
       special_block_set_state(x, y, z, player->dimension, block, state);
 
       // Store direction in legacy field for persistence across restarts
-      for (int i = 0; i < block_changes_count; i++) {
-        if (block_changes[i].block == B_chest &&
-            block_changes[i].x == x && block_changes[i].y == y && block_changes[i].z == z) {
-          block_changes[i + 14].y = direction;
-          break;
+      if (block == B_chest) {
+        for (int i = 0; i < block_changes_count; i++) {
+          if (block_changes[i].block == B_chest &&
+              block_changes[i].x == x && block_changes[i].y == y && block_changes[i].z == z) {
+            block_changes[i + 14].y = direction;
+            break;
+          }
         }
       }
 
@@ -4567,7 +4690,7 @@ static uint8_t getWaterSpawnY(short x, short z, uint8_t dimension) {
   for (int y = TERRAIN_BASE_HEIGHT + 10; y >= 30; y--) {
     uint16_t block = getBlockAt2(x, y, z, dimension);
     uint16_t block_above = getBlockAt2(x, y + 1, z, dimension);
-    
+
     // We want the fish to spawn in water with at least 1 water block above
     if (isWaterBlock(block) && isWaterBlock(block_above)) {
       // Make sure there's at least one more water or air block above for swimming room
@@ -4750,7 +4873,7 @@ static void spawnFishInWater(PlayerData *player) {
     if ((mob_data[i].data & 31) == 0) continue; // Skip dead mobs
     if (mob_data[i].dimension != player->dimension) continue;
     // Check if this is a fish
-    if (mob_data[i].type != E_COD && mob_data[i].type != E_SALMON && 
+    if (mob_data[i].type != E_COD && mob_data[i].type != E_SALMON &&
         mob_data[i].type != E_PUFFERFISH && mob_data[i].type != E_TROPICAL_FISH) continue;
     double dx = fabs(mob_data[i].x - player->x);
     double dz = fabs(mob_data[i].z - player->z);
@@ -4767,7 +4890,7 @@ static void spawnFishInWater(PlayerData *player) {
   static const uint8_t num_fish_types = 3;
 
   uint8_t fish_to_spawn = 1 + (fast_rand() % 2); // Spawn 1-2 fish
-  if (fish_to_spawn > max_fish - existing_fish) 
+  if (fish_to_spawn > max_fish - existing_fish)
     fish_to_spawn = max_fish - existing_fish;
 
   for (uint8_t s = 0; s < fish_to_spawn; s++) {
@@ -4783,11 +4906,11 @@ static void spawnFishInWater(PlayerData *player) {
     // Fish spawn with 3 HP (they're small)
     // Fish need to be higher in water, so spawn at spawn_y + 1
     spawnMob(type, spawn_x, spawn_y + 1, spawn_z, 3, player->dimension);
-    
+
     // Find the fish we just spawned and adjust its Y to float in water
     for (int j = 0; j < MAX_MOBS; j++) {
-      if (mob_data[j].type == type && 
-          mob_data[j].x == (double)spawn_x + 0.5 && 
+      if (mob_data[j].type == type &&
+          mob_data[j].x == (double)spawn_x + 0.5 &&
           mob_data[j].z == (double)spawn_z + 0.5 &&
           mob_data[j].y == (double)(spawn_y + 1)) {
         mob_data[j].y = (double)(spawn_y + 1) + 0.5; // Float at center of water block
@@ -5045,7 +5168,7 @@ void interactEntity (int entity_id, int interactor_id) {
         // Angry piglins refuse trades
         break;
       }
-      
+
       // Piglins trade gold ingots for random items (same as villagers)
       if (player->inventory_items[player->hotbar] == I_gold_ingot) {
         // Take the gold ingot
@@ -5271,7 +5394,7 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
     // Set the mob's panic timer
     mob->data |= (3 << 6);
     // Make passive mobs run instantly when hit
-    if (mob->type == 25 || mob->type == 28 || mob->type == 95 || 
+    if (mob->type == 25 || mob->type == 28 || mob->type == 95 ||
         mob->type == 106 || mob->type == E_VILLAGER ||
         mob->type == E_COD || mob->type == E_SALMON ||
         mob->type == E_PUFFERFISH || mob->type == E_TROPICAL_FISH) {
@@ -5319,7 +5442,7 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
     }
 
     // Knockback is now handled by hurtEntity's velocity-based knockback system
-    
+
     // Piglins get angry when hit by a player
     if (attacker_id > 0 && mob->type == E_PIGLIN) {
       mob->anger_timer = 40; // 2 seconds of anger (40 ticks at 20 TPS)
@@ -5373,7 +5496,7 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
           case E_SALMON: givePlayerItem(player, I_salmon, 1); break;
           case E_PUFFERFISH: givePlayerItem(player, I_pufferfish, 1); break;
           case E_TROPICAL_FISH: givePlayerItem(player, I_tropical_fish, 1); break;
-          case E_PIGLIN: 
+          case E_PIGLIN:
             givePlayerItem(player, getRandomCreativeItem(), 1);
             break;
           case E_CREEPER:
@@ -5907,19 +6030,19 @@ void handleServerTick (int64_t time_since_last_tick) {
 
     // Movement increment per tick (sub-block movement for smoothness)
     double move_amount = 0.05;  // Move 0.05 blocks per tick for smooth walking
-    
+
     // Fish-specific swimming behavior
     if (is_fish) {
       // Fish swim faster and can move vertically in water
       move_amount = 0.08;  // Fish swim faster
-      
+
       // Check if fish is in water
       int fish_block_x = mobBlockCoord(old_x);
       int fish_block_y = mobBlockCoord(old_y);
       int fish_block_z = mobBlockCoord(old_z);
       uint16_t fish_block = getBlockAt2(fish_block_x, fish_block_y, fish_block_z, mob_data[i].dimension);
       uint8_t in_water = isWaterBlock(fish_block);
-      
+
       // If fish is out of water, try to jump back in
       if (!in_water) {
         // Look for water in a 3x3x3 area around the fish
@@ -5939,7 +6062,7 @@ void handleServerTick (int64_t time_since_last_tick) {
             }
           }
         }
-        
+
         // Fish out of water take damage and flop
         if (!found_water && server_ticks % 10 == 0) {
           hurtEntity(entity_id, -1, D_generic, 1);
@@ -5953,16 +6076,16 @@ void handleServerTick (int64_t time_since_last_tick) {
           if (flop_sound > 0) broadcastMobSound(entity_id, flop_sound, SOUND_CATEGORY_NEUTRAL, 1.0f, 1.0f);
         }
       }
-      
+
       // Fish movement - more frequent direction changes and vertical movement
       if (mob_data[i].move_timer <= 0) {
         // Pick a random 3D direction
         uint32_t dir_rand = fast_rand();
-        
+
         // Reset previous movement
         mob_data[i].move_dx = 0;
         mob_data[i].move_dz = 0;
-        
+
         // Horizontal movement (X or Z axis)
         if ((dir_rand >> 2) & 1) {
           if ((dir_rand >> 1) & 1) {
@@ -5981,7 +6104,7 @@ void handleServerTick (int64_t time_since_last_tick) {
             mob_data[i].yaw_store = 128;
           }
         }
-        
+
         // Vertical movement - fish can swim up and down (30% chance)
         if ((dir_rand & 7) < 3) { // 3/8 chance for vertical movement
           if (dir_rand & 1) {
@@ -5992,21 +6115,21 @@ void handleServerTick (int64_t time_since_last_tick) {
         } else {
           mob_data[i].move_dy = 0;
         }
-        
+
         // Fish change direction more often (20-60 ticks)
         int min_ticks = (int)(1.0f * TICKS_PER_SECOND);
         int max_ticks = (int)(3.0f * TICKS_PER_SECOND);
         mob_data[i].move_timer = min_ticks + (fast_rand() % (max_ticks - min_ticks + 1));
       }
-      
+
       // Apply movement
       new_x += mob_data[i].move_dx;
       new_z += mob_data[i].move_dz;
       new_y += mob_data[i].move_dy;
-      
+
       // Decrement movement timer
       if (mob_data[i].move_timer > 0) mob_data[i].move_timer--;
-      
+
       // Find nearby water surface level. Scanning from world top every tick is
       // expensive; fish only need local surface avoidance around their current
       // swim depth.
@@ -6027,7 +6150,7 @@ void handleServerTick (int64_t time_since_last_tick) {
           break;
         }
       }
-      
+
       // Fish must stay at least 1 block below the water surface
       if (water_surface > 0) {
         double max_y = (double)water_surface - 1.0; // At least 1 block under surface
@@ -6427,7 +6550,7 @@ void handleServerTick (int64_t time_since_last_tick) {
       int fish_block_x = mobBlockCoord(new_x);
       int fish_block_y = mobBlockCoord(new_y);
       int fish_block_z = mobBlockCoord(new_z);
-      
+
       // Check a 3x3x2 area around the fish for water
       uint8_t has_water = 0;
       for (int dx = -1; dx <= 1; dx++) {
@@ -6443,11 +6566,11 @@ void handleServerTick (int64_t time_since_last_tick) {
         }
         if (has_water) break;
       }
-      
+
       // Also check that the position isn't inside a solid block
       uint16_t fish_block = getBlockAt2(fish_block_x, fish_block_y, fish_block_z, mob_data[i].dimension);
       uint16_t fish_block_above = getBlockAt2(fish_block_x, fish_block_y + 1, fish_block_z, mob_data[i].dimension);
-      
+
       if (!has_water || (!isPassableBlock(fish_block) && !isWaterBlock(fish_block))) {
         // Can't move to position without water or inside solid block
         new_x = old_x;
@@ -6975,7 +7098,7 @@ static void updatePlayerStateTask(void* arg) {
       if (player->health > 1) player->health -= 1;
       else player->health = 0;
     }
-    
+
     // Calculate cactus damage (apply health change, packet sent separately)
     if (block == B_cactus ||
         getBlockAt2(player->x + 1, player->y, player->z, pdim) == B_cactus ||

@@ -932,7 +932,10 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
     if (isOrientedBlock(block_changes_snapshot[i].block)) {
       // Read direction from the unified special block table
       uint16_t state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].dimension);
-      uint8_t direction = oriented_get_direction(state);
+      // Barrels use 3 bits for 6-directional facing (0-5); other oriented blocks use 2 bits (0-3)
+      uint8_t direction = (block_changes_snapshot[i].block == B_barrel)
+        ? barrel_get_direction(state)
+        : oriented_get_direction(state);
 
       if (block_changes_snapshot[i].block == B_chest) {
         sendOrientedUpdate(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].block, direction);
@@ -1366,32 +1369,45 @@ int cs_clickContainer (int client_fd) {
   uint16_t *p_item;
   uint8_t *p_count;
 
-  #ifdef ALLOW_CHESTS
-  int chest_idx = -1;
-  memcpy(&chest_idx, player->craft_items, sizeof(chest_idx));
-  #endif
-
-  for (int i = 0; i < changes_count; i ++) {
-
-    slot = clientSlotToServerSlot(window_id, readUint16(client_fd));
-    readChangedSlotPayload(client_fd, &present, &item, &count);
-    if (slot > 67) continue; // skip out-of-bounds slots after consuming their payload
-    // slots outside of the inventory overflow into the crafting buffer
-    if (slot > 40 && apply_changes) craft = true;
-
-    #ifdef ALLOW_CHESTS
-    if (window_id == 2 && slot > 40) {
-      uint8_t *base = (uint8_t *)&block_changes[chest_idx + 1];
-      p_item = (uint16_t *)(base + (slot - 41) * 3);
-      p_count = base + (slot - 41) * 3 + 2;
-    } else
-    #endif
-    {
-      // Prevent accessing crafting-related slots when craft_items is locked
-      if (slot > 40 && player->flags & 0x80) return 1;
-      p_item = &player->inventory_items[slot];
-      p_count = &player->inventory_count[slot];
-    }
+	  #ifdef ALLOW_CHESTS
+	  int chest_idx = -1;
+	  memcpy(&chest_idx, player->craft_items, sizeof(chest_idx));
+	  uint8_t is_ender_chest = 0;
+	  if (window_id == 2) {
+	    // Check if this is a container with block_changes storage or ender chest
+	    if (chest_idx >= 0 && chest_idx < block_changes_count &&
+	        (block_changes[chest_idx].block == B_chest || block_changes[chest_idx].block == B_barrel)) {
+	      is_ender_chest = 0;
+	    } else {
+	      is_ender_chest = 1;
+	    }
+	  }
+	  #endif
+	
+	  for (int i = 0; i < changes_count; i ++) {
+	
+	    slot = clientSlotToServerSlot(window_id, readUint16(client_fd));
+	    readChangedSlotPayload(client_fd, &present, &item, &count);
+	    if (slot > 67) continue; // skip out-of-bounds slots after consuming their payload
+	    // slots outside of the inventory overflow into the crafting buffer
+	    if (slot > 40 && apply_changes) craft = true;
+	
+	    #ifdef ALLOW_CHESTS
+	    if (window_id == 2 && slot > 40 && !is_ender_chest) {
+	      uint8_t *base = (uint8_t *)&block_changes[chest_idx + 1];
+	      p_item = (uint16_t *)(base + (slot - 41) * 3);
+	      p_count = base + (slot - 41) * 3 + 2;
+	    } else if (window_id == 2 && slot > 40 && is_ender_chest) {
+	      p_item = &player->ender_chest_items[slot - 41];
+	      p_count = &player->ender_chest_count[slot - 41];
+	    } else
+	    #endif
+	    {
+	      // Prevent accessing crafting-related slots when craft_items is locked
+	      if (slot > 40 && player->flags & 0x80) return 1;
+	      p_item = &player->inventory_items[slot];
+	      p_count = &player->inventory_count[slot];
+	    }
 
     if (!present) { // no item?
       if (slot != 255 && apply_changes) {
@@ -1402,11 +1418,11 @@ int cs_clickContainer (int client_fd) {
           slot == 40 ||
           (slot >= 36 && slot <= 39)
         ) equipment_dirty = true;
-        #ifdef ALLOW_CHESTS
-        if (window_id == 2 && slot > 40) {
-          broadcastChestUpdate(client_fd, chest_idx, 0, 0, slot - 41);
-        }
-        #endif
+	        #ifdef ALLOW_CHESTS
+	        if (window_id == 2 && slot > 40 && !is_ender_chest) {
+	          broadcastChestUpdate(client_fd, chest_idx, 0, 0, slot - 41);
+	        }
+	        #endif
       }
       continue;
     }
@@ -1419,11 +1435,11 @@ int cs_clickContainer (int client_fd) {
         slot == 40 ||
         (slot >= 36 && slot <= 39)
       ) equipment_dirty = true;
-      #ifdef ALLOW_CHESTS
-      if (window_id == 2 && slot > 40) {
-        broadcastChestUpdate(client_fd, chest_idx, item, count, slot - 41);
-      }
-      #endif
+	      #ifdef ALLOW_CHESTS
+	      if (window_id == 2 && slot > 40 && !is_ender_chest) {
+	        broadcastChestUpdate(client_fd, chest_idx, item, count, slot - 41);
+	      }
+	      #endif
     }
 
   }
@@ -1610,38 +1626,66 @@ int cs_closeContainer (int client_fd) {
   PlayerData *player;
   if (getPlayerData(client_fd, &player)) return 1;
 
-  #ifdef ALLOW_CHESTS
-  int chest_idx = -1;
-  if (window_id == 2) {
-    memcpy(&chest_idx, player->craft_items, sizeof(chest_idx));
-  }
-  #endif
-
-  // return all items in crafting slots to the player
-  // or, in the case of chests, simply clear the storage pointer
-  for (uint8_t i = 0; i < 9; i ++) {
-    if (window_id != 2) {
-      givePlayerItem(player, player->craft_items[i], player->craft_count[i]);
-      uint8_t client_slot = serverSlotToClientSlot(window_id, 41 + i);
-      if (client_slot != 255) sc_setContainerSlot(player->client_fd, window_id, client_slot, 0, 0);
-    }
-    player->craft_items[i] = 0;
-    player->craft_count[i] = 0;
-    // Unlock craft_items
-    player->flags &= ~0x80;
-  }
-
-  #ifdef ALLOW_CHESTS
-  if (chest_idx >= 0 && chest_idx < block_changes_count && block_changes[chest_idx].block == B_chest) {
-    sc_blockEvent(client_fd,
-      block_changes[chest_idx].x,
-      block_changes[chest_idx].y,
-      block_changes[chest_idx].z,
-      1, 0, B_chest);
-  }
-  #endif
-
-  givePlayerItem(player, player->flagval_16, player->flagval_8);
+	  #ifdef ALLOW_CHESTS
+	  int chest_idx = -1;
+	  uint8_t is_barrel = 0;
+	  // Ender chest close info (saved before craft_items is cleared)
+	  uint8_t is_ender_chest = 0;
+	  short ec_x = 0, ec_y = 0, ec_z = 0;
+	  if (window_id == 2) {
+	    memcpy(&chest_idx, player->craft_items, sizeof(chest_idx));
+	    if (chest_idx >= 0 && chest_idx < block_changes_count && block_changes[chest_idx].block == B_barrel) {
+	      is_barrel = 1;
+	    }
+	    // Check for ender chest marker (0xFFFF in craft_items[0])
+	    if (player->craft_items[0] == 0xFFFF) {
+	      is_ender_chest = 1;
+	      ec_x = (int16_t)player->craft_items[1];
+	      ec_y = (int16_t)player->craft_items[2];
+	      ec_z = (int16_t)player->craft_items[3];
+	    }
+	  }
+	  #endif
+	
+	  // return all items in crafting slots to the player
+	  // or, in the case of chests, simply clear the storage pointer
+	  for (uint8_t i = 0; i < 9; i ++) {
+	    if (window_id != 2) {
+	      givePlayerItem(player, player->craft_items[i], player->craft_count[i]);
+	      uint8_t client_slot = serverSlotToClientSlot(window_id, 41 + i);
+	      if (client_slot != 255) sc_setContainerSlot(player->client_fd, window_id, client_slot, 0, 0);
+	    }
+	    player->craft_items[i] = 0;
+	    player->craft_count[i] = 0;
+	    // Unlock craft_items
+	    player->flags &= ~0x80;
+	  }
+	
+	  #ifdef ALLOW_CHESTS
+	  if (chest_idx >= 0 && chest_idx < block_changes_count && block_changes[chest_idx].block == B_chest) {
+	    sc_blockEvent(client_fd,
+	      block_changes[chest_idx].x,
+	      block_changes[chest_idx].y,
+	      block_changes[chest_idx].z,
+	      1, 0, B_chest);
+	  }
+	  if (is_barrel) {
+	    // Restore barrel closed state
+	    short bx = block_changes[chest_idx].x;
+	    uint8_t by = (uint8_t)block_changes[chest_idx].y;
+	    short bz = block_changes[chest_idx].z;
+	    uint8_t dim = block_changes[chest_idx].dimension;
+	    uint16_t st = special_block_get_state(bx, by, bz, dim);
+	    uint8_t dir = barrel_get_direction(st);
+	    special_block_set_state(bx, by, bz, dim, B_barrel, barrel_encode_state(dir, 0));
+	    sc_blockEvent(client_fd, bx, by, bz, 1, 0, B_barrel);
+	  }
+	  if (is_ender_chest) {
+	    sc_blockEvent(client_fd, ec_x, ec_y, ec_z, 1, 0, B_ender_chest);
+	  }
+	  #endif
+	
+	  givePlayerItem(player, player->flagval_16, player->flagval_8);
   sc_setCursorItem(client_fd, 0, 0);
   player->flagval_16 = 0;
   player->flagval_8 = 0;

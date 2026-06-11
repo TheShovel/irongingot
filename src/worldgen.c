@@ -3165,8 +3165,8 @@ uint16_t buildEndChunkSection(int cx, int cy, int cz) {
     for (int i = 0; i < block_changes_snapshot_count; i++) {
       if (block_changes_snapshot[i].block == 0xFF) continue;
       if (is_stair_block(block_changes_snapshot[i].block) || is_oriented_block(block_changes_snapshot[i].block)) {
-        if (block_changes_snapshot[i].block == B_chest) i += 14;
-        else if (is_stair_block(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_furnace) i += 1;
+        if (block_changes_snapshot[i].block == B_chest || block_changes_snapshot[i].block == B_barrel) i += 14;
+        else if (is_stair_block(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_furnace || block_changes_snapshot[i].block == B_ender_chest) i += 1;
         continue;
       }
       if (block_changes_snapshot[i].dimension != DIMENSION_END ||
@@ -3595,8 +3595,8 @@ uint16_t buildChunkSection (int cx, int cy, int cz, uint8_t dimension) {
     if (block_changes_snapshot[i].block == 0xFF) continue;
     // Skip special blocks — they use block updates, not chunk data
     if (is_stair_block(block_changes_snapshot[i].block) || is_oriented_block(block_changes_snapshot[i].block)) {
-      if (block_changes_snapshot[i].block == B_chest) i += 14;
-      else if (is_stair_block(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_furnace) i += 1;
+      if (block_changes_snapshot[i].block == B_chest || block_changes_snapshot[i].block == B_barrel) i += 14;
+      else if (is_stair_block(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_furnace || block_changes_snapshot[i].block == B_ender_chest) i += 1;
       continue;
     }
     #ifdef ALLOW_DOORS

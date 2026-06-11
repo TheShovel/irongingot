@@ -473,6 +473,8 @@ async function extractItemsAndBlocks() {
     "wheat",
     "mossy_cobblestone",
     "spawner",
+    "barrel",
+    "ender_chest",
   ];
   for (const block of extraBlocks) {
     if (block in palette) continue; // Already included in first 256

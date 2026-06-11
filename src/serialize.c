@@ -224,6 +224,18 @@ static cJSON *serializePlayerData(void) {
     }
     cJSON_AddItemToObject(obj, "craft_count", craft_cnt);
 
+    cJSON *ec_arr = cJSON_CreateArray();
+    for (int i = 0; i < 27; i++) {
+      cJSON_AddItemToArray(ec_arr, cJSON_CreateNumber(pd->ender_chest_items[i]));
+    }
+    cJSON_AddItemToObject(obj, "ender_chest_items", ec_arr);
+
+    cJSON *ec_cnt = cJSON_CreateArray();
+    for (int i = 0; i < 27; i++) {
+      cJSON_AddItemToArray(ec_cnt, cJSON_CreateNumber(pd->ender_chest_count[i]));
+    }
+    cJSON_AddItemToObject(obj, "ender_chest_count", ec_cnt);
+
     cJSON *vx_arr = cJSON_CreateArray();
     for (int i = 0; i < VISITED_HISTORY; i++) {
       cJSON_AddItemToArray(vx_arr, cJSON_CreateNumber(pd->visited_x[i]));
@@ -317,6 +329,8 @@ static int deserializePlayerData(cJSON *arr) {
     READ_ARRAY(inventory_count, "inventory_count", 41);
     READ_ARRAY(craft_items, "craft_items", 9);
     READ_ARRAY(craft_count, "craft_count", 9);
+    READ_ARRAY(ender_chest_items, "ender_chest_items", 27);
+    READ_ARRAY(ender_chest_count, "ender_chest_count", 27);
     READ_ARRAY(visited_x, "visited_x", VISITED_HISTORY);
     READ_ARRAY(visited_z, "visited_z", VISITED_HISTORY);
 

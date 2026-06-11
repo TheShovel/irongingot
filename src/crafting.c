@@ -783,9 +783,58 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
           }
         }
       }
+      // Barrel recipe: 6 planks (outer ring) + 2 slabs (top and bottom center)
+      // Pattern: P S P / P . P / P S P  (indices: 0,1,2 / 3,.,5 / 6,7,8)
+      if (isPlankItem(first_item) &&
+          player->craft_items[2] == first_item &&
+          player->craft_items[3] == first_item &&
+          player->craft_items[5] == first_item &&
+          player->craft_items[6] == first_item &&
+          player->craft_items[8] == first_item &&
+          player->craft_items[4] == 0) {
+        uint16_t slab = player->craft_items[1];
+        // Check that slabs match
+        if (player->craft_items[7] == slab) {
+          uint16_t plank_item = 0;
+          // Map slab to plank type
+          switch (slab) {
+            case I_oak_slab: plank_item = I_oak_planks; break;
+            case I_spruce_slab: plank_item = I_spruce_planks; break;
+            case I_birch_slab: plank_item = I_birch_planks; break;
+            case I_jungle_slab: plank_item = I_jungle_planks; break;
+            case I_acacia_slab: plank_item = I_acacia_planks; break;
+            case I_dark_oak_slab: plank_item = I_dark_oak_planks; break;
+            case I_mangrove_slab: plank_item = I_mangrove_planks; break;
+            case I_cherry_slab: plank_item = I_cherry_planks; break;
+            case I_pale_oak_slab: plank_item = I_pale_oak_planks; break;
+            default: break;
+          }
+          // Verify planks match the slab type
+          if (plank_item != 0 && first_item == plank_item) {
+            *item = I_barrel;
+            *count = 1;
+            return;
+          }
+        }
+      }
       break;
 
     case 9:
+      // Ender chest recipe: 8 obsidian + 1 eye of ender
+      // Pattern: O O O / O E O / O O O (all slots filled)
+      if (first_item == I_obsidian && first == 0 &&
+          player->craft_items[1] == I_obsidian &&
+          player->craft_items[2] == I_obsidian &&
+          player->craft_items[3] == I_obsidian &&
+          player->craft_items[5] == I_obsidian &&
+          player->craft_items[6] == I_obsidian &&
+          player->craft_items[7] == I_obsidian &&
+          player->craft_items[8] == I_obsidian &&
+          player->craft_items[4] == I_ender_eye) {
+        *item = I_ender_chest;
+        *count = 1;
+        return;
+      }
       // Uniform 3x3 shaped recipes
       if (identical) switch (first_item) {
         case I_iron_ingot: *item = I_iron_block; *count = 1; return;

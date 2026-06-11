@@ -463,6 +463,9 @@ typedef struct {
   short portal_ow_x;
   int16_t portal_ow_y;
   short portal_ow_z;
+  // Ender chest inventory (per-player, cross-dimension)
+  uint16_t ender_chest_items[27];
+  uint8_t ender_chest_count[27];
 } PlayerData;
 
 #define PLAYER_TEXTURE_VALUE_MAX 4096

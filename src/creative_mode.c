@@ -204,6 +204,8 @@ static const CreativeItem creative_items[] = {
   {I_crafting_table, "Crafting Table"},
   {I_furnace, "Furnace"},
   {I_chest, "Chest"},
+  {I_barrel, "Barrel"},
+  {I_ender_chest, "Ender Chest"},
   {I_bedrock, "Bedrock"},
   {I_snow_block, "Snow Block"},
   {I_ice, "Ice"},
