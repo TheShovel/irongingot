@@ -315,6 +315,9 @@
 #define E_PUFFERFISH 102
 #define E_TROPICAL_FISH 131
 
+// Experience Orb entity type for protocol 772 (1.21.8)
+#define E_XP_ORB 47
+
 typedef struct OutPacket OutPacket;
 
 typedef struct {
@@ -449,6 +452,10 @@ typedef struct {
   // 0x80 - craft_items lock (for storing pointers)
   // 0x0100 - blocking with a shield
   uint16_t flags;
+  // Experience tracking
+  uint16_t xp_total;    // Total XP accumulated
+  uint16_t xp_level;    // Current XP level
+  float xp_progress;    // Progress towards next level (0.0 to 1.0)
   uint8_t dimension;
   uint8_t portal_valid;  // 0 = none, 1 = portal_ow fields track overworld entry
   uint32_t last_bucket_tick;  // Tick of last successful block-targeted bucket action (prevents duplicate via face==255)
@@ -493,6 +500,21 @@ typedef struct {
   uint8_t dimension;
 } MobData;
 
+// Experience Orb data structure
+#define MAX_XP_ORBS 128
+#define XP_ORB_ENTITY_ID_BASE -300
+
+typedef struct {
+  uint8_t active;
+  double x;
+  double y;
+  double z;
+  uint8_t value;   // XP value this orb provides
+  uint8_t count;   // Visual size (1-3 for small/medium/large)
+  uint8_t dimension;
+  uint32_t age;    // Ticks since spawn
+} XpOrbData;
+
 #ifdef ALLOW_DOORS
 typedef struct {
   // Door state flags:
@@ -535,6 +557,7 @@ extern int player_data_count;
 extern PlayerAppearance player_appearance[MAX_PLAYERS];
 
 extern MobData mob_data[MAX_MOBS];
+extern XpOrbData xp_orb_data[MAX_XP_ORBS];
 
 // Projectile entity type identifiers for protocol 772 (1.21.8)
 #define E_ARROW 6

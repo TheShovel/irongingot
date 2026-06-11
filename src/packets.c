@@ -2023,6 +2023,20 @@ int sc_damageEvent (int client_fd, int entity_id, int type) {
 }
 
 // S->C Set Health
+int sc_setExperience (int client_fd, uint16_t xp_total, uint16_t xp_level, float xp_progress) {
+
+  // S->C Set Experience (0x60)
+  startPacket(client_fd, 0x60);
+
+  writeFloat(client_fd, xp_progress);     // Progress to next level
+  writeVarInt(client_fd, xp_level);       // Current XP level
+  writeVarInt(client_fd, xp_total);       // Total XP accumulated
+
+  endPacket(client_fd);
+
+  return 0;
+}
+
 int sc_setHealth (int client_fd, uint8_t health, uint8_t food, uint16_t saturation) {
 
   startPacket(client_fd, 0x61);

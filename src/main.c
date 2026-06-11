@@ -464,6 +464,25 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
           }
         }
 
+        // Send existing XP orbs in the same dimension
+        for (int i = 0; i < MAX_XP_ORBS; i++) {
+          if (!xp_orb_data[i].active) continue;
+          if (xp_orb_data[i].dimension != player->dimension) continue;
+          uint8_t orb_uuid[16];
+          uint32_t r = fast_rand();
+          memcpy(orb_uuid, &r, 4);
+          memcpy(orb_uuid + 4, &i, 4);
+          memset(orb_uuid + 8, 0, 8);
+          sc_spawnEntity(
+            client_fd, XP_ORB_ENTITY_ID_BASE - i, orb_uuid, E_XP_ORB,
+            xp_orb_data[i].x, xp_orb_data[i].y, xp_orb_data[i].z,
+            0, 0, xp_orb_data[i].count, 0, 0
+          );
+        }
+
+        // Sync player XP
+        sc_setExperience(client_fd, player->xp_total, player->xp_level, player->xp_progress);
+
       }
       break;
 

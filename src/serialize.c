@@ -189,6 +189,9 @@ static cJSON *serializePlayerData(void) {
     cJSON_AddNumberToObject(obj, "flags", pd->flags);
     cJSON_AddNumberToObject(obj, "flagval_16", pd->flagval_16);
     cJSON_AddNumberToObject(obj, "flagval_8", pd->flagval_8);
+    cJSON_AddNumberToObject(obj, "xp_total", pd->xp_total);
+    cJSON_AddNumberToObject(obj, "xp_level", pd->xp_level);
+    cJSON_AddNumberToObject(obj, "xp_progress", pd->xp_progress);
     cJSON_AddNumberToObject(obj, "portal_valid", pd->portal_valid);
     cJSON_AddNumberToObject(obj, "last_bucket_tick", pd->last_bucket_tick);
     cJSON_AddNumberToObject(obj, "last_attack_time", (double)pd->last_attack_time);
@@ -287,6 +290,9 @@ static int deserializePlayerData(cJSON *arr) {
     READ_NUMBER(flags, "flags");
     READ_NUMBER(flagval_16, "flagval_16");
     READ_NUMBER(flagval_8, "flagval_8");
+    READ_NUMBER(xp_total, "xp_total");
+    READ_NUMBER(xp_level, "xp_level");
+    READ_NUMBER(xp_progress, "xp_progress");
     READ_NUMBER(portal_valid, "portal_valid");
     READ_NUMBER(last_bucket_tick, "last_bucket_tick");
     READ_NUMBER(last_attack_time, "last_attack_time");

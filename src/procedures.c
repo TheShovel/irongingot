@@ -366,6 +366,10 @@ void resetPlayerData (PlayerData *player) {
   }
   player->flags &= ~0x80;
   player->last_attack_time = 0;
+  // Initialize XP
+  player->xp_total = 0;
+  player->xp_level = 0;
+  player->xp_progress = 0.0f;
 }
 
 void resetPlayerAppearance (int player_index) {
@@ -780,6 +784,8 @@ void spawnPlayer (PlayerData *player) {
   sc_updateEntityAttributes(player->client_fd, player->client_fd, player->inventory_items[player->hotbar]);
   // Sync client health and hunger
   sc_setHealth(player->client_fd, player->health, player->hunger, player->saturation);
+  // Sync client XP
+  sc_setExperience(player->client_fd, player->xp_total, player->xp_level, player->xp_progress);
   // Sync client clock time
   sc_updateTime(player->client_fd, world_time);
 
@@ -4384,6 +4390,87 @@ void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health, uint8_
 
 }
 
+// Calculate the total XP needed to reach the next level
+static uint16_t xpNeededForNextLevel(uint16_t level) {
+  if (level <= 15) {
+    return 2 * level + 7;
+  } else if (level <= 30) {
+    return 5 * level - 38;
+  } else {
+    return 9 * level - 158;
+  }
+}
+
+// Give XP to a player and handle leveling up
+static void addXpToPlayer(PlayerData *player, uint16_t amount) {
+  if (player->client_fd == -1) return;
+  if (amount == 0) return;
+
+  player->xp_total += amount;
+  float remaining = (float)amount + player->xp_progress * (float)xpNeededForNextLevel(player->xp_level);
+
+  while (remaining > 0) {
+    uint16_t needed = xpNeededForNextLevel(player->xp_level);
+    if (remaining >= (float)needed) {
+      remaining -= (float)needed;
+      player->xp_level++;
+      player->xp_progress = 0.0f;
+    } else {
+      player->xp_progress = remaining / (float)needed;
+      remaining = 0;
+    }
+  }
+
+  sc_setExperience(player->client_fd, player->xp_total, player->xp_level, player->xp_progress);
+}
+
+// Get the XP count value (1-3) for an XP orb based on its value
+static uint8_t xpOrbCountFromValue(uint8_t value) {
+  if (value <= 2) return 1;
+  if (value <= 6) return 2;
+  return 3;
+}
+
+void spawnXpOrb (double x, double y, double z, uint8_t value, uint8_t dimension) {
+  if (value == 0) return;
+
+  for (int i = 0; i < MAX_XP_ORBS; i++) {
+    if (xp_orb_data[i].active) continue;
+
+    xp_orb_data[i].active = 1;
+    xp_orb_data[i].x = x;
+    xp_orb_data[i].y = y;
+    xp_orb_data[i].z = z;
+    xp_orb_data[i].value = value;
+    xp_orb_data[i].count = xpOrbCountFromValue(value);
+    xp_orb_data[i].dimension = dimension;
+    xp_orb_data[i].age = 0;
+
+    // Generate a UUID for this orb
+    uint8_t uuid[16];
+    uint32_t r = fast_rand();
+    memcpy(uuid, &r, 4);
+    memcpy(uuid + 4, &i, 4);
+    memset(uuid + 8, 0, 8);
+
+    int entity_id = XP_ORB_ENTITY_ID_BASE - i;
+
+    // Broadcast the orb to all players in the same dimension
+    for (int j = 0; j < MAX_PLAYERS; j++) {
+      if (player_data[j].client_fd == -1) continue;
+      if (player_data[j].dimension != dimension) continue;
+      sc_spawnEntity(
+        player_data[j].client_fd,
+        entity_id, uuid, E_XP_ORB,
+        x, y, z,
+        0, 0, xp_orb_data[i].count, 0, 0
+      );
+    }
+
+    break;
+  }
+}
+
 // Count how many mobs are near a player (within configured spawn range)
 static uint8_t countMobsNearPlayer (PlayerData *player) {
   uint8_t count = 0;
@@ -5268,6 +5355,7 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
     // Process health change on the server
     if (mob_health <= damage) {
 
+      double mob_death_y = mob->y;
       mob->data -= mob_health;
       mob->y = 0;
       entity_died = true;
@@ -5309,6 +5397,31 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
             break;
           default: break;
         }
+      }
+
+      // Spawn XP orbs on mob death
+      uint8_t xp_value = 0;
+      switch (mob->type) {
+        case 25: xp_value = 1 + (fast_rand() & 1); break;   // Chicken: 1-2 XP
+        case 28: xp_value = 1 + (fast_rand() % 3); break;    // Cow: 1-3 XP
+        case 95: xp_value = 1 + (fast_rand() % 3); break;    // Pig: 1-3 XP
+        case 106: xp_value = 1 + (fast_rand() & 1); break;   // Sheep: 1-2 XP
+        case E_VILLAGER: xp_value = 3 + (fast_rand() & 1); break; // Villager: 3-4 XP
+        case E_COD:
+        case E_SALMON:
+        case E_PUFFERFISH:
+        case E_TROPICAL_FISH: xp_value = 1; break;           // Fish: 1 XP
+        case 145: xp_value = 5; break;                         // Zombie: 5 XP
+        case E_SKELETON: xp_value = 5; break;                  // Skeleton: 5 XP
+        case E_SPIDER: xp_value = 5; break;                    // Spider: 5 XP
+        case E_CREEPER: xp_value = 5; break;                   // Creeper: 5 XP
+        case E_ENDERMAN: xp_value = 5; break;                  // Enderman: 5 XP
+        case E_PIGLIN: xp_value = 5; break;                    // Piglin: 5 XP
+        case 148: xp_value = 5; break;                         // Zombified Piglin: 5 XP
+        default: xp_value = 2; break;                          // Other: 2 XP
+      }
+      if (xp_value > 0) {
+        spawnXpOrb(mob->x, mob_death_y + 0.5, mob->z, xp_value, mob->dimension);
       }
 
     } else mob->data -= damage;
@@ -6652,6 +6765,9 @@ void handleServerTick (int64_t time_since_last_tick) {
     }
   }
 
+  // Tick XP orbs - movement towards players and collection
+  tickXpOrbs();
+
   // Spawn friendly mobs around players at configurable interval
   if (config.mob_spawn_enabled && config.mob_spawn_interval > 0 &&
       server_ticks % (uint32_t)config.mob_spawn_interval == 0) {
@@ -6663,6 +6779,90 @@ void handleServerTick (int64_t time_since_last_tick) {
     }
   }
 
+}
+
+void tickXpOrbs (void) {
+  for (int i = 0; i < MAX_XP_ORBS; i++) {
+    if (!xp_orb_data[i].active) continue;
+
+    int entity_id = XP_ORB_ENTITY_ID_BASE - i;
+
+    // Age the orb - despawn after 5 minutes (6000 ticks)
+    xp_orb_data[i].age++;
+    if (xp_orb_data[i].age > 6000) {
+      xp_orb_data[i].active = 0;
+      for (int j = 0; j < MAX_PLAYERS; j++) {
+        if (player_data[j].client_fd == -1) continue;
+        if (player_data[j].dimension != xp_orb_data[i].dimension) continue;
+        sc_removeEntity(player_data[j].client_fd, entity_id);
+      }
+      continue;
+    }
+
+    // Find the closest player in the same dimension
+    PlayerData *closest_player = NULL;
+    double closest_dist_sq = 36.0; // Max pickup range (6 blocks)
+    for (int j = 0; j < MAX_PLAYERS; j++) {
+      if (player_data[j].client_fd == -1) continue;
+      if (player_data[j].flags & 0x20) continue;
+      if (player_data[j].dimension != xp_orb_data[i].dimension) continue;
+      double dx = xp_orb_data[i].x - player_data[j].x;
+      double dz = xp_orb_data[i].z - player_data[j].z;
+      double dy = xp_orb_data[i].y - player_data[j].y;
+      double dist_sq = dx * dx + dy * dy + dz * dz;
+      if (dist_sq < closest_dist_sq) {
+        closest_dist_sq = dist_sq;
+        closest_player = &player_data[j];
+      }
+    }
+
+    if (closest_player == NULL) continue;
+
+    double dist = sqrt(closest_dist_sq);
+
+    // If within 1.5 blocks, collect the orb
+    if (dist <= 1.5) {
+      // Send pickup animation to all players in range
+      for (int j = 0; j < MAX_PLAYERS; j++) {
+        if (player_data[j].client_fd == -1) continue;
+        if (player_data[j].dimension != xp_orb_data[i].dimension) continue;
+        sc_pickupItem(player_data[j].client_fd, entity_id, closest_player->client_fd, 1);
+        sc_removeEntity(player_data[j].client_fd, entity_id);
+      }
+
+      // Add XP to the player
+      addXpToPlayer(closest_player, xp_orb_data[i].value);
+
+      xp_orb_data[i].active = 0;
+    } else if (dist <= 6.0) {
+      // Attract towards player (simulate magnetic pull)
+      // Move at speed inversely proportional to distance
+      double speed = 0.1 * (1.0 - dist / 6.0);
+      if (speed < 0.02) speed = 0.02;
+      double dx = closest_player->x - xp_orb_data[i].x;
+      double dz = closest_player->z - xp_orb_data[i].z;
+      double dy = (closest_player->y + 1.0) - xp_orb_data[i].y;
+      double mag = sqrt(dx * dx + dy * dy + dz * dz);
+      if (mag > 0.001) {
+        xp_orb_data[i].x += (dx / mag) * speed;
+        xp_orb_data[i].y += (dy / mag) * speed;
+        xp_orb_data[i].z += (dz / mag) * speed;
+
+        // Broadcast position update every few ticks to reduce packet spam
+        if (xp_orb_data[i].age % 3 == 0) {
+          for (int j = 0; j < MAX_PLAYERS; j++) {
+            if (player_data[j].client_fd == -1) continue;
+            if (player_data[j].dimension != xp_orb_data[i].dimension) continue;
+            sc_teleportEntity(
+              player_data[j].client_fd, entity_id,
+              xp_orb_data[i].x, xp_orb_data[i].y, xp_orb_data[i].z,
+              0, 0
+            );
+          }
+        }
+      }
+    }
+  }
 }
 
 // Task argument for parallel player state updates
