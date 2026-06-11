@@ -46,6 +46,8 @@ static cJSON *serializeBlockChanges(void) {
     cJSON_AddNumberToObject(obj, "block", block_changes[i].block);
     cJSON_AddNumberToObject(obj, "dimension", block_changes[i].dimension);
 
+    cJSON_AddItemToArray(arr, obj);
+
     // Chest inventory slots store raw byte-packed data; serialize as hex
     if (block_changes[i].block == B_chest) {
       int slots_end = i + 14;
@@ -68,8 +70,6 @@ static cJSON *serializeBlockChanges(void) {
       }
       i += 14;
     }
-
-    cJSON_AddItemToArray(arr, obj);
   }
 
   return arr;
@@ -87,19 +87,17 @@ static int deserializeBlockChanges(cJSON *arr) {
     if (!block_changes) return 0;
   #endif
 
-  block_changes_count = count;
-
   #ifdef INFINITE_BLOCK_CHANGES
+  block_changes_count = count;
   for (int i = count; i < block_changes_capacity; i++) {
     block_changes[i].block = 0xFF;
   }
+  #else
+  if (count > MAX_BLOCK_CHANGES) count = MAX_BLOCK_CHANGES;
+  block_changes_count = count;
   #endif
 
   {
-    #ifndef INFINITE_BLOCK_CHANGES
-      if (count > MAX_BLOCK_CHANGES) count = MAX_BLOCK_CHANGES;
-    #endif
-
     for (int i = 0; i < count; i++) {
       cJSON *obj = cJSON_GetArrayItem(arr, i);
 
