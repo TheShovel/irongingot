@@ -55,6 +55,129 @@ static void handlePlayerUpdatesParallel(int64_t time_since_last_tick, ThreadPool
 static void setPlayerActiveHand(PlayerData *player, uint8_t active);
 static uint8_t shootBowArrow(PlayerData *player);
 
+// ---- Vanilla Java Combat Stats ----
+
+// Returns the base attack damage for a held item (vanilla Java 1.9+ values).
+static uint8_t getWeaponBaseDamage(uint16_t item) {
+  switch (item) {
+    case I_wooden_sword: return 4;
+    case I_golden_sword: return 4;
+    case I_stone_sword:  return 5;
+    case I_iron_sword:   return 6;
+    case I_diamond_sword:    return 7;
+    case I_netherite_sword:  return 8;
+    case I_wooden_axe:   return 7;
+    case I_stone_axe:    return 9;
+    case I_iron_axe:     return 9;
+    case I_golden_axe:   return 7;
+    case I_diamond_axe:      return 9;
+    case I_netherite_axe:    return 10;
+    case I_wooden_pickaxe:   return 2;
+    case I_stone_pickaxe:    return 3;
+    case I_iron_pickaxe:     return 3;
+    case I_golden_pickaxe:   return 2;
+    case I_diamond_pickaxe:  return 3;
+    case I_netherite_pickaxe: return 4;
+    case I_wooden_shovel:    return 3;
+    case I_stone_shovel:     return 4;
+    case I_iron_shovel:      return 5;
+    case I_golden_shovel:    return 3;
+    case I_diamond_shovel:   return 6;
+    case I_netherite_shovel: return 7;
+    case I_wooden_hoe:   return 1;
+    case I_stone_hoe:    return 1;
+    case I_iron_hoe:     return 1;
+    case I_golden_hoe:   return 1;
+    case I_diamond_hoe:       return 1;
+    case I_netherite_hoe:     return 1;
+    case I_trident:      return 8;
+    case I_mace:         return 6;
+    default: return 1; // Fist / unarmed
+  }
+}
+
+// Returns the attack cooldown duration in microseconds for a held item.
+// Derived from vanilla attackSpeed attribute (1 second / attackSpeed).
+static int64_t getWeaponCooldownUs(uint16_t item) {
+  // Vanilla attack speed values (attacks per second)
+  float speed;
+  switch (item) {
+    case I_wooden_sword:
+    case I_stone_sword:
+    case I_iron_sword:
+    case I_golden_sword:
+    case I_diamond_sword:
+    case I_netherite_sword:
+      speed = 1.6f; break;
+    case I_wooden_axe:
+    case I_stone_axe:
+      speed = 0.8f; break;
+    case I_iron_axe:
+      speed = 0.9f; break;
+    case I_golden_axe:
+    case I_diamond_axe:
+    case I_netherite_axe:
+      speed = 1.0f; break;
+    case I_wooden_pickaxe:
+    case I_stone_pickaxe:
+    case I_iron_pickaxe:
+    case I_golden_pickaxe:
+    case I_diamond_pickaxe:
+    case I_netherite_pickaxe:
+      speed = 1.2f; break;
+    case I_wooden_shovel:
+    case I_stone_shovel:
+    case I_iron_shovel:
+    case I_golden_shovel:
+    case I_diamond_shovel:
+    case I_netherite_shovel:
+      speed = 1.0f; break;
+    case I_wooden_hoe:
+    case I_golden_hoe:
+      speed = 1.0f; break;
+    case I_stone_hoe:
+      speed = 2.0f; break;
+    case I_iron_hoe:
+      speed = 3.0f; break;
+    case I_diamond_hoe:
+    case I_netherite_hoe:
+      speed = 4.0f; break;
+    case I_trident:
+      speed = 1.1f; break;
+    case I_mace:
+      speed = 0.4f; break;
+    default:
+      speed = 4.0f; break;  // Fist
+  }
+  // Convert speed to cooldown in microseconds (1 second / speed * 1,000,000)
+  return (int64_t)(1000000.0 / (double)speed + 0.5);
+}
+
+// Returns the knockback strength for a held item (vanilla knockback attribute).
+// The returned value is scaled by 100 for integer precision.
+static uint8_t getWeaponKnockback(uint16_t item) {
+  switch (item) {
+    case I_wooden_sword:
+    case I_stone_sword:
+    case I_iron_sword:
+    case I_golden_sword:
+    case I_diamond_sword:
+    case I_netherite_sword:
+      return 40;  // 0.4 knockback
+    case I_mace:
+      return 40;
+    case I_wooden_axe:
+    case I_stone_axe:
+    case I_iron_axe:
+    case I_golden_axe:
+    case I_diamond_axe:
+    case I_netherite_axe:
+      return 60;  // 0.6 knockback
+    default:
+      return 0;   // No knockback
+  }
+}
+
 static uint32_t player_bow_draw_start[MAX_PLAYERS];
 static uint32_t player_bow_last_use_tick[MAX_PLAYERS];
 
@@ -242,6 +365,7 @@ void resetPlayerData (PlayerData *player) {
     player->craft_count[i] = 0;
   }
   player->flags &= ~0x80;
+  player->last_attack_time = 0;
 }
 
 void resetPlayerAppearance (int player_index) {
@@ -575,7 +699,10 @@ int givePlayerItem (PlayerData *player, uint16_t item, uint8_t count) {
   player->inventory_items[slot] = item;
   player->inventory_count[slot] += count;
   sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, slot), player->inventory_count[slot], item);
-  if (slot == player->hotbar) broadcastPlayerEquipment(player);
+  if (slot == player->hotbar) {
+    broadcastPlayerEquipment(player);
+    sc_updateEntityAttributes(player->client_fd, player->client_fd, player->inventory_items[player->hotbar]);
+  }
 
   return 0;
 
@@ -649,6 +776,8 @@ void spawnPlayer (PlayerData *player) {
     sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, i), player->inventory_count[i], player->inventory_items[i]);
   }
   sc_setHeldItem(player->client_fd, player->hotbar);
+  // Sync weapon attributes for attack cooldown
+  sc_updateEntityAttributes(player->client_fd, player->client_fd, player->inventory_items[player->hotbar]);
   // Sync client health and hunger
   sc_setHealth(player->client_fd, player->health, player->hunger, player->saturation);
   // Sync client clock time
@@ -3722,6 +3851,8 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     sc_setContainerSlot(player->client_fd, -2, serverSlotToClientSlot(0, armor_slot), 1, *item);
     sc_setContainerSlot(player->client_fd, -2, serverSlotToClientSlot(0, slot), prev_count, prev_item);
     broadcastPlayerEquipment(player);
+    // Sync weapon attributes since the held item may have changed
+    sc_updateEntityAttributes(player->client_fd, player->client_fd, player->inventory_items[player->hotbar]);
     return;
   }
 
@@ -4410,7 +4541,9 @@ static void spawnDungeonMobs(PlayerData *player) {
       uint8_t spawn_y = spawner->y;
       if (!canMobStepTo((double)spawn_x + 0.5, spawn_y, (double)spawn_z + 0.5, DIMENSION_OVERWORLD)) continue;
 
-      spawnMob(spawner->mob_type, spawn_x, spawn_y, spawn_z, 10, DIMENSION_OVERWORLD);
+      uint8_t mob_health = 20;  // Default: 20 HP (zombies/skeletons in dungeons)
+      if (spawner->mob_type == E_SPIDER) mob_health = 16;
+      spawnMob(spawner->mob_type, spawn_x, spawn_y, spawn_z, mob_health, DIMENSION_OVERWORLD);
       spawned = 1;
     }
 
@@ -4427,7 +4560,9 @@ static void spawnDungeonMobs(PlayerData *player) {
         uint8_t spawn_y = spawner->y;
         if (!canMobStepTo((double)spawn_x + 0.5, spawn_y, (double)spawn_z + 0.5, DIMENSION_OVERWORLD)) continue;
 
-        spawnMob(spawner->mob_type, spawn_x, spawn_y, spawn_z, 10, DIMENSION_OVERWORLD);
+        uint8_t mob_health = 20;  // Default: 20 HP (zombies/skeletons in dungeons)
+        if (spawner->mob_type == E_SPIDER) mob_health = 16;
+        spawnMob(spawner->mob_type, spawn_x, spawn_y, spawn_z, mob_health, DIMENSION_OVERWORLD);
         spawned = 1;
       }
     }
@@ -4616,8 +4751,8 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
       uint8_t surface_y = getEndSpawnSurfaceY(spawn_x, spawn_z);
       if (surface_y == 0) continue;
 
-      // Enderman (147) spawns in the End
-      spawnMob(E_ENDERMAN, spawn_x, surface_y + 1, spawn_z, 20, player->dimension);
+      // Enderman (147) spawns in the End — vanilla health is 40
+      spawnMob(E_ENDERMAN, spawn_x, surface_y + 1, spawn_z, 40, player->dimension);
     }
 
     return;
@@ -4673,8 +4808,8 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
       uint8_t surface_y = getNetherSpawnSurfaceY(spawn_x, spawn_z);
       if (surface_y == 0) continue;
 
-      // Zombified Piglin(148) spawns in the Nether regardless of time of day.
-      spawnMob(148, spawn_x, surface_y + 1, spawn_z, 10, player->dimension);
+      // Zombified Piglin(148) spawns in the Nether regardless of time of day — vanilla health is 20
+      spawnMob(148, spawn_x, surface_y + 1, spawn_z, 20, player->dimension);
     }
 
     return;
@@ -4707,8 +4842,11 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
     // Pick a random passive mob type
     uint8_t type = passive_types[fast_rand() % num_passive_types];
 
-    // Spawn mobs with 10 HP.
-    spawnMob(type, spawn_x, surface_y + 1, spawn_z, 10, player->dimension);
+    // Vanilla health values for passive mobs
+    uint8_t health = 10;
+    if (type == 25) health = 4;   // Chicken: vanilla 4 HP
+    else if (type == 106) health = 8;  // Sheep: vanilla 8 HP
+    spawnMob(type, spawn_x, surface_y + 1, spawn_z, health, player->dimension);
   }
 
   // Spawn hostile mobs (zombies) only at night
@@ -4738,7 +4876,7 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
       if (!isPassableSpawnBlock(getBlockAt(spawn_x, surface_y + 2, spawn_z))) continue;
 
       uint8_t type = hostile_types[fast_rand() % num_hostile_types];
-      uint8_t health = 10;
+      uint8_t health = 20;  // Zombies(145) and Skeletons(E_SKELETON): vanilla 20 HP
       if (type == E_ENDERMAN) health = 40;
       else if (type == E_SPIDER) health = 16;
       else if (type == E_CREEPER) health = 20;
@@ -4857,14 +4995,78 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
     PlayerData *player;
     if (getPlayerData(attacker_id, &player)) return;
 
-    // Scale damage based on held item
     uint16_t held_item = player->inventory_items[player->hotbar];
-    if (held_item == I_wooden_sword) damage *= 4;
-    else if (held_item == I_golden_sword) damage *= 4;
-    else if (held_item == I_stone_sword) damage *= 5;
-    else if (held_item == I_iron_sword) damage *= 6;
-    else if (held_item == I_diamond_sword) damage *= 7;
-    else if (held_item == I_netherite_sword) damage *= 8;
+    uint8_t base_damage = getWeaponBaseDamage(held_item);
+    int64_t cooldown_us = getWeaponCooldownUs(held_item);
+
+    // Calculate base progress (0.0 to 1.0) from real time since last attack
+    int64_t now_us = get_program_time();
+    int64_t time_since = now_us - player->last_attack_time;
+    float base_progress = (float)time_since / (float)cooldown_us;
+    if (base_progress > 1.0f) base_progress = 1.0f;
+    if (base_progress < 0.0f) base_progress = 0.0f;
+
+    // Apply vanilla Java's getProgress(0.5F) lerp curve:
+    // result = base + (base - 0.5*base^2 - 0.5) * lerp, where lerp=0.5
+    // This keeps damage very low early in the cooldown
+    float charge = 1.5f * base_progress - 0.25f * base_progress * base_progress - 0.25f;
+    if (charge > 1.0f) charge = 1.0f;
+    if (charge < 0.0f) charge = 0.0f;
+
+    // Vanilla damage formula: damage = baseDamage * (0.2 + charge^2 * 0.8)
+    float damage_f = (float)base_damage * (0.2f + charge * charge * 0.8f);
+    damage = (uint8_t)(damage_f + 0.5f);
+    if (damage < 1) damage = 1;
+
+    // Update last attack time
+    player->last_attack_time = now_us;
+
+    // ---- Knockback ----
+    uint8_t kb = getWeaponKnockback(held_item);
+    if (kb > 0 && charge > 0.0f) {
+      // Get target entity position
+      double tx, ty, tz;
+      if (entity_id > 0) { // Target is a player
+        PlayerData *target;
+        if (!getPlayerData(entity_id, &target)) {
+          tx = target->x; ty = target->y; tz = target->z;
+        } else { tx = 0; ty = 0; tz = 0; }
+      } else { // Target is a mob
+        int mob_idx = -entity_id - 2;
+        if (mob_idx >= 0 && mob_idx < MAX_MOBS) {
+          tx = mob_data[mob_idx].x;
+          ty = mob_data[mob_idx].y;
+          tz = mob_data[mob_idx].z;
+        } else { tx = 0; ty = 0; tz = 0; }
+      }
+
+      // Direction from attacker to target (horizontal only)
+      double dx = tx - player->x;
+      double dz = tz - player->z;
+      double dist = sqrt(dx * dx + dz * dz);
+
+      if (dist > 0.001) {
+        // Vanilla knockback: sprint adds 0.5 bonus, weapon adds kbStrength * charge * 0.5
+        double kb_str = (double)kb / 100.0;
+        double sprint_bonus = (player->flags & 0x08) ? 0.5 : 0.0;  // Sprinting bonus
+        double kb_factor = kb_str * (double)charge * 0.5 + sprint_bonus;
+        double vx = (dx / dist) * kb_factor;
+        double vz = (dz / dist) * kb_factor;
+        // Vertical: base 0.2 + weapon contribution + sprint bonus
+        double vy = 0.2 + kb_str * (double)charge * 0.1 + sprint_bonus * 0.1;
+
+        int16_t nvx = (int16_t)(vx * 8000.0);
+        int16_t nvy = (int16_t)(vy * 8000.0);
+        int16_t nvz = (int16_t)(vz * 8000.0);
+
+        // Send velocity to all players tracking this entity
+        for (int i = 0; i < MAX_PLAYERS; i++) {
+          if (player_data[i].client_fd == -1) continue;
+          if (player_data[i].flags & 0x20) continue;
+          sc_setEntityVelocity(player_data[i].client_fd, entity_id, nvx, nvy, nvz);
+        }
+      }
+    }
 
   }
 
@@ -5029,19 +5231,7 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
       }
     }
 
-    // Push zombies and skeletons back 2 blocks when hit by a player
-    if (attacker_id > 0 && (mob->type == 145 || mob->type == E_SKELETON)) {
-      PlayerData *attacker;
-      if (!getPlayerData(attacker_id, &attacker)) {
-        double dx = mob->x - attacker->x;
-        double dz = mob->z - attacker->z;
-        double len = sqrt(dx * dx + dz * dz);
-        if (len > 0.001) {
-          mob->x += (dx / len) * 2.0;
-          mob->z += (dz / len) * 2.0;
-        }
-      }
-    }
+    // Knockback is now handled by hurtEntity's velocity-based knockback system
     
     // Piglins get angry when hit by a player
     if (attacker_id > 0 && mob->type == E_PIGLIN) {
@@ -5356,7 +5546,7 @@ void handleServerTick (int64_t time_since_last_tick) {
   }
   #endif
 
-  // Sync all player inventories every 2 seconds (40 ticks)
+  // Sync all player inventories and weapon attributes every 2 seconds (40 ticks)
   if (server_ticks % 40 == 0) {
     for (int i = 0; i < MAX_PLAYERS; i++) {
       PlayerData *player = &player_data[i];
@@ -5366,6 +5556,8 @@ void handleServerTick (int64_t time_since_last_tick) {
         sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, j),
           player->inventory_count[j], player->inventory_items[j]);
       }
+      // Keep weapon attributes in sync (ensures correct cooldown indicator after item changes)
+      sc_updateEntityAttributes(player->client_fd, player->client_fd, player->inventory_items[player->hotbar]);
     }
   }
 

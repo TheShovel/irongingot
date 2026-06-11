@@ -1585,6 +1585,7 @@ int cs_setHeldItem (int client_fd) {
 
   player->hotbar = slot;
   broadcastPlayerEquipment(player);
+  sc_updateEntityAttributes(player->client_fd, player->client_fd, player->inventory_items[slot]);
 
   return 0;
 }
@@ -1759,6 +1760,89 @@ int sc_setEntityVelocity (int client_fd, int id, int16_t vx, int16_t vy, int16_t
 
   endPacket(client_fd);
 
+  return 0;
+}
+
+// S->C Update Attributes (0x7C) — sends entity attributes like attack speed to the client
+int sc_updateEntityAttributes (int client_fd, int entity_id, uint16_t held_item) {
+  startPacket(client_fd, 0x7C);
+
+  writeVarInt(client_fd, entity_id); // Entity ID
+
+  // Calculate attack speed for the held item
+  float speed;
+  uint8_t has_speed_modifier;
+  switch (held_item) {
+    case I_wooden_sword:
+    case I_stone_sword:
+    case I_iron_sword:
+    case I_golden_sword:
+    case I_diamond_sword:
+    case I_netherite_sword:
+      speed = 1.6f; has_speed_modifier = 1; break;
+    case I_wooden_axe:
+    case I_stone_axe:
+      speed = 0.8f; has_speed_modifier = 1; break;
+    case I_iron_axe:
+      speed = 0.9f; has_speed_modifier = 1; break;
+    case I_golden_axe:
+    case I_diamond_axe:
+    case I_netherite_axe:
+      speed = 1.0f; has_speed_modifier = 1; break;
+    case I_wooden_pickaxe:
+    case I_stone_pickaxe:
+    case I_iron_pickaxe:
+    case I_golden_pickaxe:
+    case I_diamond_pickaxe:
+    case I_netherite_pickaxe:
+      speed = 1.2f; has_speed_modifier = 1; break;
+    case I_wooden_shovel:
+    case I_stone_shovel:
+    case I_iron_shovel:
+    case I_golden_shovel:
+    case I_diamond_shovel:
+    case I_netherite_shovel:
+      speed = 1.0f; has_speed_modifier = 1; break;
+    case I_wooden_hoe:
+    case I_golden_hoe:
+      speed = 1.0f; has_speed_modifier = 1; break;
+    case I_stone_hoe:
+      speed = 2.0f; has_speed_modifier = 1; break;
+    case I_iron_hoe:
+      speed = 3.0f; has_speed_modifier = 1; break;
+    case I_diamond_hoe:
+    case I_netherite_hoe:
+      speed = 4.0f; has_speed_modifier = 1; break;
+    case I_trident:
+      speed = 1.1f; has_speed_modifier = 1; break;
+    case I_mace:
+      speed = 0.4f; has_speed_modifier = 1; break;
+    default:
+      speed = 4.0f; has_speed_modifier = 0; break;
+  }
+
+  // Send 2 attributes: attack_speed (registry ID 4) + attack_damage (registry ID 2)
+  writeVarInt(client_fd, 2);
+
+  // --- Attribute 1: attack_speed (minecraft:attribute registry ID = 4) ---
+  writeVarInt(client_fd, 4); // Attribute registry ID for minecraft:attack_speed
+  writeDouble(client_fd, 4.0); // Base value
+  writeVarInt(client_fd, has_speed_modifier ? 1 : 0);
+  if (has_speed_modifier) {
+    // Modifier Id: Identifier string (1.21+ uses Identifiers instead of UUIDs)
+    const char mod_id[] = "minecraft:base_attack_speed";
+    writeVarInt(client_fd, sizeof(mod_id) - 1);
+    send_all(client_fd, mod_id, sizeof(mod_id) - 1);
+    writeDouble(client_fd, speed - 4.0); // Modifier amount (weapon speed - base 4.0)
+    writeByte(client_fd, 0); // Operation: ADD_VALUE (0)
+  }
+
+  // --- Attribute 2: attack_damage (minecraft:attribute registry ID = 2) ---
+  writeVarInt(client_fd, 2); // Attribute registry ID for minecraft:attack_damage
+  writeDouble(client_fd, 1.0); // Base value
+  writeVarInt(client_fd, 0); // No modifiers for now
+
+  endPacket(client_fd);
   return 0;
 }
 
@@ -2720,7 +2804,12 @@ int cs_interact (int client_fd) {
   if (type == 0) { // Interact
     interactEntity(entity_id, client_fd);
   } else if (type == 1) { // Attack
-    hurtEntity(entity_id, client_fd, D_generic, 1);
+    // Sync weapon attributes so the client shows correct cooldown
+    PlayerData *attacker;
+    if (!getPlayerData(client_fd, &attacker)) {
+      sc_updateEntityAttributes(client_fd, client_fd, attacker->inventory_items[attacker->hotbar]);
+    }
+    hurtEntity(entity_id, client_fd, D_player_attack, 1);
   }
 
   return 0;

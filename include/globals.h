@@ -452,6 +452,7 @@ typedef struct {
   uint8_t dimension;
   uint8_t portal_valid;  // 0 = none, 1 = portal_ow fields track overworld entry
   uint32_t last_bucket_tick;  // Tick of last successful block-targeted bucket action (prevents duplicate via face==255)
+  int64_t last_attack_time;  // Microsecond timestamp of last player attack (for cooldown/charge calculation)
   short portal_ow_x;
   int16_t portal_ow_y;
   short portal_ow_z;
