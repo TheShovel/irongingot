@@ -87,13 +87,15 @@ rm -f "irongingot$exe"
 # Source files
 SRC_LIST="src/*.c src/noise/*.c src/cubiomes/biomenoise.c src/cubiomes/biomes.c src/cubiomes/finders.c src/cubiomes/generator.c src/cubiomes/layers.c src/cubiomes/noise.c src/cubiomes/quadbase.c src/cubiomes/util.c"
 ZLIB_SRCS="third_party/zlib/adler32.c third_party/zlib/compress.c third_party/zlib/crc32.c third_party/zlib/deflate.c third_party/zlib/gzclose.c third_party/zlib/gzlib.c third_party/zlib/gzread.c third_party/zlib/gzwrite.c third_party/zlib/infback.c third_party/zlib/inffast.c third_party/zlib/inflate.c third_party/zlib/inftrees.c third_party/zlib/trees.c third_party/zlib/uncompr.c third_party/zlib/zutil.c"
+CJSON_SRCS="third_party/cjson/cJSON.c"
 ZLIB_INCLUDE="-Ithird_party/zlib"
+CJSON_INCLUDE="-Ithird_party/cjson"
 
 # musl requires static linking and bundled zlib (to avoid glibc headers conflict)
 if [ "$musl" -eq 1 ]; then
-  eval $compiler $SRC_LIST $ZLIB_SRCS -O3 -ffast-math -D_GNU_SOURCE -Iinclude -Isrc/cubiomes $ZLIB_INCLUDE -o "irongingot$exe" $windows_linker -lm -static -fno-link-libatomic -lpthread
+  eval $compiler $SRC_LIST $CJSON_SRCS $ZLIB_SRCS -O3 -ffast-math -D_GNU_SOURCE -Iinclude -Isrc/cubiomes $CJSON_INCLUDE $ZLIB_INCLUDE -o "irongingot$exe" $windows_linker -lm -static -fno-link-libatomic -lpthread
 else
-  eval $compiler $SRC_LIST -O3 -ffast-math $mojang_skin_cflags -Iinclude -Isrc/cubiomes -o "irongingot$exe" $windows_linker -lm -lz -pthread $mojang_skin_libs
+  eval $compiler $SRC_LIST $CJSON_SRCS -O3 -ffast-math $mojang_skin_cflags -Iinclude -Isrc/cubiomes $CJSON_INCLUDE -o "irongingot$exe" $windows_linker -lm -lz -pthread $mojang_skin_libs
 fi
 
 echo "Build complete: irongingot$exe"

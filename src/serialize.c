@@ -7,10 +7,10 @@
 
 #ifdef ESP_PLATFORM
   #include "esp_littlefs.h"
-  #define FILE_PATH "/littlefs/world.bin"
+  #define FILE_PATH "/littlefs/world.json"
 #else
   #include <stdio.h>
-  #define FILE_PATH "world.bin"
+  #define FILE_PATH "world.json"
 #endif
 
 #include "tools.h"
@@ -19,6 +19,7 @@
 #include "serialize.h"
 #include "special_block.h"
 #include "terminal_ui.h"
+#include "../third_party/cjson/cJSON.h"
 
 int64_t last_disk_sync_time = 0;
 
@@ -26,95 +27,408 @@ static void logSerializerErrno(const char *message) {
   terminal_ui_log("%s: %s", message, strerror(errno));
 }
 
-typedef struct {
-  int32_t key;
-  uint16_t state;
-  uint8_t block;
-  uint8_t occupied;
-} LegacySpecialBlockEntry;
+static cJSON *serializeBlockChanges(void) {
+  cJSON *arr = cJSON_CreateArray();
+  if (!arr) return NULL;
 
-static inline uint32_t legacy_pack_special_key(short x, uint8_t y, short z) {
-  return ((uint32_t)(uint16_t)x << 16) | ((uint32_t)y << 8) | (uint16_t)z;
-}
+  for (int i = 0; i < block_changes_count; i++) {
+    if (block_changes[i].block == 0xFF) {
+      cJSON_AddItemToArray(arr, cJSON_CreateNull());
+      continue;
+    }
 
-static uint8_t isSpecialStateBlock(uint8_t block) {
-  return (
-    is_door_block(block) ||
-    is_trapdoor_block(block) ||
-    is_stair_block(block) ||
-    is_oriented_block(block)
-  );
-}
+    cJSON *obj = cJSON_CreateObject();
+    if (!obj) { cJSON_Delete(arr); return NULL; }
 
-static uint8_t looksLikeCurrentSpecialBlockTable(const SpecialBlockEntry *entries, int sb_count) {
-  int occupied = 0;
+    cJSON_AddNumberToObject(obj, "x", block_changes[i].x);
+    cJSON_AddNumberToObject(obj, "y", block_changes[i].y);
+    cJSON_AddNumberToObject(obj, "z", block_changes[i].z);
+    cJSON_AddNumberToObject(obj, "block", block_changes[i].block);
+    cJSON_AddNumberToObject(obj, "dimension", block_changes[i].dimension);
 
-  for (int i = 0; i < MAX_SPECIAL_BLOCKS; i++) {
-    if (entries[i].block == SPECIAL_BLOCK_EMPTY) continue;
-    if (!isSpecialStateBlock(entries[i].block)) return 0;
-    occupied++;
+    // Chest inventory slots store raw byte-packed data; serialize as hex
+    if (block_changes[i].block == B_chest) {
+      int slots_end = i + 14;
+      if (slots_end < block_changes_count) {
+        size_t raw_bytes = 14 * sizeof(BlockChange);
+        uint8_t *raw_data = (uint8_t *)&block_changes[i + 1];
+        char *hex = (char *)malloc(raw_bytes * 2 + 1);
+        if (hex) {
+          for (size_t b = 0; b < raw_bytes; b++) {
+            sprintf(hex + b * 2, "%02x", raw_data[b]);
+          }
+          hex[raw_bytes * 2] = '\0';
+          cJSON_AddStringToObject(obj, "slots", hex);
+          free(hex);
+        }
+      }
+      // Write null placeholders for inventory slots to preserve indices
+      for (int j = 1; j <= 14 && i + j < block_changes_count; j++) {
+        cJSON_AddItemToArray(arr, cJSON_CreateNull());
+      }
+      i += 14;
+    }
+
+    cJSON_AddItemToArray(arr, obj);
   }
 
-  return occupied == sb_count;
+  return arr;
 }
 
-static int recoverLegacySpecialBlockTable(const LegacySpecialBlockEntry *entries) {
-  int recovered = 0;
-  int ambiguous = 0;
+static int deserializeBlockChanges(cJSON *arr) {
+  if (!cJSON_IsArray(arr)) return 0;
 
-  for (int i = 0; i < MAX_SPECIAL_BLOCKS; i++) {
-    if (!entries[i].occupied) continue;
-    if (!isSpecialStateBlock(entries[i].block)) continue;
+  int count = cJSON_GetArraySize(arr);
 
-    int matches = 0;
-    short match_x = 0;
-    uint8_t match_y = 0;
-    short match_z = 0;
-    uint8_t match_dimension = 0;
+  #ifdef INFINITE_BLOCK_CHANGES
+    block_changes_capacity = count + 100;
+    if (block_changes) free(block_changes);
+    block_changes = (BlockChange *)calloc(block_changes_capacity, sizeof(BlockChange));
+    if (!block_changes) return 0;
+  #endif
 
-    for (int j = 0; j < block_changes_count; j++) {
-      if (block_changes[j].block == 0xFF) continue;
+  block_changes_count = count;
 
-      uint8_t candidate_block = block_changes[j].block;
-      uint8_t skip = 0;
+  #ifdef INFINITE_BLOCK_CHANGES
+  for (int i = count; i < block_changes_capacity; i++) {
+    block_changes[i].block = 0xFF;
+  }
+  #endif
 
-      if (candidate_block == B_chest) skip = 14;
-      else if (is_door_block(candidate_block)) skip = 2;
-      else if (is_stair_block(candidate_block) || candidate_block == B_furnace) skip = 1;
+  {
+    #ifndef INFINITE_BLOCK_CHANGES
+      if (count > MAX_BLOCK_CHANGES) count = MAX_BLOCK_CHANGES;
+    #endif
 
-      if (
-        candidate_block == entries[i].block &&
-        legacy_pack_special_key(block_changes[j].x, block_changes[j].y, block_changes[j].z) == (uint32_t)entries[i].key
-      ) {
-        matches++;
-        match_x = block_changes[j].x;
-        match_y = block_changes[j].y;
-        match_z = block_changes[j].z;
-        match_dimension = block_changes[j].dimension;
-        if (matches > 1) break;
+    for (int i = 0; i < count; i++) {
+      cJSON *obj = cJSON_GetArrayItem(arr, i);
+
+      if (cJSON_IsNull(obj)) {
+        block_changes[i].block = 0xFF;
+        continue;
       }
 
-      j += skip;
-    }
+      if (!cJSON_IsObject(obj)) {
+        block_changes[i].block = 0xFF;
+        continue;
+      }
 
-    if (matches == 1) {
-      special_block_set_state(match_x, match_y, match_z, match_dimension, entries[i].block, entries[i].state);
-      recovered++;
-    } else if (matches > 1) {
-      ambiguous++;
+      cJSON *x = cJSON_GetObjectItem(obj, "x");
+      cJSON *y = cJSON_GetObjectItem(obj, "y");
+      cJSON *z = cJSON_GetObjectItem(obj, "z");
+      cJSON *block = cJSON_GetObjectItem(obj, "block");
+      cJSON *dim = cJSON_GetObjectItem(obj, "dimension");
+
+      if (!cJSON_IsNumber(x) || !cJSON_IsNumber(y) || !cJSON_IsNumber(z) ||
+          !cJSON_IsNumber(block) || !cJSON_IsNumber(dim)) {
+        block_changes[i].block = 0xFF;
+        continue;
+      }
+
+      block_changes[i].x = (short)cJSON_GetNumberValue(x);
+      block_changes[i].y = (int16_t)cJSON_GetNumberValue(y);
+      block_changes[i].z = (short)cJSON_GetNumberValue(z);
+      block_changes[i].block = (uint16_t)cJSON_GetNumberValue(block);
+      block_changes[i].dimension = (uint8_t)cJSON_GetNumberValue(dim);
+
+      // Restore chest inventory from hex-encoded slots
+      if ((uint16_t)cJSON_GetNumberValue(block) == B_chest) {
+        cJSON *slots = cJSON_GetObjectItem(obj, "slots");
+        if (cJSON_IsString(slots) && i + 14 < block_changes_capacity) {
+          const char *hex = cJSON_GetStringValue(slots);
+          size_t hex_len = strlen(hex);
+          size_t raw_bytes = 14 * sizeof(BlockChange);
+          if (hex_len == raw_bytes * 2) {
+            uint8_t *raw_data = (uint8_t *)&block_changes[i + 1];
+            for (size_t b = 0; b < raw_bytes; b++) {
+              unsigned int byte_val;
+              sscanf(hex + b * 2, "%2x", &byte_val);
+              raw_data[b] = (uint8_t)byte_val;
+            }
+          }
+        } else if (i + 14 < block_changes_capacity) {
+          // No slots hex data (old format); init empty chest
+          memset(&block_changes[i + 1], 0, 14 * sizeof(BlockChange));
+        }
+        i += 14;
+      }
     }
   }
 
-  if (ambiguous > 0) {
-    terminal_ui_log("[LOAD] Skipped %d ambiguous legacy special block entries", ambiguous);
-  }
-
-  return recovered;
+  return 1;
 }
 
-// Restores world data from disk, or writes world file if it doesn't exist
-int initSerializer () {
+static cJSON *serializePlayerData(void) {
+  cJSON *arr = cJSON_CreateArray();
+  if (!arr) return NULL;
 
+  for (int p = 0; p < MAX_PLAYERS; p++) {
+    PlayerData *pd = &player_data[p];
+
+    if (pd->uuid[0] == 0 && pd->name[0] == '\0') continue;
+
+    cJSON *obj = cJSON_CreateObject();
+    if (!obj) { cJSON_Delete(arr); return NULL; }
+
+    cJSON *uuid_arr = cJSON_CreateArray();
+    for (int i = 0; i < 16; i++) {
+      cJSON_AddItemToArray(uuid_arr, cJSON_CreateNumber(pd->uuid[i]));
+    }
+    cJSON_AddItemToObject(obj, "uuid", uuid_arr);
+
+    cJSON_AddStringToObject(obj, "name", pd->name);
+    cJSON_AddNumberToObject(obj, "x", pd->x);
+    cJSON_AddNumberToObject(obj, "y", pd->y);
+    cJSON_AddNumberToObject(obj, "z", pd->z);
+    cJSON_AddNumberToObject(obj, "yaw", pd->yaw);
+    cJSON_AddNumberToObject(obj, "pitch", pd->pitch);
+    cJSON_AddNumberToObject(obj, "grounded_y", pd->grounded_y);
+    cJSON_AddNumberToObject(obj, "health", pd->health);
+    cJSON_AddNumberToObject(obj, "hunger", pd->hunger);
+    cJSON_AddNumberToObject(obj, "saturation", pd->saturation);
+    cJSON_AddNumberToObject(obj, "hotbar", pd->hotbar);
+    cJSON_AddNumberToObject(obj, "dimension", pd->dimension);
+    cJSON_AddNumberToObject(obj, "flags", pd->flags);
+    cJSON_AddNumberToObject(obj, "flagval_16", pd->flagval_16);
+    cJSON_AddNumberToObject(obj, "flagval_8", pd->flagval_8);
+    cJSON_AddNumberToObject(obj, "portal_valid", pd->portal_valid);
+    cJSON_AddNumberToObject(obj, "last_bucket_tick", pd->last_bucket_tick);
+    cJSON_AddNumberToObject(obj, "last_attack_time", (double)pd->last_attack_time);
+    cJSON_AddNumberToObject(obj, "portal_ow_x", pd->portal_ow_x);
+    cJSON_AddNumberToObject(obj, "portal_ow_y", pd->portal_ow_y);
+    cJSON_AddNumberToObject(obj, "portal_ow_z", pd->portal_ow_z);
+    cJSON_AddNumberToObject(obj, "visited_next", pd->visited_next);
+
+    cJSON *inv_arr = cJSON_CreateArray();
+    for (int i = 0; i < 41; i++) {
+      cJSON_AddItemToArray(inv_arr, cJSON_CreateNumber(pd->inventory_items[i]));
+    }
+    cJSON_AddItemToObject(obj, "inventory", inv_arr);
+
+    cJSON *inv_cnt = cJSON_CreateArray();
+    for (int i = 0; i < 41; i++) {
+      cJSON_AddItemToArray(inv_cnt, cJSON_CreateNumber(pd->inventory_count[i]));
+    }
+    cJSON_AddItemToObject(obj, "inventory_count", inv_cnt);
+
+    cJSON *craft_arr = cJSON_CreateArray();
+    for (int i = 0; i < 9; i++) {
+      cJSON_AddItemToArray(craft_arr, cJSON_CreateNumber(pd->craft_items[i]));
+    }
+    cJSON_AddItemToObject(obj, "craft_items", craft_arr);
+
+    cJSON *craft_cnt = cJSON_CreateArray();
+    for (int i = 0; i < 9; i++) {
+      cJSON_AddItemToArray(craft_cnt, cJSON_CreateNumber(pd->craft_count[i]));
+    }
+    cJSON_AddItemToObject(obj, "craft_count", craft_cnt);
+
+    cJSON *vx_arr = cJSON_CreateArray();
+    for (int i = 0; i < VISITED_HISTORY; i++) {
+      cJSON_AddItemToArray(vx_arr, cJSON_CreateNumber(pd->visited_x[i]));
+    }
+    cJSON_AddItemToObject(obj, "visited_x", vx_arr);
+
+    cJSON *vz_arr = cJSON_CreateArray();
+    for (int i = 0; i < VISITED_HISTORY; i++) {
+      cJSON_AddItemToArray(vz_arr, cJSON_CreateNumber(pd->visited_z[i]));
+    }
+    cJSON_AddItemToObject(obj, "visited_z", vz_arr);
+
+    cJSON_AddItemToArray(arr, obj);
+  }
+
+  return arr;
+}
+
+static int deserializePlayerData(cJSON *arr) {
+  if (!cJSON_IsArray(arr)) return 0;
+
+  int count = cJSON_GetArraySize(arr);
+  if (count > MAX_PLAYERS) count = MAX_PLAYERS;
+
+  for (int p = 0; p < count; p++) {
+    cJSON *obj = cJSON_GetArrayItem(arr, p);
+    if (!cJSON_IsObject(obj)) continue;
+
+    PlayerData *pd = &player_data[p];
+    memset(pd, 0, sizeof(PlayerData));
+
+    cJSON *uuid = cJSON_GetObjectItem(obj, "uuid");
+    if (cJSON_IsArray(uuid)) {
+      int ucount = cJSON_GetArraySize(uuid);
+      if (ucount > 16) ucount = 16;
+      for (int i = 0; i < ucount; i++) {
+        cJSON *u = cJSON_GetArrayItem(uuid, i);
+        if (cJSON_IsNumber(u)) pd->uuid[i] = (uint8_t)cJSON_GetNumberValue(u);
+      }
+    }
+
+    cJSON *name = cJSON_GetObjectItem(obj, "name");
+    if (cJSON_IsString(name)) {
+      strncpy(pd->name, cJSON_GetStringValue(name), 15);
+      pd->name[15] = '\0';
+    }
+
+    #define READ_NUMBER(field, json_name) do { \
+      cJSON *v = cJSON_GetObjectItem(obj, json_name); \
+      if (cJSON_IsNumber(v)) pd->field = (typeof(pd->field))cJSON_GetNumberValue(v); \
+    } while(0)
+
+    READ_NUMBER(x, "x");
+    READ_NUMBER(y, "y");
+    READ_NUMBER(z, "z");
+    READ_NUMBER(yaw, "yaw");
+    READ_NUMBER(pitch, "pitch");
+    READ_NUMBER(grounded_y, "grounded_y");
+    READ_NUMBER(health, "health");
+    READ_NUMBER(hunger, "hunger");
+    READ_NUMBER(saturation, "saturation");
+    READ_NUMBER(hotbar, "hotbar");
+    READ_NUMBER(dimension, "dimension");
+    READ_NUMBER(flags, "flags");
+    READ_NUMBER(flagval_16, "flagval_16");
+    READ_NUMBER(flagval_8, "flagval_8");
+    READ_NUMBER(portal_valid, "portal_valid");
+    READ_NUMBER(last_bucket_tick, "last_bucket_tick");
+    READ_NUMBER(last_attack_time, "last_attack_time");
+    READ_NUMBER(portal_ow_x, "portal_ow_x");
+    READ_NUMBER(portal_ow_y, "portal_ow_y");
+    READ_NUMBER(portal_ow_z, "portal_ow_z");
+    READ_NUMBER(visited_next, "visited_next");
+
+    #define READ_ARRAY(field, json_name, len) do { \
+      cJSON *a = cJSON_GetObjectItem(obj, json_name); \
+      if (cJSON_IsArray(a)) { \
+        int alen = cJSON_GetArraySize(a); \
+        if (alen > len) alen = len; \
+        for (int i = 0; i < alen; i++) { \
+          cJSON *v = cJSON_GetArrayItem(a, i); \
+          if (cJSON_IsNumber(v)) pd->field[i] = (typeof(pd->field[0]))cJSON_GetNumberValue(v); \
+        } \
+      } \
+    } while(0)
+
+    READ_ARRAY(inventory_items, "inventory", 41);
+    READ_ARRAY(inventory_count, "inventory_count", 41);
+    READ_ARRAY(craft_items, "craft_items", 9);
+    READ_ARRAY(craft_count, "craft_count", 9);
+    READ_ARRAY(visited_x, "visited_x", VISITED_HISTORY);
+    READ_ARRAY(visited_z, "visited_z", VISITED_HISTORY);
+
+    #undef READ_NUMBER
+    #undef READ_ARRAY
+
+    pd->client_fd = -1;
+  }
+
+  player_data_count = count;
+  return 1;
+}
+
+static cJSON *serializeSpecialBlocks(void) {
+  cJSON *arr = cJSON_CreateArray();
+  if (!arr) return NULL;
+
+  for (int i = 0; i < MAX_SPECIAL_BLOCKS; i++) {
+    if (special_blocks[i].block == SPECIAL_BLOCK_EMPTY) continue;
+
+    cJSON *obj = cJSON_CreateObject();
+    if (!obj) { cJSON_Delete(arr); return NULL; }
+
+    cJSON_AddNumberToObject(obj, "x", special_blocks[i].x);
+    cJSON_AddNumberToObject(obj, "y", special_blocks[i].y);
+    cJSON_AddNumberToObject(obj, "z", special_blocks[i].z);
+    cJSON_AddNumberToObject(obj, "state", special_blocks[i].state);
+    cJSON_AddNumberToObject(obj, "block", special_blocks[i].block);
+    cJSON_AddNumberToObject(obj, "dimension", special_blocks[i].dimension);
+
+    cJSON_AddItemToArray(arr, obj);
+  }
+
+  return arr;
+}
+
+static int deserializeSpecialBlocks(cJSON *arr) {
+  if (!cJSON_IsArray(arr)) return 0;
+
+  special_block_init();
+
+  int count = cJSON_GetArraySize(arr);
+  for (int i = 0; i < count; i++) {
+    cJSON *obj = cJSON_GetArrayItem(arr, i);
+    if (!cJSON_IsObject(obj)) continue;
+
+    cJSON *x = cJSON_GetObjectItem(obj, "x");
+    cJSON *y = cJSON_GetObjectItem(obj, "y");
+    cJSON *z = cJSON_GetObjectItem(obj, "z");
+    cJSON *state = cJSON_GetObjectItem(obj, "state");
+    cJSON *block = cJSON_GetObjectItem(obj, "block");
+    cJSON *dim = cJSON_GetObjectItem(obj, "dimension");
+
+    if (!cJSON_IsNumber(x) || !cJSON_IsNumber(y) || !cJSON_IsNumber(z) ||
+        !cJSON_IsNumber(state) || !cJSON_IsNumber(block) || !cJSON_IsNumber(dim)) continue;
+
+    special_block_set_state(
+      (short)cJSON_GetNumberValue(x),
+      (uint8_t)cJSON_GetNumberValue(y),
+      (short)cJSON_GetNumberValue(z),
+      (uint8_t)cJSON_GetNumberValue(dim),
+      (uint16_t)cJSON_GetNumberValue(block),
+      (uint16_t)cJSON_GetNumberValue(state)
+    );
+  }
+
+  return 1;
+}
+
+static int writeWorldJson(void) {
+  FILE *file = fopen(FILE_PATH, "w");
+  if (!file) {
+    logSerializerErrno("Failed to open world.json for writing");
+    return 0;
+  }
+
+  cJSON *root = cJSON_CreateObject();
+  if (!root) { fclose(file); return 0; }
+
+  cJSON_AddNumberToObject(root, "format_version", 1);
+
+  cJSON *bc = serializeBlockChanges();
+  if (bc) cJSON_AddItemToObject(root, "block_changes", bc);
+  else cJSON_AddArrayToObject(root, "block_changes");
+
+  cJSON *pd = serializePlayerData();
+  if (pd) cJSON_AddItemToObject(root, "players", pd);
+  else cJSON_AddArrayToObject(root, "players");
+
+  cJSON *sb = serializeSpecialBlocks();
+  if (sb) cJSON_AddItemToObject(root, "special_blocks", sb);
+  else cJSON_AddArrayToObject(root, "special_blocks");
+
+  char *json = cJSON_Print(root);
+  if (!json) {
+    cJSON_Delete(root);
+    fclose(file);
+    return 0;
+  }
+
+  size_t len = strlen(json);
+  size_t written = fwrite(json, 1, len, file);
+
+  cJSON_Delete(root);
+  free(json);
+  fclose(file);
+
+  if (written != len) {
+    logSerializerErrno("Failed to write all data to world.json");
+    return 0;
+  }
+
+  return 1;
+}
+
+int initSerializer(void) {
   last_disk_sync_time = get_program_time();
 
   #ifdef ESP_PLATFORM
@@ -133,441 +447,92 @@ int initSerializer () {
     }
   #endif
 
-  // Attempt to open existing world file
   FILE *file = fopen(FILE_PATH, "rb");
-  if (file) {
-    terminal_ui_log("[LOAD] Opened world.bin for reading");
-    size_t read;
-    int has_capacity_header = 0;
-    long block_changes_bytes = 0;
-
-    // Get file size to determine layout
-    fseek(file, 0, SEEK_END);
-    long file_size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-    terminal_ui_log("[LOAD] File size: %ld bytes", file_size);
-
-    // Read block changes from the start of the file directly into memory
-    #ifdef INFINITE_BLOCK_CHANGES
-      // For dynamic mode, first try to read the capacity header
-      int stored_capacity;
-      size_t header_read = fread(&stored_capacity, sizeof(int), 1, file);
-      // Check if this looks like a valid capacity header or old fixed-format file
-      // A valid capacity should be positive and reasonable (< 100 million entries)
-      // Also check if file size matches expected size for that capacity
-      long expected_size_for_capacity = sizeof(int) + (long)stored_capacity * sizeof(BlockChange) + sizeof(player_data);
-      if (header_read == 1 && stored_capacity > 0 && stored_capacity <= 100000000 && file_size >= expected_size_for_capacity - 1000) {
-        // Valid capacity header (new format)
-        has_capacity_header = 1;
-        block_changes_capacity = stored_capacity;
-        block_changes = (BlockChange *)malloc(block_changes_capacity * sizeof(BlockChange));
-        if (!block_changes) {
-          terminal_ui_log("Failed to allocate memory for block changes. Aborting.");
-          fclose(file);
-          return 1;
-        }
-        // Read block changes data
-        read = fread(block_changes, sizeof(BlockChange), block_changes_capacity, file);
-        if (read != (size_t)block_changes_capacity) {
-          terminal_ui_log("Read %u block changes from \"world.bin\", expected %d. Aborting.", read, block_changes_capacity);
-          fclose(file);
-          return 1;
-        }
-      } else {
-        // Old fixed-format file, rewind and calculate size from file
-        terminal_ui_log("Detected old world file format, converting...");
-        rewind(file);
-        // Calculate actual block changes size from file size
-        block_changes_bytes = file_size - sizeof(player_data);
-        if (block_changes_bytes <= 0) {
-          terminal_ui_log("Invalid world file size. Aborting.");
-          fclose(file);
-          return 1;
-        }
-        // Start with enough capacity to hold the data
-        block_changes_capacity = (block_changes_bytes / sizeof(BlockChange)) + 100;
-        block_changes = (BlockChange *)malloc(block_changes_capacity * sizeof(BlockChange));
-        if (!block_changes) {
-          terminal_ui_log("Failed to allocate memory for block changes. Aborting.");
-          fclose(file);
-          return 1;
-        }
-        // Read the block changes data
-        read = fread(block_changes, 1, block_changes_bytes, file);
-        if (read != (size_t)block_changes_bytes) {
-          terminal_ui_log("Read %u bytes from \"world.bin\", expected %ld. Aborting.", read, block_changes_bytes);
-          fclose(file);
-          return 1;
-        }
-      }
-      // Seek past block changes to start reading player data
-      long seek_offset = has_capacity_header 
-        ? sizeof(int) + block_changes_capacity * sizeof(BlockChange)
-        : block_changes_bytes;
-      if (fseek(file, seek_offset, SEEK_SET) != 0) {
-        logSerializerErrno("Failed to seek to player data in \"world.bin\". Aborting.");
-        fclose(file);
-        return 1;
-      }
-    #else
-      size_t read = fread(block_changes, 1, sizeof(block_changes), file);
-      if (read != sizeof(block_changes)) {
-        terminal_ui_log("Read %u bytes from \"world.bin\", expected %u (block changes). Aborting.", read, sizeof(block_changes));
-        fclose(file);
-        return 1;
-      }
-      // Seek past block changes to start reading player data
-      if (fseek(file, sizeof(block_changes), SEEK_SET) != 0) {
-        logSerializerErrno("Failed to seek to player data in \"world.bin\". Aborting.");
-        fclose(file);
-        return 1;
-      }
-    #endif
-    // Normalize loaded block-change heights. Older saves stored Y in one byte;
-    // after widening the field, any invalid high bits should fall back to the
-    // original low byte rather than pointing outside the generated world.
-    for (int i = 0; i < (
-      #ifdef INFINITE_BLOCK_CHANGES
-        block_changes_capacity
-      #else
-        MAX_BLOCK_CHANGES
-      #endif
-    ); i ++) {
-      if (block_changes[i].block == 0xFF) continue;
-      if (block_changes[i].y < 0 || block_changes[i].y > 319) {
-        block_changes[i].y = (int16_t)((uint16_t)block_changes[i].y & 0xFF);
-      }
-    }
-
-    // Find the index of the last occupied entry to recover block_changes_count
-    for (int i = 0; i < (
-      #ifdef INFINITE_BLOCK_CHANGES
-        block_changes_capacity
-      #else
-        MAX_BLOCK_CHANGES
-      #endif
-    ); i ++) {
-      if (block_changes[i].block == 0xFF) continue;
-      if (block_changes[i].block == B_chest) i += 14;
-      #ifdef ALLOW_DOORS
-      if (isDoorBlock(block_changes[i].block)) i += 2;
-      #endif
-      if (isStairBlock(block_changes[i].block) || block_changes[i].block == B_furnace) i += 1;
-      if (i >= block_changes_count) block_changes_count = i + 1;
-    }
-    // Read player data directly into memory
-    read = fread(player_data, 1, sizeof(player_data), file);
-    if (read != sizeof(player_data)) {
-      terminal_ui_log("Read %u bytes from \"world.bin\", expected %zu (player data). Aborting.",
-        read, sizeof(player_data));
-      fclose(file);
-      return 1;
-    }
-
-    // Read special block state table (new format -- appended after player data)
+  if (!file) {
+    terminal_ui_log("No \"world.json\" file found, creating one...");
     special_block_init();
-    terminal_ui_log("[LOAD] About to read sb_count, file pos=%ld", ftell(file));
-    int sb_count = 0;
-    read = fread(&sb_count, sizeof(int), 1, file);
-    terminal_ui_log("[LOAD] Read sb_count: read=%zd, value=%d", read, sb_count);
-    if (read == 1 && sb_count > 0 && sb_count <= MAX_SPECIAL_BLOCKS) {
-      size_t expected = sizeof(SpecialBlockEntry) * MAX_SPECIAL_BLOCKS;
-      void *raw_special_blocks = malloc(expected);
-
-      terminal_ui_log("[LOAD] Reading %zd bytes of special block data", expected);
-      if (!raw_special_blocks) {
-        terminal_ui_log("[LOAD] ERROR: failed to allocate temporary special block buffer");
-      } else {
-        read = fread(raw_special_blocks, 1, expected, file);
-        terminal_ui_log("[LOAD] Read %zd of %zd bytes", read, expected);
-        if (read == expected) {
-          if (looksLikeCurrentSpecialBlockTable((SpecialBlockEntry *)raw_special_blocks, sb_count)) {
-            memcpy(special_blocks, raw_special_blocks, expected);
-            special_blocks_count = sb_count;
-            terminal_ui_log("[LOAD] Successfully loaded %d special block entries", special_blocks_count);
-          } else {
-            int recovered = recoverLegacySpecialBlockTable((LegacySpecialBlockEntry *)raw_special_blocks);
-            terminal_ui_log("[LOAD] Recovered %d entries from legacy special block table", recovered);
-          }
-        } else {
-          terminal_ui_log("[LOAD] ERROR: short read of special block data");
-        }
-        free(raw_special_blocks);
-      }
-    } else {
-      terminal_ui_log("[LOAD] No special block table found (read=%zd, sb_count=%d)", read, sb_count);
-    }
-
-    /* Migrate legacy state data from block_changes entries into the
-     * unified special_block table. This handles worlds saved before
-     * the special_block system was introduced.
-     * Only populates entries that are MISSING, so it won't overwrite
-     * correct state from a previously-saved new-format world. */
-    int migrated = 0;
-    for (int i = 0; i < block_changes_count; i++) {
-      if (block_changes[i].block == 0xFF) continue;
-
-      if (block_changes[i].block == B_chest) {
-        if (i + 14 < block_changes_count &&
-            !special_block_has_entry(block_changes[i].x, block_changes[i].y, block_changes[i].z, block_changes[i].dimension)) {
-          uint8_t dir = block_changes[i + 14].y;
-          if (dir > 3) dir = 0;
-          special_block_set_state(block_changes[i].x, block_changes[i].y,
-                                  block_changes[i].z, block_changes[i].dimension,
-                                  B_chest, (uint16_t)(dir & 3));
-          migrated++;
-        }
-        i += 14;
-      }
-      #ifdef ALLOW_DOORS
-      else if (isDoorBlock(block_changes[i].block)) {
-        if (i + 2 < block_changes_count &&
-            !special_block_has_entry(block_changes[i].x, block_changes[i].y, block_changes[i].z, block_changes[i].dimension)) {
-          uint8_t dir   = block_changes[i + 2].x;
-          uint8_t flags = block_changes[i + 2].y;
-          if (dir > 3) dir = 0;
-          uint8_t open  = flags & 0x01;
-          uint8_t hinge = (flags >> 1) & 0x01;
-          uint16_t state = (uint16_t)((dir << 2) | (hinge << 1) | open);
-          special_block_set_state(block_changes[i].x, block_changes[i].y,
-                                  block_changes[i].z, block_changes[i].dimension,
-                                  block_changes[i].block, state);
-          migrated++;
-        }
-        i += 2;
-      }
-      #endif
-      else if (isStairBlock(block_changes[i].block) || block_changes[i].block == B_furnace) {
-        if (i + 1 < block_changes_count &&
-            !special_block_has_entry(block_changes[i].x, block_changes[i].y, block_changes[i].z, block_changes[i].dimension)) {
-          uint8_t dir   = block_changes[i + 1].x;
-          uint8_t extra = block_changes[i + 1].y;
-          if (dir > 3) dir = 0;
-          if (isStairBlock(block_changes[i].block)) {
-            uint8_t half = extra & 0x03;
-            uint16_t state = (uint16_t)((dir << 2) | (half & 3));
-            special_block_set_state(block_changes[i].x, block_changes[i].y,
-                                    block_changes[i].z, block_changes[i].dimension,
-                                    block_changes[i].block, state);
-          } else {
-            uint8_t lit = (extra >> 2) & 0x01;
-            uint16_t state = (uint16_t)((lit << 2) | (dir & 3));
-            special_block_set_state(block_changes[i].x, block_changes[i].y,
-                                    block_changes[i].z, block_changes[i].dimension,
-                                    B_furnace, state);
-          }
-          migrated++;
-        }
-        i += 1;
-      }
-    }
-    terminal_ui_log("Loaded special block table: %d entries (migrated %d legacy)",
-           special_blocks_count, migrated);
-    terminal_ui_log("[LOAD] Loaded special block table: %d entries, migrated %d legacy, file_size=%ld",
-           special_blocks_count, migrated, file_size);
-
-    fclose(file);
-
-  } else { // World file doesn't exist or failed to open
-    terminal_ui_log("No \"world.bin\" file found, creating one...");
-
-    // Initialize special block table
-    special_block_init();
-
-    // Try to create the file in binary write mode
-    file = fopen(FILE_PATH, "wb");
-    if (!file) {
-      logSerializerErrno(
-        "Failed to open \"world.bin\" for writing. "
-        "Consider checking permissions or disabling SYNC_WORLD_TO_DISK in \"globals.h\"."
-      );
-      return 1;
-    }
-    // Write initial block changes array
-    // This should be done after all entries have had `block` set to 0xFF
-    #ifdef INFINITE_BLOCK_CHANGES
-      // Write capacity header first
-      size_t written = fwrite(&block_changes_capacity, sizeof(int), 1, file);
-      if (written != 1) {
-        logSerializerErrno("Failed to write block changes header to \"world.bin\".");
-        fclose(file);
-        return 1;
-      }
-      // Write block changes data
-      written = fwrite(block_changes, sizeof(BlockChange), block_changes_capacity, file);
-      if (written != (size_t)block_changes_capacity) {
-        logSerializerErrno(
-          "Failed to write initial block data to \"world.bin\". "
-          "Consider checking permissions or disabling SYNC_WORLD_TO_DISK in \"globals.h\"."
-        );
-        fclose(file);
-        return 1;
-      }
-    #else
-      size_t written = fwrite(block_changes, 1, sizeof(block_changes), file);
-      if (written != sizeof(block_changes)) {
-        logSerializerErrno(
-          "Failed to write initial block data to \"world.bin\". "
-          "Consider checking permissions or disabling SYNC_WORLD_TO_DISK in \"globals.h\"."
-        );
-        fclose(file);
-        return 1;
-      }
-    #endif
-    // Seek past written block changes to start writing player data
-    if (fseek(file,
-      #ifdef INFINITE_BLOCK_CHANGES
-        sizeof(int) + block_changes_capacity * sizeof(BlockChange),
-      #else
-        sizeof(block_changes),
-      #endif
-      SEEK_SET) != 0) {
-      logSerializerErrno(
-        "Failed to seek past block changes in \"world.bin\". "
-        "Consider checking permissions or disabling SYNC_WORLD_TO_DISK in \"globals.h\"."
-      );
-      fclose(file);
-      return 1;
-    }
-    // Write initial player data to disk (should be just nulls?)
-    written = fwrite(player_data, 1, sizeof(player_data), file);
-    if (written != sizeof(player_data)) {
-      logSerializerErrno(
-        "Failed to write initial player data to \"world.bin\". "
-        "Consider checking permissions or disabling SYNC_WORLD_TO_DISK in \"globals.h\"."
-      );
-      fclose(file);
-      return 1;
-    }
-    // Write special block count (0 initially)
-    int sb_count = 0;
-    written = fwrite(&sb_count, sizeof(int), 1, file);
-    fclose(file);
-    if (written != 1) {
-      logSerializerErrno("Failed to write special block header to \"world.bin\".");
-      return 1;
-    }
-
+    return writeWorldJson() ? 0 : 1;
   }
 
+  terminal_ui_log("[LOAD] Opened world.json for reading");
+
+  fseek(file, 0, SEEK_END);
+  long file_size = ftell(file);
+  fseek(file, 0, SEEK_SET);
+  terminal_ui_log("[LOAD] File size: %ld bytes", file_size);
+
+  char *buf = (char *)malloc((size_t)file_size + 1);
+  if (!buf) {
+    terminal_ui_log("Failed to allocate memory for world.json. Aborting.");
+    fclose(file);
+    return 1;
+  }
+
+  size_t read = fread(buf, 1, (size_t)file_size, file);
+  buf[read] = '\0';
+  fclose(file);
+
+  if (read != (size_t)file_size) {
+    terminal_ui_log("Short read of world.json. Aborting.");
+    free(buf);
+    return 1;
+  }
+
+  cJSON *root = cJSON_Parse(buf);
+  free(buf);
+
+  if (!root) {
+    terminal_ui_log("Failed to parse world.json: %s", cJSON_GetErrorPtr());
+    return 1;
+  }
+
+  cJSON *bc = cJSON_GetObjectItem(root, "block_changes");
+  if (bc && !deserializeBlockChanges(bc)) {
+    terminal_ui_log("Failed to deserialize block changes");
+  }
+
+  cJSON *pd = cJSON_GetObjectItem(root, "players");
+  if (pd && !deserializePlayerData(pd)) {
+    terminal_ui_log("Failed to deserialize player data");
+  }
+
+  cJSON *sb = cJSON_GetObjectItem(root, "special_blocks");
+  if (sb && !deserializeSpecialBlocks(sb)) {
+    terminal_ui_log("Failed to deserialize special blocks");
+  } else if (!sb) {
+    special_block_init();
+  }
+
+  terminal_ui_log("[LOAD] Loaded %d block changes, %d players, %d special blocks",
+    block_changes_count, player_data_count, special_blocks_count);
+
+  cJSON_Delete(root);
   return 0;
 }
 
-// Writes a range of block change entries to disk
-void writeBlockChangesToDisk (int from, int to) {
-  if (from > to) return;
-
-  // Try to open the file in rw (without overwriting)
-  FILE *file = fopen(FILE_PATH, "r+b");
-  if (!file) {
-    logSerializerErrno("Failed to open \"world.bin\". Block updates have been dropped.");
-    return;
-  }
-
-  for (int i = from; i <= to; i ++) {
-    // Seek to relevant offset in file
-    long offset =
-      #ifdef INFINITE_BLOCK_CHANGES
-        sizeof(int) + (long)i * sizeof(BlockChange);
-      #else
-        (long)i * sizeof(BlockChange);
-      #endif
-    if (fseek(file, offset, SEEK_SET) != 0) {
-      fclose(file);
-      logSerializerErrno("Failed to seek in \"world.bin\". Block updates have been dropped.");
-      return;
-    }
-    // Write block change entry to file
-    if (fwrite(&block_changes[i], 1, sizeof(BlockChange), file) != sizeof(BlockChange)) {
-      fclose(file);
-      logSerializerErrno("Failed to write to \"world.bin\". Block updates have been dropped.");
-      return;
-    }
-  }
-
-  fclose(file);
+void writeBlockChangesToDisk(int from, int to) {
+  (void)from;
+  (void)to;
+  writeWorldJson();
 }
 
-// Writes all player data and special block state table to disk.
-// Rewrites the ENTIRE file to keep the layout consistent with the
-// current block_changes_capacity (which may have grown via realloc).
-void writePlayerDataToDisk () {
-
-  terminal_ui_log("[SAVE] writePlayerDataToDisk called, sb_count=%d, bc_capacity=%d",
-    special_blocks_count, block_changes_capacity);
-
-  FILE *file = fopen(FILE_PATH, "wb");  /* Rewrite entire file */
-  if (!file) {
-    logSerializerErrno("Failed to open \"world.bin\" for writing. Player updates have been dropped.");
-    return;
-  }
-
-  #ifdef INFINITE_BLOCK_CHANGES
-    /* Write capacity header */
-    if (fwrite(&block_changes_capacity, sizeof(int), 1, file) != 1) {
-      fclose(file);
-      logSerializerErrno("Failed to write block changes capacity header.");
-      return;
-    }
-    /* Write entire block_changes array */
-    if (fwrite(block_changes, sizeof(BlockChange), block_changes_capacity, file) != (size_t)block_changes_capacity) {
-      fclose(file);
-      logSerializerErrno("Failed to write block changes.");
-      return;
-    }
-  #else
-    if (fwrite(block_changes, 1, sizeof(block_changes), file) != sizeof(block_changes)) {
-      fclose(file);
-      logSerializerErrno("Failed to write block changes.");
-      return;
-    }
-  #endif
-
-  /* Write player data */
-  if (fwrite(&player_data, 1, sizeof(player_data), file) != sizeof(player_data)) {
-    fclose(file);
-    logSerializerErrno("Failed to write player data.");
-    return;
-  }
-
-  /* Write special block state table */
-  int sb_count = special_blocks_count;
-  if (fwrite(&sb_count, sizeof(int), 1, file) != 1) {
-    fclose(file);
-    logSerializerErrno("Failed to write special block count.");
-    return;
-  }
-  size_t expected = sizeof(SpecialBlockEntry) * MAX_SPECIAL_BLOCKS;
-  if (fwrite(special_blocks, 1, expected, file) != expected) {
-    fclose(file);
-    logSerializerErrno("Failed to write special blocks.");
-    return;
-  }
-
-  terminal_ui_log("[SAVE] Wrote full world file successfully");
-  fclose(file);
+void writePlayerDataToDisk(void) {
+  terminal_ui_log("[SAVE] writePlayerDataToDisk called, sb_count=%d, bc_count=%d",
+    special_blocks_count, block_changes_count);
+  writeWorldJson();
 }
 
-// Writes data queued for interval writes, but only if enough time has passed
-void writeDataToDiskOnInterval () {
-
-  // Skip this write if enough time hasn't passed since the last one
+void writeDataToDiskOnInterval(void) {
   if (get_program_time() - last_disk_sync_time < DISK_SYNC_INTERVAL) return;
   last_disk_sync_time = get_program_time();
-
-  // Write full player data and block changes buffers
   writePlayerDataToDisk();
-  #ifdef DISK_SYNC_BLOCKS_ON_INTERVAL
-  writeBlockChangesToDisk(0, block_changes_count - 1);
-  #endif
-
 }
 
 #ifdef ALLOW_CHESTS
-// Writes a chest slot change to disk
-void writeChestChangesToDisk (int chest_idx, uint8_t slot) {
-  int index = chest_idx + 1 + slot / 2;
-  writeBlockChangesToDisk(index, index);
+void writeChestChangesToDisk(int chest_idx, uint8_t slot) {
+  (void)chest_idx;
+  (void)slot;
+  writeWorldJson();
 }
 #endif
 

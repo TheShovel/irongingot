@@ -23,6 +23,7 @@ SRC_FILES=(
   src/cubiomes/noise.c
   src/cubiomes/quadbase.c
   src/cubiomes/util.c
+  third_party/cjson/cJSON.c
 )
 
 # Bundled zlib sources for static/cross builds.
@@ -44,7 +45,7 @@ ZLIB_SRCS=(
   third_party/zlib/zutil.c
 )
 
-INCLUDES="-Iinclude -Isrc/cubiomes"
+INCLUDES="-Iinclude -Isrc/cubiomes -Ithird_party/cjson"
 MUSL_INCLUDES="$INCLUDES -Ithird_party/zlib"
 CFLAGS="-O3 -ffast-math"
 LIBS="-lm -lz -pthread"

@@ -11,3 +11,4 @@ include/registries.h
 bareiron_test
 *.o
 CHANGELOG.md
+world.json

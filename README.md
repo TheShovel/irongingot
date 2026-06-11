@@ -113,7 +113,7 @@ Key options include:
 
 ## Non-Volatile Storage
 
-World data auto-saves to `world.bin`.
+World data auto-saves to `world.json`.
 
 ## License
 
