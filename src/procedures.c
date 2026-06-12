@@ -1832,12 +1832,12 @@ uint16_t getMiningResult (uint16_t held_item, uint16_t block) {
   if (isLeafBlock(block)) {
     uint16_t leaf_item = getLeafItemFromBlock(block);
     uint16_t sapling_item = getSaplingItemFromLeafBlock(block);
-    uint32_t r = fast_rand();
 
     if (held_item == I_shears) return leaf_item;
-    if (leafDropsApple(block) && r < 214748364) return I_apple; // 5%
-    if (r < 85899345) return I_stick; // 2%
-    if (sapling_item != 0 && r < 214748364) return sapling_item; // 5%
+    // Each drop is rolled independently, matching vanilla behavior
+    if (leafDropsApple(block) && fast_rand() < 214748364) return I_apple; // 5%
+    if (fast_rand() < 85899345) return I_stick; // 2%
+    if (sapling_item != 0 && fast_rand() < 214748364) return sapling_item; // 5%
     return 0;
   }
 
