@@ -25,8 +25,8 @@ These features are fundamental to a complete Minecraft experience and should be 
 
 ### 2. Basic Missing Structures (Dimension completion)
 
-- **Nether Fortresses** (High) - Classic Nether structure with loot
-- **Village Variants** (High) - Full village generation with roads, wells, bells
+- ~~**Nether Fortresses** (High)~~ - ✅ Classic Nether structure with loot
+- ~~**Village Variants** (High)~~ - ✅ Full village generation with roads, wells, bells
 
 ### 3. Villager Trading
 

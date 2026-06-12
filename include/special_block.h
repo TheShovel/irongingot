@@ -47,6 +47,14 @@
  *   Bits 0-1:   direction (0=north, 1=east, 2=south, 3=west)
  *   Bit  2:     waterlogged (0=false, 1=true)
  *   Bits 3-15:  unused
+ *
+ * Fences (all supported wooden fences):
+ *   Bits 0-3:   connections (0=north, 1=east, 2=south, 3=west)
+ *   Bits 4-15:  unused
+ *
+ * Horizontal facing blocks (B_wall_torch, etc.):
+ *   Bits 0-1:   direction (0=north, 1=south, 2=west, 3=east) - table order
+ *   Bits 2-15:  unused
  */
 
 /* Maximum number of special block state entries we track. */
@@ -79,12 +87,16 @@ uint16_t get_trapdoor_state_id(uint16_t block, uint8_t open, uint8_t direction, 
 uint16_t get_stair_state_id(uint16_t block, uint8_t half, uint8_t direction);
 uint16_t get_oriented_state_id(uint16_t block, uint8_t direction);
 uint16_t get_furnace_state_id(uint8_t direction, uint8_t lit);
+uint16_t get_fence_state_id(uint16_t block, uint8_t connections);
+uint16_t get_horizontal_state_id(uint16_t block, uint8_t direction);
 
 /* Block type queries */
 uint8_t is_door_block(uint16_t block);
 uint8_t is_stair_block(uint16_t block);
 uint8_t is_trapdoor_block(uint16_t block);
 uint8_t is_oriented_block(uint16_t block);
+uint8_t is_fence_block(uint16_t block);
+uint8_t is_horizontal_facing_block(uint16_t block);
 
 /* State decode helpers */
 uint8_t door_get_open(uint16_t state);
@@ -102,6 +114,10 @@ uint8_t barrel_get_direction(uint16_t state);
 uint8_t barrel_get_open(uint16_t state);
 uint8_t ender_chest_get_direction(uint16_t state);
 uint8_t ender_chest_get_waterlogged(uint16_t state);
+uint8_t fence_get_north(uint16_t state);
+uint8_t fence_get_east(uint16_t state);
+uint8_t fence_get_south(uint16_t state);
+uint8_t fence_get_west(uint16_t state);
 
 /* State encode helpers */
 uint16_t door_encode_state(uint8_t open, uint8_t hinge, uint8_t direction);
@@ -111,6 +127,8 @@ uint16_t oriented_encode_state(uint8_t direction);
 uint16_t furnace_encode_state(uint8_t direction, uint8_t lit);
 uint16_t barrel_encode_state(uint8_t direction, uint8_t open);
 uint16_t ender_chest_encode_state(uint8_t direction, uint8_t waterlogged);
+uint16_t fence_encode_state(uint8_t north, uint8_t east, uint8_t south, uint8_t west);
+uint16_t horizontal_facing_encode_state(uint8_t direction);
 
 /* Interaction helpers */
 uint8_t is_door_open_at(short x, uint8_t y, short z, uint8_t dimension);

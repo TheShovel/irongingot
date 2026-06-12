@@ -32,6 +32,14 @@ const blockToItemOverrides = {
   dead_bush: "stick",
   farmland: "dirt",
   wheat: "wheat_seeds",
+  wheat_1: "wheat_seeds",
+  wheat_2: "wheat_seeds",
+  wheat_3: "wheat_seeds",
+  wheat_4: "wheat_seeds",
+  wheat_5: "wheat_seeds",
+  wheat_6: "wheat_seeds",
+  wheat_7: "wheat_seeds",
+  wall_torch: "torch",
 };
 
 // Blacklisted block name strings
@@ -273,6 +281,10 @@ async function extractItemsAndBlocks() {
   // Door state lookup tables: { name: [32 state IDs] }
   // Iteration order: facing(n,s,w,e) x half(upper,lower) x hinge(left,right) x open(true,false), powered=false
   const doorStateTables = {};
+  // Fence state lookup tables: { name: [16 state IDs] }, mask bits: north/east/south/west.
+  const fenceStateTables = {};
+  // Horizontal facing lookup tables: { name: [4 state IDs] }, order: north/south/west/east.
+  const horizontalStateTables = {};
 
   for (const entry of sortedBlocks) {
     const defaultState = entry[1].states.find((c) => c.default);
@@ -363,6 +375,50 @@ async function extractItemsAndBlocks() {
       doorStateTables[name] = doorRow;
     }
 
+    if (
+      (entry[0].endsWith("_fence") && !entry[0].endsWith("_fence_gate")) ||
+      entry[0].endsWith("glass_pane")
+    ) {
+      const name = entry[0].replace("minecraft:", "");
+      const fenceRow = [];
+      for (let mask = 0; mask < 16; mask++) {
+        const st = entry[1].states.find(
+          (s) =>
+            s.properties &&
+            s.properties.north === String((mask & 1) !== 0) &&
+            s.properties.east === String((mask & 2) !== 0) &&
+            s.properties.south === String((mask & 4) !== 0) &&
+            s.properties.west === String((mask & 8) !== 0) &&
+            (!("waterlogged" in s.properties) ||
+              s.properties.waterlogged === "false"),
+        );
+        fenceRow.push(st ? st.id : defaultState.id);
+      }
+      fenceStateTables[name] = fenceRow;
+    }
+
+    if (entry[1].properties && Array.isArray(entry[1].properties.facing)) {
+      const faces = entry[1].properties.facing;
+      if (["north", "south", "west", "east"].every((f) => faces.includes(f))) {
+        const name = entry[0].replace("minecraft:", "");
+        const facingRow = [];
+        for (const f of ["north", "south", "west", "east"]) {
+          const st = entry[1].states.find((s) => {
+            if (!s.properties || s.properties.facing !== f) return false;
+            for (const [key, value] of Object.entries(
+              defaultState.properties || {},
+            )) {
+              if (key === "facing") continue;
+              if (s.properties[key] !== value) return false;
+            }
+            return true;
+          });
+          facingRow.push(st ? st.id : defaultState.id);
+        }
+        horizontalStateTables[name] = facingRow;
+      }
+    }
+
     // Include "snowy" variants of blocks as well
     if ("properties" in defaultState && "snowy" in defaultState.properties) {
       const snowyState = entry[1].states.find((c) => c.properties.snowy);
@@ -389,6 +445,17 @@ async function extractItemsAndBlocks() {
         );
         if (state) {
           blocks[`end_portal_frame_eye_${facing}`] = state.id;
+        }
+      }
+    }
+
+    if (entry[0] === "minecraft:wheat") {
+      for (let age = 1; age <= 7; age++) {
+        const state = entry[1].states.find(
+          (s) => s.properties && s.properties.age === String(age),
+        );
+        if (state) {
+          blocks[`wheat_${age}`] = state.id;
         }
       }
     }
@@ -469,9 +536,51 @@ async function extractItemsAndBlocks() {
     "end_portal_frame_eye_east",
     "end_portal",
     "end_stone",
+    "dirt_path",
     "farmland",
     "wheat",
+    "wheat_1",
+    "wheat_2",
+    "wheat_3",
+    "wheat_4",
+    "wheat_5",
+    "wheat_6",
+    "wheat_7",
+    "wall_torch",
+    "lectern",
+    "fletching_table",
+    "smithing_table",
+    "blast_furnace",
+    "smoker",
+    "brewing_stand",
+    "cartography_table",
+    "grindstone",
+    "loom",
+    "stonecutter",
+    "cauldron",
+    "hay_block",
+    "white_wool",
     "mossy_cobblestone",
+    // Village structure blocks (added as extras to avoid shifting essential block IDs)
+    "white_carpet",
+    "oak_pressure_plate",
+    "spruce_pressure_plate",
+    "acacia_pressure_plate",
+    "stone_pressure_plate",
+    "smooth_sandstone",
+    "smooth_sandstone_stairs",
+    "smooth_sandstone_slab",
+    "sandstone_slab",
+    "sandstone_wall",
+    "cobblestone_wall",
+    "lantern",
+    "ladder",
+    "campfire",
+    "bell",
+    "glass_pane",
+    "white_glazed_terracotta",
+    "tall_grass",
+    "large_fern",
     "spawner",
     "barrel",
     "ender_chest",
@@ -504,6 +613,8 @@ async function extractItemsAndBlocks() {
     trapdoorStateTables,
     stairStateTables,
     doorStateTables,
+    fenceStateTables,
+    horizontalStateTables,
   };
 }
 
@@ -810,6 +921,15 @@ async function convert() {
         "crimson_nylium",
         "warped_nylium",
         "obsidian",
+        "smooth_sandstone",
+        "smooth_sandstone_stairs",
+        "smooth_sandstone_slab",
+        "sandstone_wall",
+        "cobblestone_wall",
+        "white_glazed_terracotta",
+        "lantern",
+        "bell",
+        "stone_pressure_plate",
       ]),
       "mineable/axe": tagBlocks([
         "composter",
@@ -835,6 +955,11 @@ async function convert() {
           `stripped_${type}_log`,
           `stripped_${type}_wood`,
         ]),
+        "ladder",
+        "campfire",
+        "oak_pressure_plate",
+        "spruce_pressure_plate",
+        "acacia_pressure_plate",
       ]),
       "mineable/shovel": tagBlocks([
         "grass_block",
@@ -856,6 +981,7 @@ async function convert() {
         "soul_soil",
         "mangrove_roots",
         "muddy_mangrove_roots",
+        "dirt_path",
       ]),
       "mineable/hoe": tagBlocks([
         ...leafTypes.map((type) => `${type}_leaves`),
@@ -865,6 +991,8 @@ async function convert() {
         "sponge",
         "wet_sponge",
         "moss_carpet",
+        "tall_grass",
+        "large_fern",
       ]),
       needs_stone_tool: tagBlocks([
         "iron_ore",
@@ -946,6 +1074,32 @@ async function convert() {
     }
   }
 
+  // Build fence state table and block-to-row mapping
+  const fenceRowMap = [];
+  for (let i = 0; i < paletteEntries.length; i++) fenceRowMap.push(255);
+  const fenceRows = [];
+  for (let paletteIdx = 0; paletteIdx < paletteEntries.length; paletteIdx++) {
+    const name = paletteEntries[paletteIdx];
+    const row = itemsAndBlocks.fenceStateTables[name];
+    if (row && row.length === 16) {
+      fenceRowMap[paletteIdx] = fenceRows.length;
+      fenceRows.push(row);
+    }
+  }
+
+  // Build horizontal-facing state table and block-to-row mapping
+  const horizontalRowMap = [];
+  for (let i = 0; i < paletteEntries.length; i++) horizontalRowMap.push(255);
+  const horizontalRows = [];
+  for (let paletteIdx = 0; paletteIdx < paletteEntries.length; paletteIdx++) {
+    const name = paletteEntries[paletteIdx];
+    const row = itemsAndBlocks.horizontalStateTables[name];
+    if (row && row.length === 4) {
+      horizontalRowMap[paletteIdx] = horizontalRows.length;
+      horizontalRows.push(row);
+    }
+  }
+
   const sourceCode = `\\
 #include <stdint.h>
 #include "registries.h"
@@ -996,12 +1150,28 @@ const uint16_t stair_state_rows[${stairRows.length}][8] = {
 };
 
 // Door state IDs: [block_palette_index][32 states]
-// State layout: facing(n,s,w,e) x half(upper,lower) x hinge(left,right) x open(true,false), powered=false
+// State layout: facing(n,s,w,e) × half(upper,lower) × hinge(left,right) × open(true,false), powered=false
 extern const uint8_t door_block_to_row[];
 extern const uint16_t door_state_rows[][32];
 const uint8_t door_block_to_row[] = { ${doorRowMap.join(", ")} };
 const uint16_t door_state_rows[${doorRows.length}][32] = {
   ${doorRows.map((r) => `{ ${r.join(", ")} }`).join(",\n  ")}
+};
+
+// Fence state IDs: [block_palette_index][16 states], mask bits north/east/south/west
+extern const uint8_t fence_block_to_row[];
+extern const uint16_t fence_state_rows[][16];
+const uint8_t fence_block_to_row[] = { ${fenceRowMap.join(", ")} };
+const uint16_t fence_state_rows[${fenceRows.length}][16] = {
+  ${fenceRows.map((r) => `{ ${r.join(", ")} }`).join(",\n  ")}
+};
+
+// Horizontal facing state IDs: [block_palette_index][4 states], table order north/south/west/east
+extern const uint8_t horizontal_block_to_row[];
+extern const uint16_t horizontal_state_rows[][4];
+const uint8_t horizontal_block_to_row[] = { ${horizontalRowMap.join(", ")} };
+const uint16_t horizontal_state_rows[${horizontalRows.length}][4] = {
+  ${horizontalRows.map((r) => `{ ${r.join(", ")} }`).join(",\n  ")}
 };`;
 
   const headerCode = `
@@ -1030,6 +1200,14 @@ extern const uint16_t stair_state_rows[][8];
 // Door state lookup (generated from registry data)
 extern const uint8_t door_block_to_row[${paletteEntries.length}];
 extern const uint16_t door_state_rows[][32];
+
+// Fence state lookup (generated from registry data)
+extern const uint8_t fence_block_to_row[${paletteEntries.length}];
+extern const uint16_t fence_state_rows[][16];
+
+// Horizontal facing state lookup (generated from registry data)
+extern const uint8_t horizontal_block_to_row[${paletteEntries.length}];
+extern const uint16_t horizontal_state_rows[][4];
 
 // Block identifiers
 ${Object.keys(itemsAndBlocks.palette)

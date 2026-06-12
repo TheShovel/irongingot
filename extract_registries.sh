@@ -36,12 +36,40 @@ prepare_notchian_dir() {
 dump_registries() {
   if [[ ! -f "$SERVER_JAR" ]]; then
     echo "No server.jar found (looked for $SERVER_JAR)."
-	echo "Please download the 1.21.8 server.jar (e.g. from https://mcversions.net/download/1.21.8)"
-	echo "and place it in the \"notchian\" directory."
+		echo "Please download the 1.21.8 server.jar (e.g. from https://mcversions.net/download/1.21.8)"
+		echo "and place it in the \"notchian\" directory."
     exit 1
   fi
 
   java -DbundlerMainClass="net.minecraft.data.Main" -jar "$SERVER_JAR" --all
+}
+
+extract_village_structures() {
+  if [[ ! -f "$SERVER_JAR" ]]; then
+    return
+  fi
+
+  local nested_server
+  nested_server="$(jar tf "$SERVER_JAR" | awk '/^META-INF\/versions\/.*\/server-.*\.jar$/ { print; exit }')"
+  local structure_source="$SERVER_JAR"
+
+  if [[ -n "$nested_server" ]]; then
+    echo "Extracting nested vanilla server component: $nested_server"
+    rm -rf META-INF/versions
+    jar xf "$SERVER_JAR" "$nested_server"
+    structure_source="$nested_server"
+  fi
+
+  echo "Extracting vanilla village structure templates..."
+  rm -rf data/minecraft/structure/village generated/data/minecraft/structure/village
+  jar xf "$structure_source" data/minecraft/structure/village
+  if [[ -d data/minecraft/structure/village ]]; then
+    mkdir -p generated/data/minecraft/structure
+    mv data/minecraft/structure/village generated/data/minecraft/structure/village
+  else
+    echo "Warning: no data/minecraft/structure/village templates found in $structure_source"
+  fi
+  rm -rf data META-INF/versions
 }
 
 detect_js_runtime() {
@@ -69,5 +97,7 @@ run_js_script() {
 check_java
 prepare_notchian_dir
 dump_registries
+extract_village_structures
 run_js_script "../build_registries.js"
-echo "Registry dump and processing complete."
+run_js_script "../build_village_templates.js"
+echo "Registry dump, village template extraction, and processing complete."

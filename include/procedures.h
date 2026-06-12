@@ -49,6 +49,8 @@ uint8_t isLeafBlock (uint16_t block);
 uint8_t isSaplingBlock (uint16_t block);
 uint8_t isStairBlock (uint16_t block);
 uint8_t isOrientedBlock (uint16_t block);
+uint8_t isFenceBlock (uint16_t block);
+uint8_t isHorizontalFacingBlock (uint16_t block);
 uint8_t isPassableBlock (uint16_t block);
 uint8_t isPassableSpawnBlock (uint16_t block);
 uint8_t isReplaceableBlock (uint16_t block);

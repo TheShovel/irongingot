@@ -28,6 +28,52 @@
 #ifndef B_spawner
 #define B_spawner B_cobweb
 #endif
+#ifndef B_wheat_7
+#define B_wheat_7 B_wheat
+#endif
+
+static uint8_t isWheatBlock(uint16_t block) {
+  return block >= B_wheat && block <= B_wheat_7;
+}
+
+// Helper: check if a block is solid enough for a fence/glass_pane to connect to.
+// Fences connect to other fences, full solid blocks, and opaque cubes.
+static uint8_t isFenceSolidBlock(uint16_t block) {
+  // First check for fence-like blocks
+  if (is_fence_block(block)) return 1;
+  // Common solid building blocks
+  if (block == B_stone || block == B_cobblestone || block == B_stone_bricks ||
+      block == B_mossy_stone_bricks || block == B_cracked_stone_bricks || block == B_chiseled_stone_bricks ||
+      block == B_sandstone || block == B_cut_sandstone || block == B_chiseled_sandstone ||
+      block == B_bedrock || block == B_obsidian ||
+      block == B_nether_bricks || block == B_cracked_nether_bricks ||
+      block == B_blackstone || block == B_basalt || block == B_end_stone ||
+      block == B_mossy_cobblestone) return 1;
+  // Common terrain blocks
+  if (block == B_grass_block || block == B_snowy_grass_block ||
+      block == B_dirt || block == B_coarse_dirt ||
+      block == B_sand || block == B_red_sand ||
+      block == B_gravel || block == B_podzol ||
+      block == B_mycelium || block == B_mud ||
+      block == B_snow_block || block == B_ice ||
+      block == B_packed_ice || block == B_blue_ice) return 1;
+  // Terracotta (all colors)
+  if (block == B_terracotta || (block >= B_white_terracotta && block <= B_light_gray_terracotta)) return 1;
+  // Wood planks range
+  if (block >= B_oak_planks && block <= B_bamboo_mosaic) return 1;
+  // Wool blocks
+  if (block >= B_white_wool && block <= B_blue_wool) return 1;
+  // Logs and wood blocks
+  if ((block >= B_oak_log && block <= B_pale_oak_log) ||
+      (block >= B_oak_wood && block <= B_pale_oak_wood) ||
+      (block >= B_stripped_spruce_log && block <= B_stripped_mangrove_log)) return 1;
+  return 0;
+}
+
+static uint8_t wheatBlockAge(uint16_t block) {
+  if (block >= B_wheat && block <= B_wheat_7) return (uint8_t)(block - B_wheat);
+  return 0;
+}
 
 // World spawn point (block coordinates)
 #define SPAWN_BLOCK_X 8
@@ -1246,8 +1292,8 @@ uint16_t getBlockChange (short x, int16_t y, short z, uint8_t dimension) {
       continue;
     }
     #endif
-    // Skip stair, furnace, and ender_chest state data
-    if (is_stair_block(block_changes[i].block) || block_changes[i].block == B_furnace || block_changes[i].block == B_ender_chest) {
+    // Skip stair, furnace, ender_chest, fence, horizontal facing, and lantern state data
+    if (is_stair_block(block_changes[i].block) || block_changes[i].block == B_furnace || block_changes[i].block == B_ender_chest || is_fence_block(block_changes[i].block) || is_horizontal_facing_block(block_changes[i].block) || block_changes[i].block == B_lantern) {
       i += 1;
     }
     // Skip chest/barrel inventory entries
@@ -1319,7 +1365,7 @@ uint8_t makeBlockChange (short x, int16_t y, short z, uint16_t block, uint8_t di
       } else if (is_door_block(block_changes[idx].block)) { \
         if ((idx) + 1 < block_changes_count) block_changes[(idx) + 1].block = 0xFF; \
         if ((idx) + 2 < block_changes_count) block_changes[(idx) + 2].block = 0xFF; \
-      } else if (is_stair_block(block_changes[idx].block) || block_changes[idx].block == B_furnace || block_changes[idx].block == B_ender_chest) { \
+      } else if (is_stair_block(block_changes[idx].block) || block_changes[idx].block == B_furnace || block_changes[idx].block == B_ender_chest || is_fence_block(block_changes[idx].block) || is_horizontal_facing_block(block_changes[idx].block) || block_changes[idx].block == B_lantern) { \
         if ((idx) + 1 < block_changes_count) block_changes[(idx) + 1].block = 0xFF; \
       } \
     } while (0)
@@ -1380,6 +1426,19 @@ uint8_t makeBlockChange (short x, int16_t y, short z, uint16_t block, uint8_t di
           block_changes[i + 1].z = z;
           block_changes[i + 1].block = 0;
           special_block_set_state(x, y, z, dimension, block, ender_chest_encode_state(0, 0));
+        } else if (is_fence_block(block)) {
+          // Compute fence connections from neighbors
+          uint8_t _fn = 0, _fe = 0, _fs = 0, _fw = 0;
+          uint16_t _fb;
+          _fb = getBlockAt2(x - 1, y, z, dimension); if (isFenceSolidBlock(_fb)) _fw = 1;
+          _fb = getBlockAt2(x + 1, y, z, dimension); if (isFenceSolidBlock(_fb)) _fe = 1;
+          _fb = getBlockAt2(x, y, z - 1, dimension); if (isFenceSolidBlock(_fb)) _fn = 1;
+          _fb = getBlockAt2(x, y, z + 1, dimension); if (isFenceSolidBlock(_fb)) _fs = 1;
+          special_block_set_state(x, y, z, dimension, block, fence_encode_state(_fn, _fe, _fs, _fw));
+        } else if (is_horizontal_facing_block(block)) {
+          special_block_set_state(x, y, z, dimension, block, horizontal_facing_encode_state(0));
+        } else if (block == B_wheat) {
+          // B_wheat uses 1 slot; state is tracked only in special_blocks table.
         }
       }
       write_from = i;
@@ -1396,7 +1455,7 @@ uint8_t makeBlockChange (short x, int16_t y, short z, uint16_t block, uint8_t di
     #ifdef ALLOW_DOORS
     if (is_door_block(block_changes[i].block)) { if (i + 2 >= block_changes_count) break; i += 2; continue; }
     #endif
-    if (is_stair_block(block_changes[i].block) || block_changes[i].block == B_furnace || block_changes[i].block == B_ender_chest) { i += 1; }
+    if (is_stair_block(block_changes[i].block) || block_changes[i].block == B_furnace || block_changes[i].block == B_ender_chest || is_fence_block(block_changes[i].block) || is_horizontal_facing_block(block_changes[i].block) || block_changes[i].block == B_lantern) { i += 1; }
   }
 
   // Don't create a new entry if it contains the base terrain block
@@ -1412,7 +1471,7 @@ uint8_t makeBlockChange (short x, int16_t y, short z, uint16_t block, uint8_t di
   #ifdef ALLOW_DOORS
   else if (is_door_block(block)) slots_needed = 3;
   #endif
-  else if (is_stair_block(block) || block == B_furnace) slots_needed = 2;
+  else if (is_stair_block(block) || block == B_furnace || is_fence_block(block) || is_horizontal_facing_block(block) || block == B_lantern) slots_needed = 2;
 
   // Find or create a gap of sufficient size
   int last_real_entry = first_gap - 1;
@@ -1483,7 +1542,7 @@ uint8_t makeBlockChange (short x, int16_t y, short z, uint16_t block, uint8_t di
       special_block_set_state(x, y, z, dimension, block, door_encode_state(0, 0, 0));
     }
     #endif
-    else if (is_stair_block(block) || block == B_furnace) {
+    else if (is_stair_block(block) || block == B_furnace || is_fence_block(block) || is_horizontal_facing_block(block)) {
       // State entry
       block_changes[base + 1].x = 0;
       block_changes[base + 1].y = 0;
@@ -1491,8 +1550,28 @@ uint8_t makeBlockChange (short x, int16_t y, short z, uint16_t block, uint8_t di
       block_changes[base + 1].block = 0;
       if (is_stair_block(block)) {
         special_block_set_state(x, y, z, dimension, block, stair_encode_state(0, 0));
-      } else {
+      } else if (block == B_furnace) {
         special_block_set_state(x, y, z, dimension, block, furnace_encode_state(0, 0));
+      } else if (is_fence_block(block)) {
+        // Compute fence connections from neighbors
+        uint8_t _fn = 0, _fe = 0, _fs = 0, _fw = 0;
+        uint16_t _fb;
+        _fb = getBlockAt2(x - 1, y, z, dimension); if (isFenceSolidBlock(_fb)) _fw = 1;
+        _fb = getBlockAt2(x + 1, y, z, dimension); if (isFenceSolidBlock(_fb)) _fe = 1;
+        _fb = getBlockAt2(x, y, z - 1, dimension); if (isFenceSolidBlock(_fb)) _fn = 1;
+        _fb = getBlockAt2(x, y, z + 1, dimension); if (isFenceSolidBlock(_fb)) _fs = 1;
+        special_block_set_state(x, y, z, dimension, block, fence_encode_state(_fn, _fe, _fs, _fw));
+      } else if (is_horizontal_facing_block(block)) {
+        special_block_set_state(x, y, z, dimension, block, horizontal_facing_encode_state(0));
+      } else if (block == B_wheat) {
+        if (!special_block_has_entry(x, (uint8_t)y, z, dimension)) {
+          special_block_set_state(x, y, z, dimension, block, 0);
+        }
+      } else if (block == B_lantern) {
+        block_changes[base + 1].block = 0;
+        if (!special_block_has_entry(x, (uint8_t)y, z, dimension)) {
+          special_block_set_state(x, y, z, dimension, block, 0);
+        }
       }
     }
 
@@ -1851,6 +1930,8 @@ uint16_t getMiningResult (uint16_t held_item, uint16_t block) {
 
   if ((block == B_snow || block == B_snow_block) && !isShovelItem(held_item)) return 0;
 
+  if (isWheatBlock(block)) return 0; // Handled in handlePlayerAction with age check
+
   switch (block) {
     case B_gravel:
     case B_suspicious_gravel:
@@ -1865,10 +1946,6 @@ uint16_t getMiningResult (uint16_t held_item, uint16_t block) {
     case B_fern:
       if (fast_rand() % 8 == 0) return I_wheat_seeds; // 12.5% chance
       return B_to_I[block];
-
-    case B_wheat:
-      if (held_item == 0) return I_wheat_seeds; // Cascaded break (support removed)
-      return 0; // Handled in handlePlayerAction with age check
 
     default: break;
   }
@@ -1896,7 +1973,7 @@ uint8_t isInstantlyMined (PlayerData *player, uint16_t block) {
     block == B_short_grass ||
     block == B_short_dry_grass ||
     block == B_tall_dry_grass ||
-    block == B_wheat ||
+    isWheatBlock(block) ||
     isSaplingBlock(block) ||
     block == B_dandelion ||
     block == B_torchflower ||
@@ -1913,6 +1990,7 @@ uint8_t isInstantlyMined (PlayerData *player, uint16_t block) {
     block == B_wither_rose ||
     block == B_lily_of_the_valley ||
     block == B_lily_pad ||
+    block == B_wall_torch ||
     block == B_torch
   );
 
@@ -1928,9 +2006,10 @@ uint8_t isColumnBlock (uint16_t block) {
     block == B_short_dry_grass ||
     block == B_tall_dry_grass ||
     block == B_fern ||
-    block == B_wheat ||
+    isWheatBlock(block) ||
     block == B_dead_bush ||
     block == B_bush ||
+    block == B_wall_torch ||
     block == B_torch ||
     isSaplingBlock(block) ||
     block == B_dandelion ||
@@ -1964,10 +2043,11 @@ uint8_t isPassableBlock (uint16_t block) {
     block == B_short_dry_grass ||
     block == B_tall_dry_grass ||
     block == B_fern ||
-    block == B_wheat ||
+    isWheatBlock(block) ||
     block == B_dead_bush ||
     block == B_bush ||
     block == B_seagrass ||
+    block == B_wall_torch ||
     block == B_torch ||
     isSaplingBlock(block) ||
     block == B_dandelion ||
@@ -2111,6 +2191,8 @@ uint8_t isDoorBlock (uint16_t block) { return is_door_block(block); }
 uint8_t isStairBlock (uint16_t block) { return is_stair_block(block); }
 uint8_t isTrapdoorBlock (uint16_t block) { return is_trapdoor_block(block); }
 uint8_t isOrientedBlock (uint16_t block) { return is_oriented_block(block); }
+uint8_t isFenceBlock (uint16_t block) { return is_fence_block(block); }
+uint8_t isHorizontalFacingBlock (uint16_t block) { return is_horizontal_facing_block(block); }
 uint8_t isDoorItem (uint16_t item) {
   return (
     item == I_oak_door ||
@@ -2650,14 +2732,41 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
   // If this is a "start mining" packet, the block must be instamine
   if (action == 0 && !isInstantlyMined(player, block)) return;
 
-  // Read wheat age BEFORE makeBlockChange clears the special block entry
+  // Read wheat age BEFORE makeBlockChange clears the special block entry.
+  // Generated farms use palette entries B_wheat..B_wheat_7, while planted
+  // crops store age in the special-block table.
   uint16_t wheat_age = 0;
-  if (block == B_wheat) {
-    wheat_age = special_block_get_state(x, y, z, player->dimension);
+  if (isWheatBlock(block)) {
+    wheat_age = wheatBlockAge(block);
+    if (block == B_wheat) wheat_age = special_block_get_state(x, y, z, player->dimension);
   }
 
   // Don't continue if the block change failed
   if (makeBlockChange(x, y, z, 0, player->dimension)) return;
+
+  // Update neighbor fences when a block is broken (they may have been connected)
+  int _adj[4][2] = {{x, z - 1}, {x, z + 1}, {x - 1, z}, {x + 1, z}};
+  for (int _ai = 0; _ai < 4; _ai++) {
+    int _ax = _adj[_ai][0], _az = _adj[_ai][1];
+    uint16_t _ab = getBlockAt2(_ax, y, _az, player->dimension);
+    if (!is_fence_block(_ab)) continue;
+    uint16_t _a1 = getBlockAt2(_ax, y, _az - 1, player->dimension);
+    uint16_t _a2 = getBlockAt2(_ax + 1, y, _az, player->dimension);
+    uint16_t _a3 = getBlockAt2(_ax, y, _az + 1, player->dimension);
+    uint16_t _a4 = getBlockAt2(_ax - 1, y, _az, player->dimension);
+    uint8_t _bn = isFenceSolidBlock(_a1) ? 1 : 0;
+    uint8_t _be = isFenceSolidBlock(_a2) ? 1 : 0;
+    uint8_t _bs = isFenceSolidBlock(_a3) ? 1 : 0;
+    uint8_t _bw = isFenceSolidBlock(_a4) ? 1 : 0;
+    special_block_set_state(_ax, y, _az, player->dimension, _ab, fence_encode_state(_bn, _be, _bs, _bw));
+    uint8_t _conn = _bn | (_be << 1) | (_bs << 2) | (_bw << 3);
+    uint16_t _fsid = get_fence_state_id(_ab, _conn);
+    for (int _j = 0; _j < MAX_PLAYERS; _j++) {
+      if (player_data[_j].client_fd == -1) continue;
+      if (player_data[_j].flags & 0x20) continue;
+      sc_blockUpdateState(player_data[_j].client_fd, _ax, y, _az, _fsid);
+    }
+  }
 
   if (block == B_obsidian || block == B_nether_portal) {
     clearNearbyNetherPortal(x, y, z, player->dimension);
@@ -2714,7 +2823,7 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
   }
 
   // Special handling for wheat drops based on maturity
-  if (block == B_wheat) {
+  if (isWheatBlock(block)) {
     if (wheat_age >= 7) {
       givePlayerItem(player, I_wheat, 1);
       givePlayerItem(player, I_wheat_seeds, 1 + (fast_rand() % 3));
@@ -4257,8 +4366,8 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     }
   }
 
-  // Special handling for oriented block placement (chests, furnaces, barrels, ender chests)
-  if (isOrientedBlock(block)) {
+  // Special handling for oriented block placement (chests, furnaces, barrels, ender chests, lecterns)
+  if (isOrientedBlock(block) || block == B_lectern) {
     if ((block == B_chest || block == B_ender_chest) && !config.allow_chests) return;
     // Determine placement position
     switch (face) {
@@ -4309,6 +4418,17 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
         state = barrel_encode_state(direction, 0);
       } else if (block == B_ender_chest) {
         state = ender_chest_encode_state(direction, 0);
+      } else if (block == B_lectern) {
+        // Lectern uses separate direction mapping (horizontal_state_rows order: north=0, south=1, west=2, east=3)
+        static const uint8_t horiz_dir[4] = {0, 1, 2, 3}; // internal(north=0, east=1, south=2, west=3) -> table(north=0, south=1, west=2, east=3)
+        static const uint8_t yaw_to_horiz[4] = {0, 3, 1, 2}; // yaw(north=0, east=1, south=2, west=3) -> table(north=0, south=1, west=2, east=3)
+        // Player yaw: -128 to 127, 0=South, -64=East, 64=West
+        uint8_t yaw_dir;
+        if (player->yaw >= -96 && player->yaw < -32) yaw_dir = 1;   // East
+        else if (player->yaw >= -32 && player->yaw < 32) yaw_dir = 2; // South
+        else if (player->yaw >= 32 && player->yaw < 96) yaw_dir = 3;  // West
+        else yaw_dir = 0;                                              // North
+        state = horizontal_facing_encode_state(yaw_to_horiz[yaw_dir]);
       } else {
         state = oriented_encode_state(direction);
       }
@@ -4325,11 +4445,18 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
         }
       }
 
-      // Send oriented updates to all players
+      // Send state updates to all players
       for (int j = 0; j < MAX_PLAYERS; j++) {
         if (player_data[j].client_fd == -1) continue;
         if (player_data[j].flags & 0x20) continue;
-        sendOrientedUpdate(player_data[j].client_fd, x, y, z, block, direction);
+        if (block == B_lectern) {
+          uint16_t st = special_block_get_state(x, y, z, player->dimension);
+          uint8_t horiz_dir = st & 3;
+          uint16_t sid = get_horizontal_state_id(block, horiz_dir);
+          sc_blockUpdateState(player_data[j].client_fd, x, y, z, sid);
+        } else {
+          sendOrientedUpdate(player_data[j].client_fd, x, y, z, block, direction);
+        }
       }
 
       // Decrease item amount in selected slot
@@ -4397,6 +4524,167 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       broadcastPlayerEquipment(player);
       return;
     }
+    return;
+  }
+
+  // Special handling for torch/wall_torch placement
+  if (block == B_torch) {
+    // Compute placement position
+    int32_t tx = x, tz = z;
+    int16_t ty = y;
+    switch (face) {
+      case 0: ty -= 1; break;
+      case 1: ty += 1; break;
+      case 2: tz -= 1; break;
+      case 3: tz += 1; break;
+      case 4: tx -= 1; break;
+      case 5: tx += 1; break;
+      default: break;
+    }
+
+    // Check if placement position is valid
+    if (!isReplaceableBlock(getBlockAt2(tx, ty, tz, player->dimension))) return;
+
+    if (face == 0 || face == 1) {
+      // Placing on floor or ceiling - use standing torch
+      if (makeBlockChange(tx, ty, tz, B_torch, player->dimension)) return;
+    } else {
+      // Placing on wall - use wall torch with facing
+      // Determine facing based on which face was clicked
+      // Face 2=north, 3=south, 4=west, 5=east
+      // wall_torch facing property: the wall it attaches to
+      // horizontal_state_rows order: north=0, south=1, west=2, east=3
+      uint8_t direction;
+      switch (face) {
+        case 2: direction = 0; break;  // Attached to north wall
+        case 3: direction = 1; break;  // Attached to south wall
+        case 4: direction = 2; break;  // Attached to west wall
+        case 5: direction = 3; break;  // Attached to east wall
+        default: direction = 0; break;
+      }
+      if (makeBlockChange(tx, ty, tz, B_wall_torch, player->dimension)) return;
+      special_block_set_state(tx, ty, tz, player->dimension, B_wall_torch, horizontal_facing_encode_state(direction));
+      // Also store the direction as a backup in the state entry so it survives
+      // world.json save/load even if the special_blocks table entry is lost.
+      // The state entry is always at block_changes[k+1] for horizontal blocks.
+      for (int k = 0; k < block_changes_count; k++) {
+        if (block_changes[k].block == B_wall_torch &&
+            block_changes[k].x == tx &&
+            block_changes[k].y == ty &&
+            block_changes[k].z == tz &&
+            k + 1 < block_changes_count) {
+          block_changes[k + 1].block = (uint16_t)(direction + 1); // store 1-4, 0 means not set
+          break;
+        }
+      }
+      // Broadcast the correct state ID to all players so the torch faces the right wall
+      uint16_t sid = get_horizontal_state_id(B_wall_torch, direction);
+      for (int j = 0; j < MAX_PLAYERS; j++) {
+        if (player_data[j].client_fd == -1) continue;
+        if (player_data[j].flags & 0x20) continue;
+        sc_blockUpdateState(player_data[j].client_fd, tx, ty, tz, sid);
+      }
+    }
+
+    // Decrease item amount
+    *count -= 1;
+    if (*count == 0) *item = 0;
+    sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
+    broadcastPlayerEquipment(player);
+    return;
+  }
+
+  // Special handling for lantern placement (hanging from ceiling vs standing)
+  if (block == B_lantern) {
+    int32_t lx = x, lz = z;
+    int16_t ly = y;
+    switch (face) {
+      case 0: ly -= 1; break;
+      case 1: ly += 1; break;
+      case 2: lz -= 1; break;
+      case 3: lz += 1; break;
+      case 4: lx -= 1; break;
+      case 5: lx += 1; break;
+      default: break;
+    }
+
+    if (!isReplaceableBlock(getBlockAt2(lx, ly, lz, player->dimension))) return;
+
+    uint8_t hanging = (face == 0) ? 1 : 0;
+    if (makeBlockChange(lx, ly, lz, B_lantern, player->dimension)) return;
+    special_block_set_state(lx, ly, lz, player->dimension, B_lantern, horizontal_facing_encode_state(hanging));
+    // Store hanging+1 as backup in the state entry
+    for (int _k = 0; _k < block_changes_count; _k++) {
+      if (block_changes[_k].block == B_lantern &&
+          block_changes[_k].x == lx && block_changes[_k].y == ly && block_changes[_k].z == lz &&
+          _k + 1 < block_changes_count) {
+        block_changes[_k + 1].block = (uint16_t)(hanging + 1);
+        break;
+      }
+    }
+
+    // Broadcast the correct state ID
+    uint16_t state_id = block_palette[B_lantern] - (hanging ? 2 : 0);
+    for (int j = 0; j < MAX_PLAYERS; j++) {
+      if (player_data[j].client_fd == -1) continue;
+      if (player_data[j].flags & 0x20) continue;
+      sc_blockUpdateState(player_data[j].client_fd, lx, ly, lz, state_id);
+    }
+
+    *count -= 1;
+    if (*count == 0) *item = 0;
+    sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
+    broadcastPlayerEquipment(player);
+    return;
+  }
+
+  // Broadcast correct fence state immediately after placement
+  if (is_fence_block(block)) {
+    switch (face) {
+      case 0: y -= 1; break;
+      case 1: y += 1; break;
+      case 2: z -= 1; break;
+      case 3: z += 1; break;
+      case 4: x -= 1; break;
+      case 5: x += 1; break;
+      default: break;
+    }
+    if (!isReplaceableBlock(getBlockAt2(x, y, z, player->dimension))) return;
+    if (makeBlockChange(x, y, z, block, player->dimension)) return;
+
+    // Recompute and broadcast state for the placed fence and all neighbor fences
+    int _nxf[4] = {x, x, x - 1, x + 1};
+    int _nzf[4] = {z - 1, z + 1, z, z};
+    for (int _ni = -1; _ni < 4; _ni++) {
+      int _rx = (_ni < 0) ? x : _nxf[_ni];
+      int _rz = (_ni < 0) ? z : _nzf[_ni];
+      int _ry = y;
+      uint16_t _nb = getBlockAt2(_rx, _ry, _rz, player->dimension);
+      // For neighbors (not the placed block itself), only update if it's a fence
+      if (_ni >= 0 && !is_fence_block(_nb)) continue;
+      // For the placed block itself, also continue if it's somehow not a fence
+      if (_ni < 0 && !is_fence_block(_nb)) continue;
+      uint16_t _nn = getBlockAt2(_rx, _ry, _rz - 1, player->dimension);
+      uint16_t _ne = getBlockAt2(_rx + 1, _ry, _rz, player->dimension);
+      uint16_t _ns = getBlockAt2(_rx, _ry, _rz + 1, player->dimension);
+      uint16_t _nw = getBlockAt2(_rx - 1, _ry, _rz, player->dimension);
+      uint8_t _rn = isFenceSolidBlock(_nn) ? 1 : 0;
+      uint8_t _re = isFenceSolidBlock(_ne) ? 1 : 0;
+      uint8_t _rs = isFenceSolidBlock(_ns) ? 1 : 0;
+      uint8_t _rw = isFenceSolidBlock(_nw) ? 1 : 0;
+      special_block_set_state(_rx, _ry, _rz, player->dimension, _nb, fence_encode_state(_rn, _re, _rs, _rw));
+      uint8_t _conn = _rn | (_re << 1) | (_rs << 2) | (_rw << 3);
+      uint16_t _fsid = get_fence_state_id(_nb, _conn);
+      for (int _j = 0; _j < MAX_PLAYERS; _j++) {
+        if (player_data[_j].client_fd == -1) continue;
+        if (player_data[_j].flags & 0x20) continue;
+        sc_blockUpdateState(player_data[_j].client_fd, _rx, _ry, _rz, _fsid);
+      }
+    }
+    *count -= 1;
+    if (*count == 0) *item = 0;
+    sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
+    broadcastPlayerEquipment(player);
     return;
   }
 
@@ -5803,6 +6091,9 @@ void handleServerTick (int64_t time_since_last_tick) {
   // Wheat growth random tick every ~2 seconds (40 ticks)
   if (server_ticks % 40 == 0) {
     uint32_t seed = fast_rand();
+
+    // First pass: process all registered wheat (both player-planted and
+    // generated wheat that was registered during chunk generation).
     for (int i = 0; i < MAX_SPECIAL_BLOCKS; i++) {
       if (special_blocks[i].block != B_wheat) continue;
       uint16_t age = special_blocks[i].state & 7;
@@ -5810,10 +6101,16 @@ void handleServerTick (int64_t time_since_last_tick) {
       uint16_t current = getBlockAt2(
         special_blocks[i].x, special_blocks[i].y, special_blocks[i].z,
         special_blocks[i].dimension);
-      if (current != B_wheat) continue;
+      // Accept both player-planted wheat (B_wheat) and generated wheat (B_wheat_1..B_wheat_6)
+      if (current != B_wheat && (current <= B_wheat || current >= B_wheat_7)) continue;
       if ((seed >> (i & 31)) & 1) {
         age++;
         special_blocks[i].state = age;
+        // For generated wheat (current > B_wheat), convert to planted form so
+        // the chunk section's default palette state doesn't override our updates.
+        if (current > B_wheat) {
+          makeBlockChange(special_blocks[i].x, special_blocks[i].y, special_blocks[i].z, B_wheat, special_blocks[i].dimension);
+        }
         // Broadcast the new visual state to all players
         uint16_t state_id = block_palette[B_wheat] + age;
         for (int j = 0; j < MAX_PLAYERS; j++) {
@@ -5827,6 +6124,7 @@ void handleServerTick (int64_t time_since_last_tick) {
         }
       }
     }
+
   }
 
   /**

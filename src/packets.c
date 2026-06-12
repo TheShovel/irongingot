@@ -663,6 +663,31 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
           if (_t == B_chest) { \
             uint8_t _d = (_pv >> 9) & 3; \
             val = get_oriented_state_id(_t, _d); \
+          } else if (is_stair_block(_t)) { \
+            uint8_t _d = (_pv >> 9) & 3; \
+            uint8_t _h = (_pv >> 11) & 1; \
+            val = get_stair_state_id(_t, _h, _d); \
+          } else if (is_trapdoor_block(_t)) { \
+            uint8_t _d = (_pv >> 9) & 3; \
+            uint8_t _h = (_pv >> 11) & 1; \
+            uint8_t _o = (_pv >> 12) & 1; \
+            val = get_trapdoor_state_id(_t, _o, _d, _h); \
+          } else if (is_fence_block(_t)) { \
+            uint8_t _n = (_pv >> 9) & 1; \
+            uint8_t _e = (_pv >> 10) & 1; \
+            uint8_t _s = (_pv >> 11) & 1; \
+            uint8_t _w = (_pv >> 12) & 1; \
+            uint8_t _conn = _n | (_e << 1) | (_s << 2) | (_w << 3); \
+            val = get_fence_state_id(_t, _conn); \
+          } else if (is_horizontal_facing_block(_t)) { \
+            uint8_t _d = (_pv >> 9) & 3; \
+            val = get_horizontal_state_id(_t, _d); \
+          } else if (_t == B_barrel) { \
+            uint8_t _d = (_pv >> 9) & 7; \
+            val = get_oriented_state_id(_t, _d); \
+          } else if (_t == B_lantern) { \
+            uint8_t _h = (_pv >> 9) & 1; \
+            val = block_palette[_t] - (_h ? 2 : 0); \
           } else { \
             uint8_t _d = (_pv >> 9) & 3; \
             uint8_t _h = (_pv >> 12) & 1; \
@@ -858,8 +883,12 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
     if (block_changes_snapshot[i].dimension != dimension) continue;
     if (
       block_changes_snapshot[i].block != B_torch &&
+      block_changes_snapshot[i].block != B_wheat &&
+      block_changes_snapshot[i].block != B_lantern &&
       !isOrientedBlock(block_changes_snapshot[i].block) &&
-      !isStairBlock(block_changes_snapshot[i].block)
+      !isStairBlock(block_changes_snapshot[i].block) &&
+      !is_fence_block(block_changes_snapshot[i].block) &&
+      !is_horizontal_facing_block(block_changes_snapshot[i].block)
       #ifdef ALLOW_DOORS
       && !isDoorBlock(block_changes_snapshot[i].block)
       && !isTrapdoorBlock(block_changes_snapshot[i].block)
@@ -870,7 +899,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
       if (block_changes_snapshot[i].block == B_chest) {
         if (i + 14 >= block_changes_snapshot_count) continue;
         i += 14;
-      } else if (isStairBlock(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_furnace) i += 1;
+      } else if (isStairBlock(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_furnace || block_changes_snapshot[i].block == B_lantern) i += 1;
       else if (isDoorBlock(block_changes_snapshot[i].block)) i += 2;
       continue;
     }
@@ -878,7 +907,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
       if (block_changes_snapshot[i].block == B_chest) {
         if (i + 14 >= block_changes_snapshot_count) continue;
         i += 14;
-      } else if (isStairBlock(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_furnace) i += 1;
+      } else if (isStairBlock(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_furnace || block_changes_snapshot[i].block == B_lantern) i += 1;
       else if (isDoorBlock(block_changes_snapshot[i].block)) i += 2;
       continue;
     }
@@ -963,6 +992,19 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
       continue;
     }
 
+    if (block_changes_snapshot[i].block == B_lantern) {
+      uint16_t state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].dimension);
+      uint8_t hanging = state & 1;
+      // If state is 0, try to recover from the state entry backup (hanging+1 stored in block_changes[i+1].block)
+      if (state == 0 && i + 1 < block_changes_snapshot_count) {
+        uint16_t backup = block_changes_snapshot[i + 1].block;
+        if (backup >= 1 && backup <= 2) hanging = (uint8_t)(backup - 1);
+      }
+      uint16_t state_id = block_palette[B_lantern] - (hanging ? 2 : 0);
+      sc_blockUpdateState(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, state_id);
+      continue;
+    }
+
     if (block_changes_snapshot[i].block == B_wheat) {
       uint16_t state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].dimension);
       uint16_t age = state & 7;
@@ -973,10 +1015,56 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
       continue;
     }
 
+    if (is_fence_block(block_changes_snapshot[i].block)) {
+      uint16_t state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].dimension);
+      uint8_t north = fence_get_north(state);
+      uint8_t east  = fence_get_east(state);
+      uint8_t south = fence_get_south(state);
+      uint8_t west  = fence_get_west(state);
+      uint8_t connections = north | (east << 1) | (south << 2) | (west << 3);
+      uint16_t state_id = get_fence_state_id(block_changes_snapshot[i].block, connections);
+      sc_blockUpdateState(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, state_id);
+      continue;
+    }
+
+    if (is_horizontal_facing_block(block_changes_snapshot[i].block)) {
+      uint16_t state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].dimension);
+      uint8_t direction = state & 3;
+      // If state is 0 (missing entry), try to recover from the state entry backup.
+      // The torch handler stores direction+1 in block_changes[i+1].block.
+      if (state == 0 && i + 1 < block_changes_snapshot_count) {
+        uint16_t backup = block_changes_snapshot[i + 1].block;
+        if (backup >= 1 && backup <= 4) direction = (uint8_t)(backup - 1);
+      }
+      uint16_t state_id = get_horizontal_state_id(block_changes_snapshot[i].block, direction);
+      sc_blockUpdateState(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, state_id);
+      continue;
+    }
+
     sc_blockUpdate(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].block);
   }
 
-  // Send updates for generated doors and chests (not in block changes).
+  // Scan chunk sections for generated wheat not yet registered in the special
+  // blocks table, and register it so the growth tick handler will find it.
+  for (int i = 0; i < terrain_sections; i++) {
+    int scan_y = (dimension == DIMENSION_NETHER) ? i * 16 : i * 16;
+    uint16_t *scan_sec = cached_sections[i];
+    for (int j = 0; j < 4096; j++) {
+      uint16_t raw = scan_sec[j];
+      if (raw >= B_wheat && raw < B_wheat_7 && !(raw & 0x8000)) {
+        int s_addr = (j & ~7) | (7 - (j & 7));
+        int s_wx = x + (s_addr & 15);
+        int s_wz = z + ((s_addr >> 4) & 15);
+        int s_wy = scan_y + (s_addr >> 8);
+        if (!special_block_has_entry(s_wx, s_wy, s_wz, dimension)) {
+          special_block_set_state(s_wx, s_wy, s_wz, dimension, B_wheat, (uint16_t)(raw - B_wheat));
+        }
+      }
+    }
+  }
+
+  // Send updates for generated doors, chests, stairs, trapdoors, fences, and
+  // horizontal-facing blocks (not in block changes).
   // Chunk data has packed values; correct state and special_block entries
   // are applied here. This covers village houses as well as underground dungeons.
   #ifdef ALLOW_DOORS
@@ -988,7 +1076,9 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
     for (int j = 0; j < 4096; j++) {
       uint16_t raw = section[j];
       uint16_t block_type = (raw & 0x8000) ? (raw & 0x1FF) : raw;
-      if (!isDoorBlock(block_type) && block_type != B_chest) continue;
+      if (!isDoorBlock(block_type) && block_type != B_chest && block_type != B_barrel && block_type != B_lantern &&
+          !isStairBlock(block_type) && !isTrapdoorBlock(block_type) &&
+          !is_fence_block(block_type) && !is_horizontal_facing_block(block_type)) continue;
 
       int address = (j & ~7) | (7 - (j & 7));
       int wx = x + (address & 15);
@@ -1023,7 +1113,32 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
           processed_generated[num_generated][2] = wz;
           num_generated++;
         }
-      } else {
+      } else if (block_type == B_barrel) {
+        // Decode direction (3 bits, bits 9-11) from raw; barrel with closed state
+        uint8_t direction = (raw >> 9) & 7;
+        if (!special_block_has_entry(wx, wy, wz, dimension))
+          special_block_set_state(wx, wy, wz, dimension, block_type, barrel_encode_state(direction, 0));
+        uint16_t state_id = get_oriented_state_id(block_type, direction);
+        sc_blockUpdateState(client_fd, wx, wy, wz, state_id);
+        if (num_generated < 62) {
+          processed_generated[num_generated][0] = wx;
+          processed_generated[num_generated][1] = wy;
+          processed_generated[num_generated][2] = wz;
+          num_generated++;
+        }
+      } else if (block_type == B_lantern) {
+        // Decode hanging (bit 9) from raw; waterlogged=false
+        uint8_t hanging = (raw >> 9) & 1;
+        // Lantern states: hanging=false(0)=default, hanging=true(2)=default-2
+        uint16_t state_id = block_palette[B_lantern] - (hanging ? 2 : 0);
+        sc_blockUpdateState(client_fd, wx, wy, wz, state_id);
+        if (num_generated < 62) {
+          processed_generated[num_generated][0] = wx;
+          processed_generated[num_generated][1] = wy;
+          processed_generated[num_generated][2] = wz;
+          num_generated++;
+        }
+      } else if (isDoorBlock(block_type)) {
         // Read existing state or init default
         if (!special_block_has_entry(wx, wy, wz, dimension)) {
           uint16_t vs = door_encode_state(0, 0, 1);
@@ -1048,6 +1163,65 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
         if (num_generated < 62) {
           processed_generated[num_generated][0] = wx;
           processed_generated[num_generated][1] = wy + 1;
+          processed_generated[num_generated][2] = wz;
+          num_generated++;
+        }
+      } else if (isStairBlock(block_type)) {
+        // Decode facing (bits 9-10) and half (bit 11) from raw
+        uint8_t direction = (raw >> 9) & 3;
+        uint8_t half = (raw >> 11) & 1;
+        if (!special_block_has_entry(wx, wy, wz, dimension))
+          special_block_set_state(wx, wy, wz, dimension, block_type, stair_encode_state(half, direction));
+        uint16_t state_id = get_stair_state_id(block_type, half, direction);
+        sc_blockUpdateState(client_fd, wx, wy, wz, state_id);
+        if (num_generated < 62) {
+          processed_generated[num_generated][0] = wx;
+          processed_generated[num_generated][1] = wy;
+          processed_generated[num_generated][2] = wz;
+          num_generated++;
+        }
+      } else if (isTrapdoorBlock(block_type)) {
+        // Decode facing (bits 9-10), half (bit 11), open (bit 12) from raw
+        uint8_t direction = (raw >> 9) & 3;
+        uint8_t half = (raw >> 11) & 1;
+        uint8_t open = (raw >> 12) & 1;
+        if (!special_block_has_entry(wx, wy, wz, dimension))
+          special_block_set_state(wx, wy, wz, dimension, block_type, trapdoor_encode_state(open, half, direction));
+        uint16_t state_id = get_trapdoor_state_id(block_type, open, direction, half);
+        sc_blockUpdateState(client_fd, wx, wy, wz, state_id);
+        if (num_generated < 62) {
+          processed_generated[num_generated][0] = wx;
+          processed_generated[num_generated][1] = wy;
+          processed_generated[num_generated][2] = wz;
+          num_generated++;
+        }
+      } else if (is_fence_block(block_type)) {
+        // Decode connections from raw: bit9=north, bit10=east, bit11=south, bit12=west
+        uint8_t north = (raw >> 9) & 1;
+        uint8_t east  = (raw >> 10) & 1;
+        uint8_t south = (raw >> 11) & 1;
+        uint8_t west  = (raw >> 12) & 1;
+        uint8_t connections = north | (east << 1) | (south << 2) | (west << 3);
+        if (!special_block_has_entry(wx, wy, wz, dimension))
+          special_block_set_state(wx, wy, wz, dimension, block_type, fence_encode_state(north, east, south, west));
+        uint16_t state_id = get_fence_state_id(block_type, connections);
+        sc_blockUpdateState(client_fd, wx, wy, wz, state_id);
+        if (num_generated < 62) {
+          processed_generated[num_generated][0] = wx;
+          processed_generated[num_generated][1] = wy;
+          processed_generated[num_generated][2] = wz;
+          num_generated++;
+        }
+      } else if (is_horizontal_facing_block(block_type)) {
+        // Decode facing direction (bits 9-10) from raw
+        uint8_t direction = (raw >> 9) & 3;
+        if (!special_block_has_entry(wx, wy, wz, dimension))
+          special_block_set_state(wx, wy, wz, dimension, block_type, horizontal_facing_encode_state(direction));
+        uint16_t state_id = get_horizontal_state_id(block_type, direction);
+        sc_blockUpdateState(client_fd, wx, wy, wz, state_id);
+        if (num_generated < 62) {
+          processed_generated[num_generated][0] = wx;
+          processed_generated[num_generated][1] = wy;
           processed_generated[num_generated][2] = wz;
           num_generated++;
         }

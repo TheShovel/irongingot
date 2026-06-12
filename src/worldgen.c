@@ -14,6 +14,7 @@
 #include "perlin.h"
 #include "generator.h"
 #include "special_block.h"
+#include "generated_village_templates.h"
 
 // build_registries.js now emits these stronghold-specific palette entries.
 // If a developer has older generated registries locally, fall back to existing
@@ -44,6 +45,60 @@
 #endif
 #ifndef B_spawner
 #define B_spawner B_cobweb
+#endif
+#ifndef B_dirt_path
+#define B_dirt_path B_coarse_dirt
+#endif
+#ifndef B_sandstone_slab
+#define B_sandstone_slab B_cut_sandstone
+#endif
+#ifndef B_farmland
+#define B_farmland B_dirt
+#endif
+#ifndef B_wheat
+#define B_wheat B_short_grass
+#endif
+#ifndef B_wheat_7
+#define B_wheat_7 B_wheat
+#endif
+#ifndef B_lectern
+#define B_lectern B_bookshelf
+#endif
+#ifndef B_fletching_table
+#define B_fletching_table B_crafting_table
+#endif
+#ifndef B_smithing_table
+#define B_smithing_table B_crafting_table
+#endif
+#ifndef B_blast_furnace
+#define B_blast_furnace B_furnace
+#endif
+#ifndef B_smoker
+#define B_smoker B_furnace
+#endif
+#ifndef B_brewing_stand
+#define B_brewing_stand B_crafting_table
+#endif
+#ifndef B_cartography_table
+#define B_cartography_table B_crafting_table
+#endif
+#ifndef B_grindstone
+#define B_grindstone B_stone
+#endif
+#ifndef B_loom
+#define B_loom B_crafting_table
+#endif
+#ifndef B_stonecutter
+#define B_stonecutter B_stone
+#endif
+#ifndef B_cauldron
+#define B_cauldron B_iron_block
+#endif
+#ifndef B_hay_block
+#define B_hay_block B_bamboo_block
+#endif
+#ifndef B_white_wool
+#define B_white_wool B_snow_block
 #endif
 #ifndef W_the_end
 #define W_the_end W_plains
@@ -1131,119 +1186,388 @@ static uint8_t isVillageHouseBiome(uint8_t biome) {
   }
 }
 
-static uint16_t getVillageBlockAt(int x, int y, int z) {
-  int vx = div_floor(x, 48);
-  int vz = div_floor(z, 48);
+#define VILLAGE_SPACING 128
+#define VILLAGE_PROFESSION_COUNT 13
 
+#define VILLAGE_PROF_FARMER 0
+#define VILLAGE_PROF_LIBRARIAN 1
+#define VILLAGE_PROF_CLERIC 2
+#define VILLAGE_PROF_ARMORER 3
+#define VILLAGE_PROF_BUTCHER 4
+#define VILLAGE_PROF_CARTOGRAPHER 5
+#define VILLAGE_PROF_FISHERMAN 6
+#define VILLAGE_PROF_FLETCHER 7
+#define VILLAGE_PROF_LEATHERWORKER 8
+#define VILLAGE_PROF_MASON 9
+#define VILLAGE_PROF_SHEPHERD 10
+#define VILLAGE_PROF_TOOLSMITH 11
+#define VILLAGE_PROF_WEAPONSMITH 12
+
+#define VILLAGE_STYLE_PLAINS 0
+#define VILLAGE_STYLE_DESERT 1
+#define VILLAGE_STYLE_SAVANNA 2
+#define VILLAGE_STYLE_TAIGA 3
+#define VILLAGE_STYLE_SNOWY 4
+
+
+typedef struct {
+  int cx;
+  int cz;
+  uint64_t key;
+  uint8_t biome;
+  uint8_t houses;
+  int center_y;
+  int hx[16];
+  int hz[16];
+  int hy[16];
+  uint8_t variant[16];
+  uint8_t profession[16];
+} VillageLayout;
+
+static uint8_t buildVillageLayoutForCell(int vx, int vz, VillageLayout *layout) {
   uint64_t key = splitmix64(((uint64_t)(uint32_t)vx * 1234567 ^ (uint64_t)(uint32_t)vz * 7654321) ^ world_seed);
-  if ((uint32_t)(key % 8) != 0) return 0xFFFF;
+  if ((uint32_t)(key % 4) != 0) return 0;
 
-  // Keep village center ≥18 blocks from either 48-block boundary so
-  // houses (offset -15..+16, radius 3) stay within their own area
-  int cx = vx * 48 + 18 + (int)((key >> 8) % 11);
-  int cz = vz * 48 + 18 + (int)((key >> 16) % 11);
+  int cx = vx * VILLAGE_SPACING + 56 + (int)((key >> 8) % 17);
+  int cz = vz * VILLAGE_SPACING + 56 + (int)((key >> 16) % 17);
+  uint8_t biome = getChunkBiome(div_floor(cx, 32), div_floor(cz, 32));
+  if (!isVillageHouseBiome(biome)) return 0;
 
-  int num_houses = 3 + (int)((key >> 24) % 4);
+  layout->cx = cx;
+  layout->cz = cz;
+  layout->key = key;
+  layout->biome = biome;
+  layout->houses = 0;
+  layout->center_y = getHeightAt(cx, cz);
+  if (layout->center_y < 63) return 0;
 
-  // Pre-compute house positions with minimum 8-block spacing
-  int hx_list[8], hz_list[8];
-  int placed = 0;
-  for (int i = 0; i < num_houses && placed < 8; i++) {
-    uint64_t hkey = splitmix64(key ^ (uint64_t)i * 31337);
-    int hx = cx + (int)(hkey & 31) - 15;
-    int hz = cz + (int)((hkey >> 8) & 31) - 15;
+  static const int8_t off_x[VILLAGE_PROFESSION_COUNT] = { 18, -18,   0,  34, -34,  34, -34,  18, -18,  42, -42,  18, -18 };
+  static const int8_t off_z[VILLAGE_PROFESSION_COUNT] = { -8,  -8, -30,  -8,  -8,  16,  16,  36,  36, -32, -32, -42, -42 };
 
-    int ok = 1;
-    for (int j = 0; j < placed; j++) {
-      int dx = hx_list[j] - hx; if (dx < 0) dx = -dx;
-      int dz = hz_list[j] - hz; if (dz < 0) dz = -dz;
-      if (dx < 8 && dz < 8) { ok = 0; break; }
-    }
-    if (ok) { hx_list[placed] = hx; hz_list[placed] = hz; placed++; }
+  for (int i = 0; i < VILLAGE_PROFESSION_COUNT && layout->houses < 16; i++) {
+    int hx = cx + off_x[i];
+    int hz = cz + off_z[i];
+    int hy = getHeightAt(hx, hz);
+    if (hy < 63) continue;
+
+    uint8_t idx = layout->houses++;
+    layout->hx[idx] = hx;
+    layout->hz[idx] = hz;
+    layout->hy[idx] = hy;
+    layout->variant[idx] = (uint8_t)((key >> (i + 28)) & 1ULL);
+    layout->profession[idx] = (uint8_t)i;
   }
 
-  for (int i = 0; i < placed; i++) {
-    int hx = hx_list[i];
-    int hz = hz_list[i];
+  return layout->houses > 0;
+}
 
+static uint8_t getVillageLayout(int x, int z, VillageLayout *layout) {
+  int vx = div_floor(x, VILLAGE_SPACING);
+  int vz = div_floor(z, VILLAGE_SPACING);
+
+  static TLS_STORAGE int cached_vx = 0x7FFFFFFF;
+  static TLS_STORAGE int cached_vz = 0x7FFFFFFF;
+  static TLS_STORAGE uint8_t cached_exists = 0;
+  static TLS_STORAGE VillageLayout cached_layout;
+
+  if (cached_vx != vx || cached_vz != vz) {
+    cached_vx = vx;
+    cached_vz = vz;
+    cached_exists = buildVillageLayoutForCell(vx, vz, &cached_layout);
+  }
+
+  if (!cached_exists) return 0;
+  if (layout != NULL) memcpy(layout, &cached_layout, sizeof(VillageLayout));
+  return 1;
+}
+
+static void getVillagePalette(uint8_t biome, uint8_t variant, uint16_t *wall, uint16_t *roof, uint16_t *pillar, uint16_t *roof_slab, uint16_t *door, uint16_t *fence) {
+  *wall = (variant == 1) ? B_cobblestone : B_oak_planks;
+  *roof = B_oak_planks;
+  *pillar = B_oak_log;
+  *roof_slab = B_oak_slab;
+  *door = B_oak_door;
+  *fence = B_oak_fence;
+
+  switch (biome) {
+    case W_desert:
+      *wall = (variant == 1) ? B_cut_sandstone : B_sandstone;
+      *roof = B_sandstone;
+      *pillar = B_sandstone;
+      *roof_slab = B_sandstone_slab;
+      *fence = B_cobblestone;
+      break;
+    case W_savanna:
+      *wall = (variant == 1) ? B_cobblestone : B_acacia_planks;
+      *roof = B_acacia_planks;
+      *pillar = B_acacia_log;
+      *roof_slab = B_acacia_slab;
+      *door = B_acacia_door;
+      *fence = B_acacia_fence;
+      break;
+    case W_taiga: case W_old_growth_pine_taiga: case W_snowy_taiga:
+      *wall = (variant == 1) ? B_cobblestone : B_spruce_planks;
+      *roof = (biome == W_snowy_taiga) ? B_snow_block : B_spruce_planks;
+      *pillar = B_spruce_log;
+      *roof_slab = B_spruce_slab;
+      *door = B_spruce_door;
+      *fence = B_spruce_fence;
+      break;
+    case W_birch_forest:
+      *wall = (variant == 1) ? B_cobblestone : B_birch_planks;
+      *roof = B_birch_planks;
+      *pillar = B_birch_log;
+      *roof_slab = B_birch_slab;
+      *door = B_birch_door;
+      *fence = B_birch_fence;
+      break;
+  }
+}
+
+static uint16_t getVillagePathBlockAt(int x, int y, int z, uint8_t surface, VillageLayout *v) {
+  int dx = x - v->cx;
+  int dz = z - v->cz;
+  int adx = dx < 0 ? -dx : dx;
+  int adz = dz < 0 ? -dz : dz;
+
+  if (adx <= 5 && adz <= 5) {
+    int rel_y = y - v->center_y;
+
+    // Meeting point: well at center, path-covered plaza.
+    if (rel_y == 0) {
+      if (adx == 0 && adz == 0) return B_water;
+      if (adx <= 1 && adz <= 1) return B_cobblestone;
+      return B_dirt_path;
+    }
+  }
+
+  uint8_t on_road = (adx <= 2 && adz <= 50) || (adz <= 2 && adx <= 50);
+  for (int i = 0; i < v->houses && !on_road; i++) {
+    int hx = v->hx[i];
+    int hz = v->hz[i];
+    if (((x >= hx - 2 && x <= hx + 2) && ((z >= hz && z <= v->cz) || (z <= hz && z >= v->cz))) ||
+        ((z >= hz - 2 && z <= hz + 2) && ((x >= hx && x <= v->cx) || (x <= hx && x >= v->cx)))) {
+      on_road = 1;
+    }
+  }
+
+  if (on_road) {
+    if (y == surface) return (v->biome == W_desert) ? B_sandstone : B_dirt_path;
+  }
+
+  return 0xFFFF;
+}
+
+static uint8_t getVillageTemplateStyleForBiome(uint8_t biome) {
+  switch (biome) {
+    case W_desert:
+      return VILLAGE_STYLE_DESERT;
+    case W_savanna:
+    case W_windswept_savanna:
+      return VILLAGE_STYLE_SAVANNA;
+    case W_taiga:
+    case W_old_growth_pine_taiga:
+      return VILLAGE_STYLE_TAIGA;
+    case W_snowy_taiga:
+    case W_snowy_plains:
+      return VILLAGE_STYLE_SNOWY;
+    default:
+      return VILLAGE_STYLE_PLAINS;
+  }
+}
+
+static uint16_t getVillageProfessionJobBlock(uint8_t profession) {
+  switch (profession) {
+    case VILLAGE_PROF_FARMER: return B_composter;
+    case VILLAGE_PROF_LIBRARIAN: return B_lectern;
+    case VILLAGE_PROF_CLERIC: return B_brewing_stand;
+    case VILLAGE_PROF_ARMORER: return B_blast_furnace;
+    case VILLAGE_PROF_BUTCHER: return B_smoker;
+    case VILLAGE_PROF_CARTOGRAPHER: return B_cartography_table;
+    case VILLAGE_PROF_FISHERMAN: return B_barrel;
+    case VILLAGE_PROF_FLETCHER: return B_fletching_table;
+    case VILLAGE_PROF_LEATHERWORKER: return B_cauldron;
+    case VILLAGE_PROF_MASON: return B_stonecutter;
+    case VILLAGE_PROF_SHEPHERD: return B_loom;
+    case VILLAGE_PROF_TOOLSMITH: return B_smithing_table;
+    case VILLAGE_PROF_WEAPONSMITH: return B_grindstone;
+    default: return B_crafting_table;
+  }
+}
+
+static uint8_t villageProfessionUsesStone(uint8_t profession) {
+  return profession == VILLAGE_PROF_CLERIC ||
+         profession == VILLAGE_PROF_ARMORER ||
+         profession == VILLAGE_PROF_MASON ||
+         profession == VILLAGE_PROF_TOOLSMITH ||
+         profession == VILLAGE_PROF_WEAPONSMITH;
+}
+
+static uint16_t getVillageProfessionStructureBlockAt(int dx, int dz, int rel_y, uint8_t profession, uint8_t biome, uint8_t variant) {
+  int adx = dx < 0 ? -dx : dx;
+  int adz = dz < 0 ? -dz : dz;
+
+  if (profession == VILLAGE_PROF_FARMER) {
+    if (adx > 5 || adz > 5 || rel_y < 0 || rel_y > 2) return 0xFFFF;
+    if (rel_y == 0) {
+      if (adx == 5 || adz == 5) return (biome == W_desert) ? B_sandstone : B_oak_log;
+      if (dx == 0) return B_water;
+      return B_farmland;
+    }
+    if (rel_y == 1) {
+      if (dx == 5 && dz == 0) return B_composter;
+      if ((dx == -5 && dz == -5) || (dx == -5 && dz == 5)) return B_hay_block;
+      if (adx < 5 && adz < 5 && dx != 0) return B_wheat_7;
+      return B_air;
+    }
+    return B_air;
+  }
+
+  uint16_t wall, roof, pillar, roof_slab, door, fence;
+  getVillagePalette(biome, variant, &wall, &roof, &pillar, &roof_slab, &door, &fence);
+  (void)fence;
+
+  if (villageProfessionUsesStone(profession)) {
+    wall = (biome == W_desert) ? B_sandstone : B_cobblestone;
+    roof = (biome == W_desert) ? B_cut_sandstone : B_cobblestone;
+    roof_slab = (biome == W_desert) ? B_sandstone_slab : B_cobblestone_slab;
+    pillar = (biome == W_desert) ? B_sandstone : B_oak_log;
+  }
+
+  int half_x = (profession == VILLAGE_PROF_LIBRARIAN || profession == VILLAGE_PROF_CLERIC) ? 4 : 3;
+  int half_z = (profession == VILLAGE_PROF_LIBRARIAN || profession == VILLAGE_PROF_CLERIC) ? 4 : 3;
+  if (adx > half_x + 1 || adz > half_z + 1 || rel_y < 0 || rel_y > 5) return 0xFFFF;
+
+  if (rel_y == 5) {
+    if ((profession == VILLAGE_PROF_CLERIC || profession == VILLAGE_PROF_LIBRARIAN) && adx <= half_x - 1 && adz <= half_z - 1) return roof_slab;
+    return 0xFFFF;
+  }
+
+  if (rel_y == 4) {
+    if (adx == half_x + 1 || adz == half_z + 1) return roof_slab;
+    if (adx <= half_x && adz <= half_z) return roof;
+    return 0xFFFF;
+  }
+
+  if (adx > half_x || adz > half_z) return 0xFFFF;
+  if (rel_y == 0) return (biome == W_desert) ? B_sandstone : B_cobblestone;
+
+  if (dx == half_x && dz == 0 && rel_y >= 1 && rel_y <= 2) {
+    uint16_t pd = 0x8000 | door;
+    pd |= (1 << 9);
+    if (rel_y == 2) pd |= (1 << 14);
+    return pd;
+  }
+
+  if (rel_y == 1) {
+    uint16_t job = getVillageProfessionJobBlock(profession);
+    if (dx == -half_x + 1 && dz == 0) return job;
+    if (profession == VILLAGE_PROF_LIBRARIAN && dx == -half_x + 1 && (dz == -1 || dz == 1)) return B_bookshelf;
+    if (profession == VILLAGE_PROF_SHEPHERD && dx == -half_x + 1 && (dz == -1 || dz == 1)) return B_white_wool;
+    if ((profession == VILLAGE_PROF_ARMORER || profession == VILLAGE_PROF_TOOLSMITH || profession == VILLAGE_PROF_WEAPONSMITH) && dx == -half_x + 1 && dz == 1) return B_iron_block;
+    if (profession == VILLAGE_PROF_BUTCHER && dx == -half_x + 1 && dz == 1) return B_hay_block;
+    if (profession == VILLAGE_PROF_FISHERMAN && dx == -half_x + 1 && dz == 1) return B_water;
+  }
+
+  if (rel_y == 2) {
+    if (profession == VILLAGE_PROF_LIBRARIAN && dx == -half_x + 1 && (dz == -1 || dz == 1)) return B_bookshelf;
+    if (dx == -half_x && dz == 0) return B_glass;
+    if (dx == 0 && (dz == -half_z || dz == half_z)) return B_glass;
+    if (dx == half_x && (dz == -1 || dz == 1)) return B_glass;
+  }
+
+  if ((adx == half_x && adz == half_z) && rel_y >= 1 && rel_y <= 3) return pillar;
+  if (dx == -half_x || dx == half_x || dz == -half_z || dz == half_z) return wall;
+
+  return B_air;
+}
+
+static uint16_t getVillageBlockAt(int x, int y, int z, uint8_t height) {
+  VillageLayout v;
+  if (!getVillageLayout(x, z, &v)) return 0xFFFF;
+
+  int dx_center = x - v.cx;
+  int dz_center = z - v.cz;
+  int adx_center = dx_center < 0 ? -dx_center : dx_center;
+  int adz_center = dz_center < 0 ? -dz_center : dz_center;
+  uint8_t near_village_part = (adx_center <= 50 && adz_center <= 4) || (adz_center <= 50 && adx_center <= 4) || (adx_center <= 5 && adz_center <= 5);
+
+  for (int i = 0; i < v.houses && !near_village_part; i++) {
+    int hdx = x - v.hx[i]; if (hdx < 0) hdx = -hdx;
+    int hdz = z - v.hz[i]; if (hdz < 0) hdz = -hdz;
+    if (hdx <= 10 && hdz <= 10) near_village_part = 1;
+    if (!near_village_part && ((x >= v.hx[i] - 2 && x <= v.hx[i] + 2) || (z >= v.hz[i] - 2 && z <= v.hz[i] + 2))) {
+      if ((x >= v.hx[i] && x <= v.cx) || (x <= v.hx[i] && x >= v.cx) ||
+          (z >= v.hz[i] && z <= v.cz) || (z <= v.hz[i] && z >= v.cz)) near_village_part = 1;
+    }
+  }
+  if (!near_village_part) return 0xFFFF;
+
+  for (int i = 0; i < v.houses; i++) {
+    int hx = v.hx[i];
+    int hz = v.hz[i];
     int dx = x - hx;
     int dz = z - hz;
-    int adx = dx < 0 ? -dx : dx;
-    int adz = dz < 0 ? -dz : dz;
-    if (adx > 3 || adz > 3) continue;
-
-    int house_height = getHeightAt(hx, hz);
-    if (house_height < 63) continue;
-
-    int rel_y = y - house_height;
-    if (rel_y < 0 || rel_y > 4) continue;
-
-    // Check biome at house center (not per-block) so houses aren't cut off at
-    // biome or chunk borders
+    int rel_y = y - v.hy[i];
     uint8_t house_biome = getChunkBiome(div_floor(hx, 32), div_floor(hz, 32));
-    if (!isVillageHouseBiome(house_biome)) return 0xFFFF;
+    if (!isVillageHouseBiome(house_biome)) continue;
 
-    uint16_t wall = B_oak_planks;
-    uint16_t roof = B_oak_planks;
-    uint16_t pillar = B_oak_log;
-    uint16_t roof_slab = B_oak_slab;
-    uint16_t door = B_oak_door;
-    switch (house_biome) {
-      case W_desert:
-        wall = B_sandstone; roof = B_sandstone; pillar = B_sandstone; roof_slab = B_cut_sandstone; break;
-      case W_savanna:
-        wall = B_acacia_planks; roof = B_acacia_planks; pillar = B_acacia_log; roof_slab = B_acacia_slab;
-        door = B_acacia_door; break;
-      case W_taiga: case W_old_growth_pine_taiga:
-        wall = B_spruce_planks; roof = B_spruce_planks; pillar = B_spruce_log; roof_slab = B_spruce_slab;
-        door = B_spruce_door; break;
-      case W_snowy_taiga:
-        wall = B_spruce_planks; roof = B_snow_block; pillar = B_spruce_log; roof_slab = B_spruce_slab;
-        door = B_spruce_door; break;
-      case W_birch_forest:
-        wall = B_birch_planks; roof = B_birch_planks; pillar = B_birch_log; roof_slab = B_birch_slab;
-        door = B_birch_door; break;
-    }
+    uint8_t style = getVillageTemplateStyleForBiome(house_biome);
 
-    // Roof with 1-block overhang (7x7); outer ring uses slabs for a border
-    if (rel_y == 4) {
-      if (adx == 3 || adz == 3) return roof_slab;
-      return roof;
-    }
-
-    // Floor/walls: 5x5 footprint
-    if (adx > 2 || adz > 2) continue;
-
-    if (rel_y == 0) return wall;
-
-    if ((dx == 2 || dx == -2) && (dz == 2 || dz == -2)) return pillar;
-
-    if (dx == 2 && dz == 0 && rel_y >= 1 && rel_y <= 2) {
-      uint16_t pd = 0x8000 | door;
-      pd |= (1 << 9);
-      if (rel_y == 2) pd |= (1 << 14);
-      return pd;
-    }
-
-    if (rel_y == 2) {
-      if (dx == -2 && dz == 0) return B_glass;
-      if (dx == 0 && (dz == -2 || dz == 2)) return B_glass;
-      if (dx == 2 && (dz == -1 || dz == 1)) return B_glass;
-    }
-
-    if (dx == -2 || dx == 2 || dz == -2 || dz == 2) return wall;
-
-    // Chest at rel_y=1 at back-center position (~75% chance)
-    // Chest facing: north=0, south=1, west=2, east=3 (JSON property order)
-    if (rel_y == 1 && dx == -1 && dz == 0) {
-      uint32_t _ch = (uint32_t)(x * 1013 ^ y * 3929 ^ z * 7027);
-      if ((_ch & 3) != 0) {
-        return 0x8000 | B_chest | (3 << 9);
+    // Check if this position falls within the template's horizontal footprint.
+    // We need the template's size and origin to determine the bounds.
+    const VillageTemplate *vt = &village_templates[style][v.profession[i]];
+    int in_footprint = 0;
+    if (vt->block_count > 0) {
+      int lx = dx + (int)vt->origin_x;
+      int lz = dz + (int)vt->origin_z;
+      if (lx >= 0 && lx < (int)vt->size_x && lz >= 0 && lz < (int)vt->size_z) {
+        in_footprint = 1;
       }
     }
 
-    return B_air;
+    // Terrain integration: fill gaps below building floors and clear terrain
+    // that would protrude into the structure.
+    uint16_t template_block = getVillageTemplateBlockAt(style, v.profession[i], dx, rel_y, dz);
+    if (template_block != VILLAGE_TEMPLATE_NONE) return template_block;
+
+    if (in_footprint) {
+      if (rel_y < 0) {
+        // Below the floor — fill with natural terrain blocks so the
+        // ground under buildings blends with the surrounding terrain.
+        // Use grass at the surface level, dirt below, sand for desert.
+        uint16_t fill_block;
+        if (house_biome == W_desert) {
+          fill_block = (rel_y >= -2) ? B_sand : B_sandstone;
+        } else {
+          fill_block = (rel_y == -1) ? B_grass_block : B_dirt;
+        }
+        // Only fill if this column has template blocks above that need support.
+        int has_block_above = 0;
+        for (int check_y = 0; check_y < (int)vt->size_y && !has_block_above; check_y++) {
+          if (getVillageTemplateBlockAt(style, v.profession[i], dx, check_y, dz) != VILLAGE_TEMPLATE_NONE) {
+            has_block_above = 1;
+          }
+        }
+        if (has_block_above) {
+          return fill_block;
+        }
+      } else if (rel_y < (int)vt->size_y) {
+        // Within the building's vertical extent but no template block here.
+        // Clear any natural terrain that would protrude (handles hillsides).
+        return B_air;
+      }
+      // Above the template — let terrain generate normally.
+    }
+
+    if (villageTemplateExists(style, v.profession[i])) continue;
+
+    uint16_t block = getVillageProfessionStructureBlockAt(dx, dz, rel_y, v.profession[i], house_biome, v.variant[i]);
+    if (block != 0xFFFF) return block;
   }
+
+  uint16_t path = getVillagePathBlockAt(x, y, z, height, &v);
+  if (path != 0xFFFF) return path;
 
   return 0xFFFF;
 }
@@ -1252,39 +1576,13 @@ uint8_t getVillageHousePositions(int x, int z, short *house_x, short *house_z, u
 
   if (house_x == NULL || house_z == NULL || max_houses == 0) return 0;
 
-  int vx = div_floor(x, 48);
-  int vz = div_floor(z, 48);
-
-  uint64_t key = splitmix64(((uint64_t)(uint32_t)vx * 1234567 ^ (uint64_t)(uint32_t)vz * 7654321) ^ world_seed);
-  if ((uint32_t)(key % 8) != 0) return 0;
-
-  int cx = vx * 48 + 18 + (int)((key >> 8) % 11);
-  int cz = vz * 48 + 18 + (int)((key >> 16) % 11);
-  int num_houses = 3 + (int)((key >> 24) % 4);
-
-  int hx_list[8], hz_list[8];
-  int placed = 0;
-  for (int i = 0; i < num_houses && placed < 8; i++) {
-    uint64_t hkey = splitmix64(key ^ (uint64_t)i * 31337);
-    int hx = cx + (int)(hkey & 31) - 15;
-    int hz = cz + (int)((hkey >> 8) & 31) - 15;
-
-    int ok = 1;
-    for (int j = 0; j < placed; j++) {
-      int dx = hx_list[j] - hx; if (dx < 0) dx = -dx;
-      int dz = hz_list[j] - hz; if (dz < 0) dz = -dz;
-      if (dx < 8 && dz < 8) { ok = 0; break; }
-    }
-    if (ok) { hx_list[placed] = hx; hz_list[placed] = hz; placed++; }
-  }
+  VillageLayout v;
+  if (!getVillageLayout(x, z, &v)) return 0;
 
   uint8_t count = 0;
-  for (int i = 0; i < placed && count < max_houses; i++) {
-    int hx = hx_list[i];
-    int hz = hz_list[i];
-    int house_height = getHeightAt(hx, hz);
-    if (house_height < 63) continue;
-
+  for (int i = 0; i < v.houses && count < max_houses; i++) {
+    int hx = v.hx[i];
+    int hz = v.hz[i];
     uint8_t house_biome = getChunkBiome(div_floor(hx, 32), div_floor(hz, 32));
     if (!isVillageHouseBiome(house_biome)) continue;
 
@@ -1299,8 +1597,8 @@ uint8_t getVillageHousePositions(int x, int z, short *house_x, short *house_z, u
 
 uint16_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor anchor, ChunkFeature feature, uint8_t height) {
 
-  if (y >= 60 && y <= 200) {
-    uint16_t vb = getVillageBlockAt(x, y, z);
+  if (y >= 55 && y <= 140) {
+    uint16_t vb = getVillageBlockAt(x, y, z, height);
     if (vb != 0xFFFF) return vb;
   }
 
@@ -3594,9 +3892,9 @@ uint16_t buildChunkSection (int cx, int cy, int cz, uint8_t dimension) {
   for (int i = 0; i < block_changes_snapshot_count; i ++) {
     if (block_changes_snapshot[i].block == 0xFF) continue;
     // Skip special blocks — they use block updates, not chunk data
-    if (is_stair_block(block_changes_snapshot[i].block) || is_oriented_block(block_changes_snapshot[i].block)) {
+    if (is_stair_block(block_changes_snapshot[i].block) || is_oriented_block(block_changes_snapshot[i].block) || is_fence_block(block_changes_snapshot[i].block) || is_horizontal_facing_block(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_lantern) {
       if (block_changes_snapshot[i].block == B_chest || block_changes_snapshot[i].block == B_barrel) i += 14;
-      else if (is_stair_block(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_furnace || block_changes_snapshot[i].block == B_ender_chest) i += 1;
+      else if (is_stair_block(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_furnace || block_changes_snapshot[i].block == B_ender_chest || is_fence_block(block_changes_snapshot[i].block) || is_horizontal_facing_block(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_lantern) i += 1;
       continue;
     }
     #ifdef ALLOW_DOORS

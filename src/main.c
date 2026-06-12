@@ -1138,7 +1138,7 @@ int main () {
           #ifdef ALLOW_DOORS
           if (isDoorBlock(block_changes[i].block)) { i += 2; continue; }
           #endif
-          if (isStairBlock(block_changes[i].block) || block_changes[i].block == B_furnace) i += 1;
+          if (isStairBlock(block_changes[i].block) || block_changes[i].block == B_furnace || isFenceBlock(block_changes[i].block) || isHorizontalFacingBlock(block_changes[i].block) || block_changes[i].block == B_lantern) i += 1;
           if (i >= block_changes_count) block_changes_count = i + 1;
         }
         rebuildBlockChangeIndexes();

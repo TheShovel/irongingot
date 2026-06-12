@@ -19,6 +19,7 @@
 #include "serialize.h"
 #include "special_block.h"
 #include "terminal_ui.h"
+#include "worldgen.h"
 #include "../third_party/cjson/cJSON.h"
 
 int64_t last_disk_sync_time = 0;
@@ -519,6 +520,58 @@ int initSerializer(void) {
     terminal_ui_log("Failed to deserialize special blocks");
   } else if (!sb) {
     special_block_init();
+  }
+
+  // Rebuild any missing special block state entries from block changes.
+  // This handles upgrades from older world.json files and any edge cases
+  // where block state was not serialized for fences, wall torches, etc.
+  for (int i = 0; i < block_changes_count; i++) {
+    if (block_changes[i].block == 0xFF) continue;
+    uint16_t b = block_changes[i].block;
+    short bx = block_changes[i].x;
+    uint8_t by = (uint8_t)block_changes[i].y;
+    short bz = block_changes[i].z;
+    uint8_t bdim = block_changes[i].dimension;
+    if (is_horizontal_facing_block(b) && !special_block_has_entry(bx, by, bz, bdim)) {
+      // Try to recover direction from the state entry's backup (block_changes[i+1].block)
+      // The torch handler stores direction+1 (1-4) in the state entry's block field.
+      uint8_t recover_dir = 0;
+      if (i + 1 < block_changes_count && block_changes[i + 1].block >= 1 && block_changes[i + 1].block <= 4) {
+        recover_dir = (uint8_t)(block_changes[i + 1].block - 1);
+      }
+      special_block_set_state(bx, by, bz, bdim, b, horizontal_facing_encode_state(recover_dir));
+    } else if (is_fence_block(b) && !special_block_has_entry(bx, by, bz, bdim)) {
+      // Recompute fence connections from neighbors
+      uint8_t _fn = 0, _fe = 0, _fs = 0, _fw = 0;
+      uint16_t _fb = getBlockAt2(bx - 1, by, bz, bdim);
+      if (is_fence_block(_fb) || _fb == B_cobblestone || _fb == B_stone || _fb == B_stone_bricks || (_fb >= B_oak_planks && _fb <= B_bamboo_mosaic) || _fb == B_sandstone || _fb == B_cut_sandstone || _fb == B_chiseled_sandstone || _fb == B_bedrock || _fb == B_obsidian || _fb == B_nether_bricks || _fb == B_blackstone || _fb == B_basalt || _fb == B_end_stone) _fw = 1;
+      _fb = getBlockAt2(bx + 1, by, bz, bdim);
+      if (is_fence_block(_fb) || _fb == B_cobblestone || _fb == B_stone || _fb == B_stone_bricks || (_fb >= B_oak_planks && _fb <= B_bamboo_mosaic) || _fb == B_sandstone || _fb == B_cut_sandstone || _fb == B_chiseled_sandstone || _fb == B_bedrock || _fb == B_obsidian || _fb == B_nether_bricks || _fb == B_blackstone || _fb == B_basalt || _fb == B_end_stone) _fe = 1;
+      _fb = getBlockAt2(bx, by, bz - 1, bdim);
+      if (is_fence_block(_fb) || _fb == B_cobblestone || _fb == B_stone || _fb == B_stone_bricks || (_fb >= B_oak_planks && _fb <= B_bamboo_mosaic) || _fb == B_sandstone || _fb == B_cut_sandstone || _fb == B_chiseled_sandstone || _fb == B_bedrock || _fb == B_obsidian || _fb == B_nether_bricks || _fb == B_blackstone || _fb == B_basalt || _fb == B_end_stone) _fn = 1;
+      _fb = getBlockAt2(bx, by, bz + 1, bdim);
+      if (is_fence_block(_fb) || _fb == B_cobblestone || _fb == B_stone || _fb == B_stone_bricks || (_fb >= B_oak_planks && _fb <= B_bamboo_mosaic) || _fb == B_sandstone || _fb == B_cut_sandstone || _fb == B_chiseled_sandstone || _fb == B_bedrock || _fb == B_obsidian || _fb == B_nether_bricks || _fb == B_blackstone || _fb == B_basalt || _fb == B_end_stone) _fs = 1;
+      special_block_set_state(bx, by, bz, bdim, b, fence_encode_state(_fn, _fe, _fs, _fw));
+    } else if (is_stair_block(b) && !special_block_has_entry(bx, by, bz, bdim)) {
+      special_block_set_state(bx, by, bz, bdim, b, stair_encode_state(0, 0));
+    } else if (b == B_furnace && !special_block_has_entry(bx, by, bz, bdim)) {
+      special_block_set_state(bx, by, bz, bdim, b, furnace_encode_state(0, 0));
+    } else if (is_door_block(b) && !special_block_has_entry(bx, by, bz, bdim)) {
+      special_block_set_state(bx, by, bz, bdim, b, door_encode_state(0, 0, 0));
+    } else if (b == B_wheat && !special_block_has_entry(bx, by, bz, bdim)) {
+      special_block_set_state(bx, by, bz, bdim, b, 0);
+    } else if (b == B_lantern && !special_block_has_entry(bx, by, bz, bdim)) {
+      // Try to recover hanging from the state entry backup
+      uint8_t rec_hang = 0;
+      if (i + 1 < block_changes_count && block_changes[i + 1].block >= 1 && block_changes[i + 1].block <= 2) {
+        rec_hang = (uint8_t)(block_changes[i + 1].block - 1);
+      }
+      special_block_set_state(bx, by, bz, bdim, b, horizontal_facing_encode_state(rec_hang));
+    }
+    // Skip state entries for special blocks
+    if (is_stair_block(b) || b == B_furnace || b == B_ender_chest || is_fence_block(b) || is_horizontal_facing_block(b) || b == B_lantern) i += 1;
+    else if (is_door_block(b)) i += 2;
+    else if (b == B_chest || b == B_barrel) i += 14;
   }
 
   terminal_ui_log("[LOAD] Loaded %d block changes, %d players, %d special blocks",

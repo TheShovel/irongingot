@@ -199,6 +199,29 @@ uint8_t is_oriented_block(uint16_t block) {
     );
 }
 
+uint8_t is_fence_block(uint16_t block) {
+    return (
+        block == B_oak_fence ||
+        block == B_spruce_fence ||
+        block == B_birch_fence ||
+        block == B_jungle_fence ||
+        block == B_acacia_fence ||
+        block == B_dark_oak_fence ||
+        block == B_mangrove_fence ||
+        block == B_cherry_fence ||
+        block == B_pale_oak_fence ||
+        block == B_glass_pane
+    );
+}
+
+uint8_t is_horizontal_facing_block(uint16_t block) {
+    return (
+        block == B_wall_torch ||
+        block == B_lectern
+        /* Add more horizontal facing blocks as needed */
+    );
+}
+
 /* ── State encoding / decoding ────────────────────────────────────── */
 
 /*
@@ -279,6 +302,18 @@ uint16_t get_furnace_state_id(uint8_t direction, uint8_t lit) {
     return base;
 }
 
+uint16_t get_fence_state_id(uint16_t block, uint8_t connections) {
+    uint8_t row = fence_block_to_row[block];
+    if (row == 255) return block_palette[block]; /* fallback to default */
+    return fence_state_rows[row][connections & 0xF];
+}
+
+uint16_t get_horizontal_state_id(uint16_t block, uint8_t direction) {
+    uint8_t row = horizontal_block_to_row[block];
+    if (row == 255) return block_palette[block]; /* fallback to default */
+    return horizontal_state_rows[row][direction & 3];
+}
+
 /* Decode helpers */
 uint8_t door_get_open(uint16_t state)     { return (state >> 0) & 1; }
 uint8_t door_get_hinge(uint16_t state)    { return (state >> 1) & 1; }
@@ -299,6 +334,12 @@ uint8_t barrel_get_open(uint16_t state)      { return (state >> 3) & 1; }
 /* Ender chest: direction in bits 0-1, waterlogged in bit 2 */
 uint8_t ender_chest_get_direction(uint16_t state) { return state & 3; }
 uint8_t ender_chest_get_waterlogged(uint16_t state) { return (state >> 2) & 1; }
+
+/* Fence: connections in bits 0-3 (north=0, east=1, south=2, west=3) */
+uint8_t fence_get_north(uint16_t state) { return (state >> 0) & 1; }
+uint8_t fence_get_east(uint16_t state)  { return (state >> 1) & 1; }
+uint8_t fence_get_south(uint16_t state) { return (state >> 2) & 1; }
+uint8_t fence_get_west(uint16_t state)  { return (state >> 3) & 1; }
 
 /* Encode helpers */
 uint16_t door_encode_state(uint8_t open, uint8_t hinge, uint8_t direction) {
@@ -321,6 +362,14 @@ uint16_t barrel_encode_state(uint8_t direction, uint8_t open) {
 }
 uint16_t ender_chest_encode_state(uint8_t direction, uint8_t waterlogged) {
     return (uint16_t)((waterlogged << 2) | (direction & 3));
+}
+
+uint16_t fence_encode_state(uint8_t north, uint8_t east, uint8_t south, uint8_t west) {
+    return (uint16_t)((north & 1) | ((east & 1) << 1) | ((south & 1) << 2) | ((west & 1) << 3));
+}
+
+uint16_t horizontal_facing_encode_state(uint8_t direction) {
+    return (uint16_t)(direction & 3);
 }
 
 /* ── Interaction helpers ──────────────────────────────────────────── */
