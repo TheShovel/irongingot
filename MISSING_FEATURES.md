@@ -30,8 +30,8 @@ These features are fundamental to a complete Minecraft experience and should be 
 
 ### 3. Villager Trading
 
-- **Trading Menu** (High) - Villager trades for emeralds
-- **Job Sites** (Medium) - Workstation-based villager professions
+- ~~**Trading Menu** (High)~~ - ✅ Villager trades for emeralds
+- ~~**Job Sites** (Medium)~~ - ✅ Workstation-based villager professions
 
 ### 4. Essential Containers
 
