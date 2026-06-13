@@ -1390,7 +1390,7 @@ static uint16_t getVillageProfessionJobBlock(uint8_t profession) {
     case VILLAGE_PROF_MASON: return B_stonecutter;
     case VILLAGE_PROF_SHEPHERD: return B_loom;
     case VILLAGE_PROF_TOOLSMITH: return B_smithing_table;
-    case VILLAGE_PROF_WEAPONSMITH: return B_grindstone;
+    case VILLAGE_PROF_WEAPONSMITH: return B_air;
     default: return B_crafting_table;
   }
 }
@@ -1529,7 +1529,11 @@ static uint16_t getVillageBlockAt(int x, int y, int z, uint8_t height) {
     // Terrain integration: fill gaps below building floors and clear terrain
     // that would protrude into the structure.
     uint16_t template_block = getVillageTemplateBlockAt(style, v.profession[i], dx, rel_y, dz);
-    if (template_block != VILLAGE_TEMPLATE_NONE) return template_block;
+    if (template_block != VILLAGE_TEMPLATE_NONE) {
+      // Skip grindstone blocks baked into templates — they should not
+      // appear in village buildings.
+      if ((template_block & 0x1FF) != B_grindstone) return template_block;
+    }
 
     if (in_footprint) {
       if (rel_y < 0) {

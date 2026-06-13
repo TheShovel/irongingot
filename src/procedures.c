@@ -3171,6 +3171,8 @@ static void switchPlayerToDimension(PlayerData *player, uint8_t new_dim) {
   uint8_t old_dim = player->dimension;
   if (old_dim == new_dim) return;
 
+  int had_saved_portal = 0;
+
   if (new_dim == DIMENSION_NETHER) {
     if (old_dim == DIMENSION_OVERWORLD) {
       // Save overworld entry coords for return trip.
@@ -3190,6 +3192,7 @@ static void switchPlayerToDimension(PlayerData *player, uint8_t new_dim) {
         player->x = ox + 3;
         player->z = oz - 3;
         player->portal_valid = 0;
+        had_saved_portal = 1;
       } else {
         player->x = player->x * 8;
         player->z = player->z * 8;
@@ -3261,6 +3264,18 @@ static void switchPlayerToDimension(PlayerData *player, uint8_t new_dim) {
 
   // Create portal blocks AFTER respawn + chunk send so client doesn't discard them
   if (new_dim == DIMENSION_NETHER) {
+    // Place an obsidian platform under the portal so the player doesn't
+    // fall into lava when stepping through. The platform covers a 5x5 area
+    // centered on the portal at floor height.
+    for (int px = np_x - 2; px <= np_x + 2; px++) {
+      for (int pz = np_z - 2; pz <= np_z + 2; pz++) {
+        makeBlockChange(px, np_h, pz, B_obsidian, DIMENSION_NETHER);
+      }
+    }
+    // Clear the blocks where the player's body spawns (in front of the
+    // portal at np_h+1 and np_h+2) to prevent suffocation.
+    makeBlockChange(np_x, np_h + 1, np_z + 1, B_air, DIMENSION_NETHER);
+    makeBlockChange(np_x, np_h + 2, np_z + 1, B_air, DIMENSION_NETHER);
     for (int dy = 1; dy <= 3; dy++) {
       makeBlockChange(np_x, np_h + dy, np_z, B_nether_portal, DIMENSION_NETHER);
       makeBlockChange(np_x + 1, np_h + dy, np_z, B_nether_portal, DIMENSION_NETHER);
@@ -3280,14 +3295,11 @@ static void switchPlayerToDimension(PlayerData *player, uint8_t new_dim) {
       makeBlockChange(np_x - 1, np_h + dy, np_z, B_obsidian, DIMENSION_NETHER);
       makeBlockChange(np_x + 2, np_h + dy, np_z, B_obsidian, DIMENSION_NETHER);
     }
-    // Stand the player on top of the obsidian frame so they have a solid
-    // platform that is guaranteed to be inside the pre-generated center
-    // chunk. (Previously the player was placed at (np_x + 2, ofh + 2, np_z),
-    // which is now occupied by the right column of the frame and sits in
-    // floor that may not be loaded yet.)
+    // Place the player in front of the portal on the obsidian platform
+    // so they step through the portal rather than spawning on top of it.
     player->x = np_x;
-    player->z = np_z;
-    player->y = (int16_t)(np_h + 5);
+    player->z = np_z + 1;
+    player->y = (int16_t)(np_h + 1);
     // Recalculate center chunk from new position
     cx = div_floor(player->x, 16);
     cz = div_floor(player->z, 16);
@@ -3295,9 +3307,59 @@ static void switchPlayerToDimension(PlayerData *player, uint8_t new_dim) {
   }
 
   if (new_dim == DIMENSION_OVERWORLD) {
-    uint8_t surface_y = getHeightAt(player->x, player->z);
-    if (surface_y > 0) player->y = surface_y + 1;
-    else player->y = 80;
+    // Clear the spawn area and, if needed, build a new portal. No obsidian
+    // platform in the overworld — the ground is already solid.
+    int ow_np_x, ow_np_z;
+    int16_t ow_np_h;
+
+    if (had_saved_portal) {
+      // Returning through the original portal — the !portal command builds
+      // the portal at (portal_ow_x, portal_ow_y, portal_ow_z - 3) with the
+      // interior center at (portal_ow_x + 1, portal_ow_z - 3). Only clear
+      // the spawn area — no platform needed on solid overworld ground.
+      ow_np_x = (int)player->portal_ow_x + 1;
+      ow_np_z = (int)player->portal_ow_z - 3;
+      ow_np_h = (int16_t)player->portal_ow_y;
+
+      // Clear the blocks where the player spawns (in front of the portal)
+      makeBlockChange(ow_np_x, ow_np_h + 1, ow_np_z + 1, B_air, DIMENSION_OVERWORLD);
+      makeBlockChange(ow_np_x, ow_np_h + 2, ow_np_z + 1, B_air, DIMENSION_OVERWORLD);
+    } else {
+      // No existing portal — build a new one at the arrival position.
+      uint8_t surface_y = getHeightAt(player->x, player->z);
+      ow_np_h = (surface_y > 0) ? (int16_t)surface_y : 60;
+      ow_np_x = (int)player->x;
+      ow_np_z = (int)player->z - 1;  // portal 1 block north, player stands in front
+
+      // Clear the blocks where the player spawns (in front of the portal)
+      makeBlockChange(ow_np_x, ow_np_h + 1, ow_np_z + 1, B_air, DIMENSION_OVERWORLD);
+      makeBlockChange(ow_np_x, ow_np_h + 2, ow_np_z + 1, B_air, DIMENSION_OVERWORLD);
+
+      // Portal blocks (2x3 interior)
+      for (int dy = 1; dy <= 3; dy++) {
+        makeBlockChange(ow_np_x, ow_np_h + dy, ow_np_z, B_nether_portal, DIMENSION_OVERWORLD);
+        makeBlockChange(ow_np_x + 1, ow_np_h + dy, ow_np_z, B_nether_portal, DIMENSION_OVERWORLD);
+      }
+      // Obsidian frame
+      for (int dx = 0; dx < 2; dx++) {
+        makeBlockChange(ow_np_x + dx, ow_np_h, ow_np_z, B_obsidian, DIMENSION_OVERWORLD);
+        makeBlockChange(ow_np_x + dx, ow_np_h + 4, ow_np_z, B_obsidian, DIMENSION_OVERWORLD);
+      }
+      for (int dy = 1; dy <= 3; dy++) {
+        makeBlockChange(ow_np_x - 1, ow_np_h + dy, ow_np_z, B_obsidian, DIMENSION_OVERWORLD);
+        makeBlockChange(ow_np_x + 2, ow_np_h + dy, ow_np_z, B_obsidian, DIMENSION_OVERWORLD);
+      }
+    }
+
+    // Place the player in front of the portal
+    player->x = ow_np_x;
+    player->z = ow_np_z + 1;
+    player->y = ow_np_h + 1;
+
+    // Recalculate center chunk from new position
+    cx = div_floor(player->x, 16);
+    cz = div_floor(player->z, 16);
+    sc_setCenterChunk(player->client_fd, cx, cz);
   } else if (new_dim == DIMENSION_END) {
     // Spawn offset from the exit portal to avoid immediate teleportation back
     // The exit portal is at the center (0,0) from X/Z -2 to 2 at Y=64
