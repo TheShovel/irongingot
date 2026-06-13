@@ -32,6 +32,8 @@
 #define B_wheat_7 B_wheat
 #endif
 
+static void addXpToPlayer(PlayerData *player, uint16_t amount);
+
 static uint8_t isWheatBlock(uint16_t block) {
   return block >= B_wheat && block <= B_wheat_7;
 }
@@ -674,6 +676,12 @@ uint8_t serverSlotToClientSlot (int window_id, uint8_t slot) {
     if (slot >= 41 && slot <= 43) return slot - 41;
     return serverSlotToClientSlot(0, slot + 6);
 
+  } else if (window_id == 19) { // merchant
+
+    if (slot >= 41 && slot <= 43) return slot - 41;
+    if (slot >= 9 && slot <= 35) return slot - 6;   // main inv at client 3-29
+    if (slot <= 8) return slot + 30;                // hotbar at client 30-38
+
   }
 
   return 255;
@@ -709,6 +717,12 @@ uint8_t clientSlotToServerSlot (int window_id, uint8_t slot) {
     if (slot <= 2) return 41 + slot;
     // the rest of the slots are identical, just shifted by 6
     if (slot >= 3 && slot <= 38) return clientSlotToServerSlot(0, slot + 6);
+
+  } else if (window_id == 19) { // merchant
+
+    if (slot <= 2) return 41 + slot;
+    if (slot >= 3 && slot <= 29) return slot + 6;   // main inv
+    if (slot >= 30 && slot <= 38) return slot - 30; // hotbar
 
   }
   #ifdef ALLOW_CHESTS
@@ -1031,6 +1045,48 @@ void broadcastMobSound (int entity_id, int sound_id, int category, float volume,
   }
 }
 
+uint32_t getVillagerTradeExperience (int mob_index) {
+  if (mob_index < 0 || mob_index >= MAX_MOBS) return 0;
+  if (mob_data[mob_index].type != E_VILLAGER) return 0;
+
+  uint32_t total = 0;
+  for (uint8_t i = 0; i < 5; i++) total += mob_trade_uses[mob_index][i];
+  return total;
+}
+
+uint8_t getVillagerTradeLevel (int mob_index) {
+  uint32_t xp = getVillagerTradeExperience(mob_index);
+  if (xp >= 12) return 5; // Master
+  if (xp >= 10) return 4; // Expert
+  if (xp >= 5) return 3;  // Journeyman
+  if (xp >= 2) return 2;  // Apprentice
+  return 1;               // Novice
+}
+
+uint32_t getVillagerTradeDisplayExperience (int mob_index) {
+  uint32_t raw_xp = getVillagerTradeExperience(mob_index);
+  uint8_t level = getVillagerTradeLevel(mob_index);
+
+  static const uint32_t raw_level_xp[5] = {0, 2, 5, 10, 12};
+  static const uint32_t vanilla_level_xp[5] = {0, 10, 70, 150, 250};
+
+  if (level >= 5) return vanilla_level_xp[4];
+
+  uint32_t raw_min = raw_level_xp[level - 1];
+  uint32_t raw_next = raw_level_xp[level];
+  uint32_t vanilla_min = vanilla_level_xp[level - 1];
+  uint32_t vanilla_next = vanilla_level_xp[level];
+
+  if (raw_xp < raw_min) raw_xp = raw_min;
+  if (raw_xp > raw_next) raw_xp = raw_next;
+
+  uint32_t raw_span = raw_next - raw_min;
+  uint32_t vanilla_span = vanilla_next - vanilla_min;
+  if (raw_span == 0) return vanilla_min;
+
+  return vanilla_min + ((raw_xp - raw_min) * vanilla_span) / raw_span;
+}
+
 void broadcastMobMetadata (int client_fd, int entity_id) {
 
   int mob_index = -entity_id - 2;
@@ -1074,6 +1130,72 @@ void broadcastMobMetadata (int client_fd, int entity_id) {
       };
       length = 1;
       break;
+
+    case E_VILLAGER:
+    {
+      // Map codebase profession ID to Minecraft villager profession ID
+      static const uint8_t prof_map[] = {5, 9, 4, 1, 2, 3, 6, 7, 8, 10, 12, 13, 14};
+      uint8_t mc_prof = (mob->profession < sizeof(prof_map)) ? prof_map[mob->profession] : 0;
+
+      // Determine villager biome type from the chunk biome
+      uint8_t biome_type = 2; // default: plains
+      uint8_t chunk_biome = getChunkBiome(div_floor((int)mob->x, 32), div_floor((int)mob->z, 32));
+      if (chunk_biome == W_desert) biome_type = 0;
+      else if (chunk_biome == W_jungle) biome_type = 1;
+      else if (chunk_biome == W_savanna) biome_type = 3;
+      else if (chunk_biome == W_snowy_plains || chunk_biome == W_snowy_taiga) biome_type = 4;
+      else if (chunk_biome == W_swamp) biome_type = 5;
+      else if (chunk_biome == W_taiga) biome_type = 6;
+
+      // Build villager metadata entry: index(18), type(19=villager_data),
+      // then three VarInts: biomeType, profession, level, terminator(0xFF)
+      uint8_t raw[16];
+      int pos = 0;
+      raw[pos++] = 18;  // index (18 = villager_data)
+      // Manually encode VarInts into the buffer
+      uint32_t vals[] = {19, biome_type, mc_prof, getVillagerTradeLevel(mob_index)};
+      for (int vi = 0; vi < 4; vi++) {
+        uint32_t v = vals[vi];
+        while (1) {
+          if ((v & ~0x7F) == 0) { raw[pos++] = (uint8_t)v; break; }
+          raw[pos++] = (uint8_t)((v & 0x7F) | 0x80);
+          v >>= 7;
+        }
+      }
+      raw[pos++] = 0xFF;
+
+      // Send the packet to the right player(s)
+      int broadcast_fd = -2;
+      while (1) {
+        int target_fd;
+        if (client_fd == -1) {
+          // Select next player
+          broadcast_fd++;
+          if (broadcast_fd >= MAX_PLAYERS) break;
+          PlayerData *p = &player_data[broadcast_fd];
+          target_fd = p->client_fd;
+          if (target_fd == -1) continue;
+          if (p->flags & 0x20) continue;
+          if (p->dimension != mob->dimension) continue;
+          uint8_t in_play = 0;
+          for (int k = 0; k < MAX_PLAYERS; k++) {
+            if (client_states[k].client_fd == target_fd) {
+              in_play = (client_states[k].state == STATE_PLAY);
+              break;
+            }
+          }
+          if (!in_play) continue;
+        } else {
+          target_fd = client_fd;
+        }
+        startPacket(target_fd, 0x5C);
+        writeVarInt(target_fd, entity_id);
+        send_all(target_fd, raw, pos);
+        endPacket(target_fd);
+        if (client_fd != -1) break;
+      }
+      return;
+    }
 
     default: return;
   }
@@ -4215,6 +4337,20 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     return;
   }
 
+  // Bottle of Enchantment: consume the bottle and grant XP
+  if (face == 255 && *item == I_experience_bottle && *count > 0) {
+    // Consume one bottle
+    *count -= 1;
+    if (*count == 0) *item = 0;
+    sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, slot), *count, *item);
+    broadcastPlayerEquipment(player);
+
+    // Grant 3-11 XP (matching vanilla bottle o' enchanting range)
+    uint16_t xp_amount = 3 + (fast_rand() % 9);
+    addXpToPlayer(player, xp_amount);
+    return;
+  }
+
   // Don't proceed with block placement if no coordinates were provided
   if (face == 255) return;
 
@@ -4806,7 +4942,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
 
 }
 
-void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health, uint8_t dimension) {
+void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health, uint8_t dimension, uint8_t profession) {
 
   for (int i = 0; i < MAX_MOBS; i ++) {
     // Look for type 0 (unallocated)
@@ -4825,6 +4961,10 @@ void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health, uint8_
     mob_data[i].move_dz = 0;
     mob_data[i].move_dy = 0;
     mob_data[i].move_timer = 0;
+    mob_data[i].yaw_store = 0;
+    mob_data[i].profession = profession;
+    // Reset trade usage tracking
+    for (int t = 0; t < 5; t++) mob_trade_uses[i][t] = 0;
 
     // Forge a UUID from a random number and the mob's index
     uint8_t uuid[16];
@@ -4857,6 +4997,9 @@ void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health, uint8_
         sc_setMobEquipment(player_data[j].client_fd, -2 - i, I_bow);
       }
     }
+
+    // Send entity metadata (villager profession, sheep sheared, etc.)
+    broadcastMobMetadata(-1, -2 - i);
 
     break;
   }
@@ -5103,8 +5246,7 @@ static void spawnDungeonMobs(PlayerData *player) {
 
       uint8_t mob_health = 20;  // Default: 20 HP (zombies/skeletons in dungeons)
       if (spawner->mob_type == E_SPIDER) mob_health = 16;
-      spawnMob(spawner->mob_type, spawn_x, spawn_y, spawn_z, mob_health, DIMENSION_OVERWORLD);
-      spawned = 1;
+      spawnMob(spawner->mob_type, spawn_x, spawn_y, spawn_z, mob_health, DIMENSION_OVERWORLD, 0);
     }
 
     if (spawned) continue;
@@ -5122,11 +5264,11 @@ static void spawnDungeonMobs(PlayerData *player) {
 
         uint8_t mob_health = 20;  // Default: 20 HP (zombies/skeletons in dungeons)
         if (spawner->mob_type == E_SPIDER) mob_health = 16;
-        spawnMob(spawner->mob_type, spawn_x, spawn_y, spawn_z, mob_health, DIMENSION_OVERWORLD);
+        spawnMob(spawner->mob_type, spawn_x, spawn_y, spawn_z, mob_health, DIMENSION_OVERWORLD, 0);
         spawned = 1;
+        }
       }
     }
-  }
 }
 
 static void spawnVillageVillagers(PlayerData *player) {
@@ -5201,7 +5343,8 @@ static void spawnVillageVillagers(PlayerData *player) {
     if (!isPassableSpawnBlock(getBlockAt2(house_x[h], y, house_z[h], DIMENSION_OVERWORLD))) continue;
     if (!isPassableSpawnBlock(getBlockAt2(house_x[h], y + 1, house_z[h], DIMENSION_OVERWORLD))) continue;
 
-    spawnMob(E_VILLAGER, house_x[h], y, house_z[h], 20, DIMENSION_OVERWORLD);
+    uint8_t profession = getVillageProfession(house_x[h], house_z[h]);
+    spawnMob(E_VILLAGER, house_x[h], y, house_z[h], 20, DIMENSION_OVERWORLD, profession);
     existing++;
   }
 
@@ -5255,7 +5398,7 @@ static void spawnFishInWater(PlayerData *player) {
     uint8_t type = fish_types[fast_rand() % num_fish_types];
     // Fish spawn with 3 HP (they're small)
     // Fish need to be higher in water, so spawn at spawn_y + 1
-    spawnMob(type, spawn_x, spawn_y + 1, spawn_z, 3, player->dimension);
+    spawnMob(type, spawn_x, spawn_y + 1, spawn_z, 3, player->dimension, 0);
 
     // Find the fish we just spawned and adjust its Y to float in water
     for (int j = 0; j < MAX_MOBS; j++) {
@@ -5312,7 +5455,7 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
       if (surface_y == 0) continue;
 
       // Enderman (147) spawns in the End — vanilla health is 40
-      spawnMob(E_ENDERMAN, spawn_x, surface_y + 1, spawn_z, 40, player->dimension);
+      spawnMob(E_ENDERMAN, spawn_x, surface_y + 1, spawn_z, 40, player->dimension, 0);
     }
 
     return;
@@ -5351,7 +5494,7 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
       if (surface_y == 0) continue;
 
       // Regular Piglin (96) spawns in the Nether
-      spawnMob(E_PIGLIN, spawn_x, surface_y + 1, spawn_z, 16, player->dimension);
+      spawnMob(E_PIGLIN, spawn_x, surface_y + 1, spawn_z, 16, player->dimension, 0);
     }
 
     // Also spawn zombified piglins
@@ -5369,7 +5512,7 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
       if (surface_y == 0) continue;
 
       // Zombified Piglin(148) spawns in the Nether regardless of time of day — vanilla health is 20
-      spawnMob(148, spawn_x, surface_y + 1, spawn_z, 20, player->dimension);
+      spawnMob(148, spawn_x, surface_y + 1, spawn_z, 20, player->dimension, 0);
     }
 
     return;
@@ -5406,7 +5549,7 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
     uint8_t health = 10;
     if (type == 25) health = 4;   // Chicken: vanilla 4 HP
     else if (type == 106) health = 8;  // Sheep: vanilla 8 HP
-    spawnMob(type, spawn_x, surface_y + 1, spawn_z, health, player->dimension);
+    spawnMob(type, spawn_x, surface_y + 1, spawn_z, health, player->dimension, 0);
   }
 
   // Spawn hostile mobs (zombies) only at night
@@ -5441,10 +5584,357 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
       else if (type == E_SPIDER) health = 16;
       else if (type == E_CREEPER) health = 20;
 
-      spawnMob(type, spawn_x, surface_y + 1, spawn_z, health, player->dimension);
+      spawnMob(type, spawn_x, surface_y + 1, spawn_z, health, player->dimension, 0);
     }
   }
 
+}
+
+static int getMerchantMobIndexForPlayer (PlayerData *player) {
+  if (!player || player->merchant_villager_eid == 0) return -1;
+
+  int mob_idx = -player->merchant_villager_eid - 2;
+  if (mob_idx < 0 || mob_idx >= MAX_MOBS) return -1;
+  if (mob_data[mob_idx].type != E_VILLAGER) return -1;
+  return mob_idx;
+}
+
+static uint8_t getMerchantProfessionForPlayer (PlayerData *player) {
+  int mob_idx = getMerchantMobIndexForPlayer(player);
+  if (mob_idx >= 0) return mob_data[mob_idx].profession;
+  return 0;
+}
+
+static uint8_t getMerchantTradeInput (PlayerData *player, uint8_t trade_index, uint16_t *in_item, uint8_t *in_count) {
+  static const uint8_t input_counts[][5] = {
+    {1, 1, 1, 2, 3}, // Farmer
+    {1, 2, 4, 5, 1}, // Librarian
+    {1, 2, 3, 4, 5}, // Cleric
+    {3, 4, 5, 7, 6}, // Armorer
+    {1, 1, 1, 1, 2}, // Butcher
+    {1, 2, 3, 4, 5}, // Cartographer
+    {1, 1, 1, 2, 3}, // Fisherman
+    {1, 1, 2, 3, 4}, // Fletcher
+    {1, 2, 3, 3, 4}, // Leatherworker
+    {1, 1, 2, 2, 1}, // Mason
+    {1, 1, 2, 2, 1}, // Shepherd
+    {2, 2, 3, 3, 4}, // Toolsmith
+    {2, 3, 4, 4, 3}, // Weaponsmith
+  };
+  static const uint8_t default_counts[5] = {1, 1, 2, 3, 1};
+
+  if (trade_index >= 5) return 1;
+
+  int mob_idx = getMerchantMobIndexForPlayer(player);
+  if (mob_idx < 0 || trade_index >= getVillagerTradeLevel(mob_idx)) return 1;
+
+  uint8_t profession = getMerchantProfessionForPlayer(player);
+  const uint8_t *counts = default_counts;
+  if (profession < sizeof(input_counts) / sizeof(input_counts[0])) {
+    counts = input_counts[profession];
+  }
+
+  *in_item = I_emerald;
+  *in_count = counts[trade_index];
+  return 0;
+}
+
+static void syncMerchantInventorySlots (PlayerData *player) {
+  for (uint8_t i = 0; i < 41; i++) {
+    uint8_t client_slot = serverSlotToClientSlot(19, i);
+    if (client_slot != 255) {
+      sc_setContainerSlot(player->client_fd, 19, client_slot,
+        player->inventory_count[i], player->inventory_items[i]);
+    }
+  }
+}
+
+static uint8_t returnMerchantInputItems (PlayerData *player, uint8_t count) {
+  if (count == 0 || player->craft_count[0] == 0 || player->craft_items[0] == 0) return 0;
+  if (count > player->craft_count[0]) count = player->craft_count[0];
+
+  uint16_t item = player->craft_items[0];
+  if (givePlayerItem(player, item, count)) return 1;
+
+  player->craft_count[0] -= count;
+  if (player->craft_count[0] == 0) player->craft_items[0] = 0;
+  return 0;
+}
+
+void selectMerchantTrade (PlayerData *player, uint8_t trade_index) {
+  if (!player || !player->merchant_open) return;
+
+  uint16_t in_item = 0;
+  uint8_t in_count = 0;
+  if (getMerchantTradeInput(player, trade_index, &in_item, &in_count)) return;
+
+  player->selected_trade = trade_index;
+
+  if (player->craft_count[0] > 0 && player->craft_items[0] != in_item) {
+    if (returnMerchantInputItems(player, player->craft_count[0])) {
+      sc_setContainerSlot(player->client_fd, 19, 0, player->craft_count[0], player->craft_items[0]);
+      syncMerchantInventorySlots(player);
+      return;
+    }
+  }
+
+  if (player->craft_count[0] > in_count) {
+    if (returnMerchantInputItems(player, player->craft_count[0] - in_count)) {
+      sc_setContainerSlot(player->client_fd, 19, 0, player->craft_count[0], player->craft_items[0]);
+      syncMerchantInventorySlots(player);
+      return;
+    }
+  }
+
+  uint8_t equipment_dirty = false;
+  if (player->craft_count[0] < in_count) {
+    uint8_t needed = in_count - player->craft_count[0];
+    for (uint8_t i = 0; i < 36 && needed > 0; i++) {
+      if (player->inventory_items[i] != in_item || player->inventory_count[i] == 0) continue;
+
+      uint8_t take = needed < player->inventory_count[i] ? needed : player->inventory_count[i];
+      player->inventory_count[i] -= take;
+      needed -= take;
+      if (player->inventory_count[i] == 0) player->inventory_items[i] = 0;
+
+      player->craft_items[0] = in_item;
+      player->craft_count[0] += take;
+      if (i == player->hotbar) equipment_dirty = true;
+    }
+  }
+
+  if (player->craft_count[0] == 0) player->craft_items[0] = 0;
+
+  sc_setContainerSlot(player->client_fd, 19, 0, player->craft_count[0], player->craft_items[0]);
+  sc_setContainerSlot(player->client_fd, 19, 1, 0, 0);
+  syncMerchantInventorySlots(player);
+
+  if (equipment_dirty) broadcastPlayerEquipment(player);
+}
+
+void executeMerchantTrade (PlayerData *player, uint8_t trade_index, uint8_t to_inventory) {
+  // Trade entries: {input_item, input_count, output_item, output_count, max_uses}
+  struct TradeEntry {
+    uint16_t in_item, in_cnt;
+    uint16_t out_item, out_cnt;
+    uint8_t max_uses;
+  };
+
+  uint8_t profession = getMerchantProfessionForPlayer(player);
+
+  // Same trade data as in sc_setTradeOffers (packets.c)
+  static const struct TradeEntry farmer[] = {
+    {I_emerald, 1, I_bread, 3, 16},
+    {I_emerald, 1, I_apple, 2, 8},
+    {I_emerald, 1, I_cookie, 4, 12},
+    {I_emerald, 2, I_cake, 1, 4},
+    {I_emerald, 3, I_golden_carrot, 1, 3},
+  };
+  static const struct TradeEntry librarian[] = {
+    {I_emerald, 1, I_paper, 4, 12},
+    {I_emerald, 2, I_book, 1, 8},
+    {I_emerald, 4, I_bookshelf, 1, 4},
+    {I_emerald, 5, I_golden_apple, 1, 2},
+    {I_emerald, 1, I_glass, 4, 12},
+  };
+  static const struct TradeEntry cleric[] = {
+    {I_emerald, 1, I_redstone, 2, 12},
+    {I_emerald, 2, I_lapis_lazuli, 1, 8},
+    {I_emerald, 3, I_glowstone, 1, 6},
+    {I_emerald, 4, I_ender_pearl, 1, 3},
+    {I_emerald, 5, I_experience_bottle, 1, 3},
+  };
+  static const struct TradeEntry armorer[] = {
+    {I_emerald, 3, I_iron_boots, 1, 4},
+    {I_emerald, 4, I_iron_leggings, 1, 4},
+    {I_emerald, 5, I_iron_chestplate, 1, 4},
+    {I_emerald, 7, I_diamond_boots, 1, 2},
+    {I_emerald, 6, I_iron_helmet, 1, 4},
+  };
+  static const struct TradeEntry butcher[] = {
+    {I_emerald, 1, I_cooked_beef, 3, 12},
+    {I_emerald, 1, I_cooked_porkchop, 3, 12},
+    {I_emerald, 1, I_cooked_mutton, 3, 12},
+    {I_emerald, 1, I_leather, 2, 8},
+    {I_emerald, 2, I_rabbit_stew, 1, 4},
+  };
+  static const struct TradeEntry cartographer[] = {
+    {I_emerald, 1, I_paper, 6, 12},
+    {I_emerald, 2, I_compass, 1, 6},
+    {I_emerald, 3, I_map, 1, 4},
+    {I_emerald, 4, I_filled_map, 1, 3},
+    {I_emerald, 5, I_globe_banner_pattern, 1, 2},
+  };
+  static const struct TradeEntry fisherman[] = {
+    {I_emerald, 1, I_cooked_cod, 3, 12},
+    {I_emerald, 1, I_cooked_salmon, 3, 12},
+    {I_emerald, 1, I_cod, 3, 12},
+    {I_emerald, 2, I_salmon, 3, 8},
+    {I_emerald, 3, I_fishing_rod, 1, 4},
+  };
+  static const struct TradeEntry fletcher[] = {
+    {I_emerald, 1, I_arrow, 6, 12},
+    {I_emerald, 1, I_flint, 4, 12},
+    {I_emerald, 2, I_bow, 1, 6},
+    {I_emerald, 3, I_crossbow, 1, 4},
+    {I_emerald, 4, I_arrow, 12, 3},
+  };
+  static const struct TradeEntry leatherworker[] = {
+    {I_emerald, 1, I_leather, 3, 12},
+    {I_emerald, 2, I_leather_helmet, 1, 6},
+    {I_emerald, 3, I_leather_chestplate, 1, 6},
+    {I_emerald, 3, I_leather_leggings, 1, 6},
+    {I_emerald, 4, I_saddle, 1, 3},
+  };
+  static const struct TradeEntry mason[] = {
+    {I_emerald, 1, I_stone, 6, 12},
+    {I_emerald, 1, I_stone_bricks, 4, 12},
+    {I_emerald, 2, I_chiseled_stone_bricks, 1, 6},
+    {I_emerald, 2, I_polished_andesite, 4, 6},
+    {I_emerald, 1, I_bricks, 4, 12},
+  };
+  static const struct TradeEntry shepherd[] = {
+    {I_emerald, 1, I_white_wool, 3, 12},
+    {I_emerald, 1, I_white_carpet, 6, 12},
+    {I_emerald, 2, I_shears, 1, 6},
+    {I_emerald, 2, I_white_bed, 1, 4},
+    {I_emerald, 1, I_string, 4, 12},
+  };
+  static const struct TradeEntry toolsmith[] = {
+    {I_emerald, 2, I_stone_axe, 1, 6},
+    {I_emerald, 2, I_stone_pickaxe, 1, 6},
+    {I_emerald, 3, I_iron_axe, 1, 4},
+    {I_emerald, 3, I_iron_pickaxe, 1, 4},
+    {I_emerald, 4, I_diamond_hoe, 1, 2},
+  };
+  static const struct TradeEntry weaponsmith[] = {
+    {I_emerald, 2, I_iron_sword, 1, 6},
+    {I_emerald, 3, I_iron_axe, 1, 4},
+    {I_emerald, 4, I_diamond_sword, 1, 2},
+    {I_emerald, 4, I_diamond_axe, 1, 2},
+    {I_emerald, 3, I_iron_ingot, 2, 6},
+  };
+  static const struct TradeEntry default_trades[] = {
+    {I_emerald, 1, I_bread, 3, 16},
+    {I_emerald, 1, I_oak_planks, 8, 12},
+    {I_emerald, 2, I_iron_ingot, 1, 6},
+    {I_emerald, 3, I_book, 1, 4},
+    {I_emerald, 1, I_stick, 4, 12},
+  };
+
+  const struct TradeEntry *trades;
+  int trade_count;
+  switch (profession) {
+    case 0:  trades = farmer;         trade_count = sizeof(farmer) / sizeof(farmer[0]); break;
+    case 1:  trades = librarian;      trade_count = sizeof(librarian) / sizeof(librarian[0]); break;
+    case 2:  trades = cleric;         trade_count = sizeof(cleric) / sizeof(cleric[0]); break;
+    case 3:  trades = armorer;        trade_count = sizeof(armorer) / sizeof(armorer[0]); break;
+    case 4:  trades = butcher;        trade_count = sizeof(butcher) / sizeof(butcher[0]); break;
+    case 5:  trades = cartographer;   trade_count = sizeof(cartographer) / sizeof(cartographer[0]); break;
+    case 6:  trades = fisherman;      trade_count = sizeof(fisherman) / sizeof(fisherman[0]); break;
+    case 7:  trades = fletcher;       trade_count = sizeof(fletcher) / sizeof(fletcher[0]); break;
+    case 8:  trades = leatherworker;  trade_count = sizeof(leatherworker) / sizeof(leatherworker[0]); break;
+    case 9:  trades = mason;          trade_count = sizeof(mason) / sizeof(mason[0]); break;
+    case 10: trades = shepherd;       trade_count = sizeof(shepherd) / sizeof(shepherd[0]); break;
+    case 11: trades = toolsmith;      trade_count = sizeof(toolsmith) / sizeof(toolsmith[0]); break;
+    case 12: trades = weaponsmith;    trade_count = sizeof(weaponsmith) / sizeof(weaponsmith[0]); break;
+    default: trades = default_trades; trade_count = sizeof(default_trades) / sizeof(default_trades[0]); break;
+  }
+
+  if (trade_index >= trade_count) return;
+
+  int mob_idx = getMerchantMobIndexForPlayer(player);
+  if (mob_idx < 0) return;
+  if (trade_index >= getVillagerTradeLevel(mob_idx)) {
+    if (player->merchant_open) sc_setTradeOffers(player->client_fd, 19, profession, mob_idx);
+    return;
+  }
+  if (trade_index < 5 && mob_trade_uses[mob_idx][trade_index] >= trades[trade_index].max_uses) {
+    if (player->merchant_open) sc_setTradeOffers(player->client_fd, 19, profession, mob_idx);
+    return;
+  }
+
+  const uint16_t in1 = trades[trade_index].in_item;
+  const uint8_t  in1c = trades[trade_index].in_cnt;
+  const uint16_t out = trades[trade_index].out_item;
+  const uint8_t  outc = trades[trade_index].out_cnt;
+
+  if (to_inventory && !canGivePlayerItem(player, out, outc)) return;
+
+  // Check if the player has the required input items
+  int total_found = 0;
+  for (uint8_t i = 0; i < 41; i++) {
+    if (player->inventory_items[i] == in1) {
+      total_found += player->inventory_count[i];
+      if (total_found >= in1c) break;
+    }
+  }
+  // Also check craft_items[0] (merchant input slot via slot changes)
+  if (total_found < in1c && player->craft_items[0] == in1) {
+    total_found += player->craft_count[0];
+  }
+  if (total_found < in1c) return;
+
+  // Consume from craft_items[0] FIRST (auto-populated items end up here),
+  // then from inventory for any remainder.
+  int remaining = in1c;
+  if (player->craft_items[0] == in1 && player->craft_count[0] > 0) {
+    uint8_t take = (remaining < player->craft_count[0]) ? (uint8_t)remaining : player->craft_count[0];
+    player->craft_count[0] -= take;
+    remaining -= take;
+    if (player->craft_count[0] == 0) player->craft_items[0] = 0;
+    sc_setContainerSlot(player->client_fd, 19, 0, player->craft_count[0], player->craft_items[0]);
+  }
+  // Then consume remaining from inventory
+  for (uint8_t i = 0; i < 41 && remaining > 0; i++) {
+    if (player->inventory_items[i] == in1) {
+      uint8_t take = (remaining < player->inventory_count[i]) ? (uint8_t)remaining : player->inventory_count[i];
+      player->inventory_count[i] -= take;
+      remaining -= take;
+      if (player->inventory_count[i] == 0) player->inventory_items[i] = 0;
+      syncPlayerInventorySlot(player, i);
+    }
+  }
+
+  // Increment trade usage counter
+  if (trade_index < 5 && mob_trade_uses[mob_idx][trade_index] < UINT8_MAX) {
+    mob_trade_uses[mob_idx][trade_index]++;
+  }
+
+  if (to_inventory) {
+    givePlayerItem(player, out, outc);
+    player->flagval_16 = 0;
+    player->flagval_8 = 0;
+    sc_setCursorItem(player->client_fd, 0, 0);
+  } else {
+    // Give the output item — the client already carries it as cursor,
+    // so only set the cursor item rather than adding to inventory again.
+    player->flagval_16 = out;
+    player->flagval_8 = outc;
+    sc_setCursorItem(player->client_fd, out, outc);
+  }
+
+  // Update merchant slots and player inventory in the GUI
+  if (player->merchant_open) {
+    // Clear merchant input and output slots
+    sc_setContainerSlot(player->client_fd, 19, 0, 0, 0);  // input 1
+    sc_setContainerSlot(player->client_fd, 19, 1, 0, 0);  // input 2
+    sc_setContainerSlot(player->client_fd, 19, 2, 0, 0);  // output
+    // Refresh offers so the client sees updated uses, sold-out stock, and level.
+    sc_setTradeOffers(player->client_fd, 19, profession, mob_idx);
+    broadcastMobMetadata(-1, player->merchant_villager_eid);
+
+    // Sync all inventory slots so the client sees the consumed emeralds
+    for (uint8_t i = 0; i < 41; i++) {
+      uint8_t cs = serverSlotToClientSlot(19, i);
+      if (cs != 255) {
+        sc_setContainerSlot(player->client_fd, 19, cs,
+          player->inventory_count[i], player->inventory_items[i]);
+      }
+    }
+  }
+
+  writePlayerDataToDisk();
 }
 
 void interactEntity (int entity_id, int interactor_id) {
@@ -5489,27 +5979,28 @@ void interactEntity (int entity_id, int interactor_id) {
       break;
 
     case E_VILLAGER: // Villager
-      if (player->inventory_items[player->hotbar] == I_emerald) {
-        // Take the emerald
-        player->inventory_count[player->hotbar]--;
-        if (player->inventory_count[player->hotbar] == 0) {
-          player->inventory_items[player->hotbar] = 0;
+      // Open merchant trading GUI
+      player->merchant_open = 1;
+      player->merchant_villager_eid = entity_id;
+      player->selected_trade = 0;
+
+      sc_openScreen(player->client_fd, 19, "Villager", 8);
+      sc_setTradeOffers(player->client_fd, 19, mob->profession, mob_index);
+
+      // Send empty merchant slots
+      sc_setContainerSlot(player->client_fd, 19, 0, 0, 0);  // input 1
+      sc_setContainerSlot(player->client_fd, 19, 1, 0, 0);  // input 2
+      sc_setContainerSlot(player->client_fd, 19, 2, 0, 0);  // output
+      // Sync player inventory into the merchant window
+      for (uint8_t i = 0; i < 41; i++) {
+        uint8_t client_slot = serverSlotToClientSlot(19, i);
+        if (client_slot != 255) {
+          sc_setContainerSlot(player->client_fd, 19, client_slot,
+            player->inventory_count[i], player->inventory_items[i]);
         }
-        syncHeldItem(player, player->inventory_count[player->hotbar], player->inventory_items[player->hotbar]);
-
-        // Give a random item
-        uint16_t random_item = getRandomCreativeItem();
-        givePlayerItem(player, random_item, 1);
-
-        // Swing arm animation for all nearby players
-        for (int i = 0; i < MAX_PLAYERS; i ++) {
-          if (player_data[i].client_fd == -1) continue;
-          if (player_data[i].flags & 0x20) continue;
-          sc_entityAnimation(player_data[i].client_fd, interactor_id, 0);
-        }
-
-        broadcastMobSound(entity_id, S_VILLAGER_TRADE, SOUND_CATEGORY_NEUTRAL, 1.0f, 1.0f);
       }
+
+      broadcastMobSound(entity_id, S_VILLAGER_TRADE, SOUND_CATEGORY_NEUTRAL, 1.0f, 1.0f);
       break;
 
     case E_PIGLIN: // Piglin
@@ -6376,7 +6867,8 @@ void handleServerTick (int64_t time_since_last_tick) {
 
     // Despawn mobs past a certain distance from nearest player
     // Use squared distance to avoid sqrt (256^2 = 65536)
-    if (closest_dist_double > (double)MOB_DESPAWN_DISTANCE * MOB_DESPAWN_DISTANCE) {
+    if (mob_data[i].type != E_VILLAGER &&
+        closest_dist_double > (double)MOB_DESPAWN_DISTANCE * MOB_DESPAWN_DISTANCE) {
       mob_data[i].type = 0;
       continue;
     }

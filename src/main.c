@@ -511,6 +511,10 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
     case 0x0C:
       break;
 
+    case 0x32:
+      if (state == STATE_PLAY) cs_containerButtonClick(client_fd);
+      break;
+
     case 0x11:
       if (state == STATE_PLAY) cs_clickContainer(client_fd);
       break;

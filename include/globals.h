@@ -463,6 +463,10 @@ typedef struct {
   short portal_ow_x;
   int16_t portal_ow_y;
   short portal_ow_z;
+  // Merchant/trade state (villager trading GUI)
+  uint8_t merchant_open;         // 1 when merchant GUI is active
+  int merchant_villager_eid;     // Entity ID of the villager
+  uint8_t selected_trade;        // Currently selected trade index
   // Ender chest inventory (per-player, cross-dimension)
   uint16_t ender_chest_items[27];
   uint8_t ender_chest_count[27];
@@ -500,6 +504,7 @@ typedef struct {
   // Middle 1 bit: sheep sheared, unused for other mobs
   // Upper 2 bits: panic timer
   uint8_t data;
+  uint8_t profession;  // Village profession ID (for villagers)
   uint8_t dimension;
 } MobData;
 
@@ -560,6 +565,7 @@ extern int player_data_count;
 extern PlayerAppearance player_appearance[MAX_PLAYERS];
 
 extern MobData mob_data[MAX_MOBS];
+extern uint8_t mob_trade_uses[MAX_MOBS][5];
 extern XpOrbData xp_orb_data[MAX_XP_ORBS];
 
 // Projectile entity type identifiers for protocol 772 (1.21.8)

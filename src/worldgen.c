@@ -1598,6 +1598,17 @@ uint8_t getVillageHousePositions(int x, int z, short *house_x, short *house_z, u
   return count;
 }
 
+uint8_t getVillageProfession(int x, int z) {
+  VillageLayout v;
+  if (!getVillageLayout(x, z, &v)) return 0;
+  for (int i = 0; i < v.houses; i++) {
+    if (v.hx[i] == x && v.hz[i] == z) {
+      return v.profession[i];
+    }
+  }
+  return 0;
+}
+
 
 uint16_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor anchor, ChunkFeature feature, uint8_t height) {
 

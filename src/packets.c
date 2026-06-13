@@ -1410,6 +1410,19 @@ int cs_useItemOn (int client_fd) {
   return 0;
 }
 
+static void skipHashedSlotComponents (int client_fd) {
+  int added_components = readVarInt(client_fd);
+  for (int i = 0; i < added_components; i++) {
+    readVarInt(client_fd);  // component type
+    readUint32(client_fd);  // component hash
+  }
+
+  int removed_components = readVarInt(client_fd);
+  for (int i = 0; i < removed_components; i++) {
+    readVarInt(client_fd);  // component type
+  }
+}
+
 static void readChangedSlotPayload (int client_fd, uint8_t *present, uint16_t *item, uint8_t *count) {
 
   *present = readByte(client_fd);
@@ -1421,9 +1434,7 @@ static void readChangedSlotPayload (int client_fd, uint8_t *present, uint16_t *i
   *item = readVarInt(client_fd);
   *count = (uint8_t)readVarInt(client_fd);
 
-  // ignore components
-  readLengthPrefixedData(client_fd);
-  readLengthPrefixedData(client_fd);
+  skipHashedSlotComponents(client_fd);
 
 }
 
@@ -1512,6 +1523,46 @@ int cs_clickContainer (int client_fd) {
     output_click = output_item != 0 && output_count != 0;
   }
 
+  // Handle merchant trade output clicks before applying client slot changes,
+  // while the payment is still server-side in the input slot or inventory.
+  // All result-slot clicks are server-authoritative so stock/level counters
+  // cannot be bypassed by shift-clicking or other client-authored deltas.
+  if (window_id == 19 && player->merchant_open && clicked_slot == 2) {
+    if (mode == 0 || mode == 1) {
+      executeMerchantTrade(player, player->selected_trade, mode == 1);
+    } else {
+      int mob_idx = -player->merchant_villager_eid - 2;
+      if (mob_idx >= 0 && mob_idx < MAX_MOBS && mob_data[mob_idx].type == E_VILLAGER) {
+        sc_setTradeOffers(player->client_fd, 19, mob_data[mob_idx].profession, mob_idx);
+      }
+      sc_setContainerSlot(player->client_fd, 19, 0, player->craft_count[0], player->craft_items[0]);
+      sc_setContainerSlot(player->client_fd, 19, 1, 0, 0);
+      sc_setContainerSlot(player->client_fd, 19, 2, 0, 0);
+      for (uint8_t i = 0; i < 41; i++) {
+        uint8_t cs = serverSlotToClientSlot(19, i);
+        if (cs != 255) {
+          sc_setContainerSlot(player->client_fd, 19, cs,
+            player->inventory_count[i], player->inventory_items[i]);
+        }
+      }
+    }
+
+    // Discard unread slot change data from the packet
+    for (int i = 0; i < changes_count; i++) {
+      uint8_t p, c;
+      uint16_t it;
+      readUint16(client_fd); // slot index
+      readChangedSlotPayload(client_fd, &p, &it, &c);
+    }
+    // Discard cursor item from packet (executeMerchantTrade already set it)
+    if (readByte(client_fd)) {
+      readVarInt(client_fd); // item id
+      readVarInt(client_fd); // count
+      skipHashedSlotComponents(client_fd);
+    }
+    return 0;
+  }
+
   uint8_t apply_changes = true;
   uint8_t equipment_dirty = false;
   // prevent dropping items
@@ -1557,15 +1608,17 @@ int cs_clickContainer (int client_fd) {
 	    }
 	  }
 	  #endif
-	
+
 	  for (int i = 0; i < changes_count; i ++) {
-	
-	    slot = clientSlotToServerSlot(window_id, readUint16(client_fd));
+
+	    uint16_t changed_client_slot = readUint16(client_fd);
+	    slot = clientSlotToServerSlot(window_id, changed_client_slot);
 	    readChangedSlotPayload(client_fd, &present, &item, &count);
+	    if (window_id == 19 && changed_client_slot == 2) continue; // merchant output is server-authoritative
 	    if (slot > 67) continue; // skip out-of-bounds slots after consuming their payload
 	    // slots outside of the inventory overflow into the crafting buffer
 	    if (slot > 40 && apply_changes) craft = true;
-	
+
 	    #ifdef ALLOW_CHESTS
 	    if (window_id == 2 && slot > 40 && !is_ender_chest) {
 	      uint8_t *base = (uint8_t *)&block_changes[chest_idx + 1];
@@ -1636,15 +1689,25 @@ int cs_clickContainer (int client_fd) {
     for (int i = 0; i < 3; i ++) {
       sc_setContainerSlot(client_fd, window_id, i, player->craft_count[i], player->craft_items[i]);
     }
+  } else if (window_id == 19 && player->merchant_open && craft) {
+    // Confirm slot changes to the client so auto-populated items don't revert
+    sc_setContainerSlot(player->client_fd, 19, 0, player->craft_count[0], player->craft_items[0]);
+    sc_setContainerSlot(player->client_fd, 19, 2, 0, 0);
+    for (uint8_t i = 0; i < 41; i++) {
+      uint8_t cs = serverSlotToClientSlot(19, i);
+      if (cs != 255) {
+        sc_setContainerSlot(player->client_fd, 19, cs,
+          player->inventory_count[i], player->inventory_items[i]);
+      }
+    }
   }
 
+skip_normal_processing:
   // assign cursor-carried item slot
   if (readByte(client_fd)) {
     player->flagval_16 = readVarInt(client_fd);
     player->flagval_8 = readVarInt(client_fd);
-    // ignore components
-    readLengthPrefixedData(client_fd);
-    readLengthPrefixedData(client_fd);
+    skipHashedSlotComponents(client_fd);
   } else {
     player->flagval_16 = 0;
     player->flagval_8 = 0;
@@ -1820,7 +1883,7 @@ int cs_closeContainer (int client_fd) {
 	    }
 	  }
 	  #endif
-	
+
 	  // return all items in crafting slots to the player
 	  // or, in the case of chests, simply clear the storage pointer
 	  for (uint8_t i = 0; i < 9; i ++) {
@@ -1834,7 +1897,7 @@ int cs_closeContainer (int client_fd) {
 	    // Unlock craft_items
 	    player->flags &= ~0x80;
 	  }
-	
+
 	  #ifdef ALLOW_CHESTS
 	  if (chest_idx >= 0 && chest_idx < block_changes_count && block_changes[chest_idx].block == B_chest) {
 	    sc_blockEvent(client_fd,
@@ -1858,11 +1921,18 @@ int cs_closeContainer (int client_fd) {
 	    sc_blockEvent(client_fd, ec_x, ec_y, ec_z, 1, 0, B_ender_chest);
 	  }
 	  #endif
-	
+
 	  givePlayerItem(player, player->flagval_16, player->flagval_8);
   sc_setCursorItem(client_fd, 0, 0);
   player->flagval_16 = 0;
   player->flagval_8 = 0;
+
+  // Clean up merchant state when closing the merchant GUI
+  if (window_id == 19) {
+    player->merchant_open = 0;
+    player->merchant_villager_eid = 0;
+    player->selected_trade = 0;
+  }
 
   return 0;
 }
@@ -2429,10 +2499,10 @@ int cs_chat (int client_fd) {
       sc_systemChat(client_fd, "§cCreative mode is not enabled on this server", 45);
       goto cleanup;
     }
-    
+
     int arg_offset = 10;  // After "!creative "
     while (arg_offset < 224 && recv_buffer[arg_offset] == ' ') arg_offset++;
-    
+
     if (arg_offset >= 224 || recv_buffer[arg_offset] == '\0') {
       // No arguments - toggle UI
       toggleCreativeModeUI(client_fd);
@@ -2451,19 +2521,19 @@ int cs_chat (int client_fd) {
       // Try to find and give item by name
       char item_name[128];
       size_t name_len = strlen((char *)recv_buffer + arg_offset);
-      
+
       // Trim trailing whitespace
-      while (name_len > 0 && ((recv_buffer + arg_offset)[name_len - 1] == ' ' || 
-             (recv_buffer + arg_offset)[name_len - 1] == '\t' || 
-             (recv_buffer + arg_offset)[name_len - 1] == '\n' || 
+      while (name_len > 0 && ((recv_buffer + arg_offset)[name_len - 1] == ' ' ||
+             (recv_buffer + arg_offset)[name_len - 1] == '\t' ||
+             (recv_buffer + arg_offset)[name_len - 1] == '\n' ||
              (recv_buffer + arg_offset)[name_len - 1] == '\r')) {
         name_len--;
       }
-      
+
       if (name_len > 127) name_len = 127;
       strncpy(item_name, (char *)recv_buffer + arg_offset, name_len);
       item_name[name_len] = '\0';
-      
+
       // Search for item by name (case-insensitive)
       uint16_t item_id = findCreativeItemByName(item_name);
       if (item_id > 0) {
@@ -3163,7 +3233,213 @@ int sc_pickupItem (int client_fd, int collected, int collector, uint8_t count) {
   return 0;
 }
 
-// C->S Player Loaded
+// S->C Set Trade Offers (0x2D)
+// Profession: codebase constants (FARMER=0, LIBRARIAN=1, CLERIC=2, ARMORER=3,
+// BUTCHER=4, CARTOGRAPHER=5, FISHERMAN=6, FLETCHER=7, LEATHERWORKER=8,
+// MASON=9, SHEPHERD=10, TOOLSMITH=11, WEAPONSMITH=12)
+int sc_setTradeOffers(int client_fd, int window_id, uint8_t profession, int mob_index) {
+  // Trade entries: {input_item, input_count, output_item, output_count, max_uses}
+  struct TradeEntry {
+    uint16_t in_item, in_cnt;
+    uint16_t out_item, out_cnt;
+    uint8_t max_uses;
+  };
+
+  // Farmer trades: food-focused
+  static const struct TradeEntry farmer[] = {
+    {I_emerald, 1, I_bread, 3, 16},
+    {I_emerald, 1, I_apple, 2, 8},
+    {I_emerald, 1, I_cookie, 4, 12},
+    {I_emerald, 2, I_cake, 1, 4},
+    {I_emerald, 3, I_golden_carrot, 1, 3},
+  };
+  // Librarian trades: books and paper
+  static const struct TradeEntry librarian[] = {
+    {I_emerald, 1, I_paper, 4, 12},
+    {I_emerald, 2, I_book, 1, 8},
+    {I_emerald, 4, I_bookshelf, 1, 4},
+    {I_emerald, 5, I_golden_apple, 1, 2},
+    {I_emerald, 1, I_glass, 4, 12},
+  };
+  // Cleric trades: ender pearls, glowstone, redstone
+  static const struct TradeEntry cleric[] = {
+    {I_emerald, 1, I_redstone, 2, 12},
+    {I_emerald, 2, I_lapis_lazuli, 1, 8},
+    {I_emerald, 3, I_glowstone, 1, 6},
+    {I_emerald, 4, I_ender_pearl, 1, 3},
+    {I_emerald, 5, I_experience_bottle, 1, 3},
+  };
+  // Armorer trades: armor and protection
+  static const struct TradeEntry armorer[] = {
+    {I_emerald, 3, I_iron_boots, 1, 4},
+    {I_emerald, 4, I_iron_leggings, 1, 4},
+    {I_emerald, 5, I_iron_chestplate, 1, 4},
+    {I_emerald, 7, I_diamond_boots, 1, 2},
+    {I_emerald, 6, I_iron_helmet, 1, 4},
+  };
+  // Butcher trades: meat and leather
+  static const struct TradeEntry butcher[] = {
+    {I_emerald, 1, I_cooked_beef, 3, 12},
+    {I_emerald, 1, I_cooked_porkchop, 3, 12},
+    {I_emerald, 1, I_cooked_mutton, 3, 12},
+    {I_emerald, 1, I_leather, 2, 8},
+    {I_emerald, 2, I_rabbit_stew, 1, 4},
+  };
+  // Cartographer trades: maps and exploration
+  static const struct TradeEntry cartographer[] = {
+    {I_emerald, 1, I_paper, 6, 12},
+    {I_emerald, 2, I_compass, 1, 6},
+    {I_emerald, 3, I_map, 1, 4},
+    {I_emerald, 4, I_filled_map, 1, 3},
+    {I_emerald, 5, I_globe_banner_pattern, 1, 2},
+  };
+  // Fisherman trades: fish and rods
+  static const struct TradeEntry fisherman[] = {
+    {I_emerald, 1, I_cooked_cod, 3, 12},
+    {I_emerald, 1, I_cooked_salmon, 3, 12},
+    {I_emerald, 1, I_cod, 3, 12},
+    {I_emerald, 2, I_salmon, 3, 8},
+    {I_emerald, 3, I_fishing_rod, 1, 4},
+  };
+  // Fletcher trades: bows and arrows
+  static const struct TradeEntry fletcher[] = {
+    {I_emerald, 1, I_arrow, 6, 12},
+    {I_emerald, 1, I_flint, 4, 12},
+    {I_emerald, 2, I_bow, 1, 6},
+    {I_emerald, 3, I_crossbow, 1, 4},
+    {I_emerald, 4, I_arrow, 12, 3},
+  };
+  // Leatherworker trades: leather armor
+  static const struct TradeEntry leatherworker[] = {
+    {I_emerald, 1, I_leather, 3, 12},
+    {I_emerald, 2, I_leather_helmet, 1, 6},
+    {I_emerald, 3, I_leather_chestplate, 1, 6},
+    {I_emerald, 3, I_leather_leggings, 1, 6},
+    {I_emerald, 4, I_saddle, 1, 3},
+  };
+  // Mason trades: stone building blocks
+  static const struct TradeEntry mason[] = {
+    {I_emerald, 1, I_stone, 6, 12},
+    {I_emerald, 1, I_stone_bricks, 4, 12},
+    {I_emerald, 2, I_chiseled_stone_bricks, 1, 6},
+    {I_emerald, 2, I_polished_andesite, 4, 6},
+    {I_emerald, 1, I_bricks, 4, 12},
+  };
+  // Shepherd trades: wool and carpets
+  static const struct TradeEntry shepherd[] = {
+    {I_emerald, 1, I_white_wool, 3, 12},
+    {I_emerald, 1, I_white_carpet, 6, 12},
+    {I_emerald, 2, I_shears, 1, 6},
+    {I_emerald, 2, I_white_bed, 1, 4},
+    {I_emerald, 1, I_string, 4, 12},
+  };
+  // Toolsmith trades: tools
+  static const struct TradeEntry toolsmith[] = {
+    {I_emerald, 2, I_stone_axe, 1, 6},
+    {I_emerald, 2, I_stone_pickaxe, 1, 6},
+    {I_emerald, 3, I_iron_axe, 1, 4},
+    {I_emerald, 3, I_iron_pickaxe, 1, 4},
+    {I_emerald, 4, I_diamond_hoe, 1, 2},
+  };
+  // Weaponsmith trades: swords and weapons
+  static const struct TradeEntry weaponsmith[] = {
+    {I_emerald, 2, I_iron_sword, 1, 6},
+    {I_emerald, 3, I_iron_axe, 1, 4},
+    {I_emerald, 4, I_diamond_sword, 1, 2},
+    {I_emerald, 4, I_diamond_axe, 1, 2},
+    {I_emerald, 3, I_iron_ingot, 2, 6},
+  };
+  // Default: basic items
+  static const struct TradeEntry default_trades[] = {
+    {I_emerald, 1, I_bread, 3, 16},
+    {I_emerald, 1, I_oak_planks, 8, 12},
+    {I_emerald, 2, I_iron_ingot, 1, 6},
+    {I_emerald, 3, I_book, 1, 4},
+    {I_emerald, 1, I_stick, 4, 12},
+  };
+
+  const struct TradeEntry *trades;
+  int trade_count;
+  switch (profession) {
+    case 0:  trades = farmer;         trade_count = sizeof(farmer) / sizeof(farmer[0]); break;
+    case 1:  trades = librarian;      trade_count = sizeof(librarian) / sizeof(librarian[0]); break;
+    case 2:  trades = cleric;         trade_count = sizeof(cleric) / sizeof(cleric[0]); break;
+    case 3:  trades = armorer;        trade_count = sizeof(armorer) / sizeof(armorer[0]); break;
+    case 4:  trades = butcher;        trade_count = sizeof(butcher) / sizeof(butcher[0]); break;
+    case 5:  trades = cartographer;   trade_count = sizeof(cartographer) / sizeof(cartographer[0]); break;
+    case 6:  trades = fisherman;      trade_count = sizeof(fisherman) / sizeof(fisherman[0]); break;
+    case 7:  trades = fletcher;       trade_count = sizeof(fletcher) / sizeof(fletcher[0]); break;
+    case 8:  trades = leatherworker;  trade_count = sizeof(leatherworker) / sizeof(leatherworker[0]); break;
+    case 9:  trades = mason;          trade_count = sizeof(mason) / sizeof(mason[0]); break;
+    case 10: trades = shepherd;       trade_count = sizeof(shepherd) / sizeof(shepherd[0]); break;
+    case 11: trades = toolsmith;      trade_count = sizeof(toolsmith) / sizeof(toolsmith[0]); break;
+    case 12: trades = weaponsmith;    trade_count = sizeof(weaponsmith) / sizeof(weaponsmith[0]); break;
+    default: trades = default_trades; trade_count = sizeof(default_trades) / sizeof(default_trades[0]); break;
+  }
+
+  uint8_t villager_level = getVillagerTradeLevel(mob_index);
+  int unlocked_trade_count = trade_count;
+  if (unlocked_trade_count > villager_level) unlocked_trade_count = villager_level;
+  if (unlocked_trade_count < 1) unlocked_trade_count = 1;
+
+  startPacket(client_fd, 0x2D);
+  writeVarInt(client_fd, window_id);
+  writeVarInt(client_fd, unlocked_trade_count);
+
+  for (int i = 0; i < unlocked_trade_count; i++) {
+    // Input item 1 (simplified format: itemId, count, components)
+    writeVarInt(client_fd, trades[i].in_item);
+    writeVarInt(client_fd, trades[i].in_cnt);
+    writeVarInt(client_fd, 0); // no components
+
+    // Output item (full Slot format: count, itemId, addedComponents, removedComponents, data)
+    writeVarInt(client_fd, trades[i].out_cnt);
+    if (trades[i].out_cnt > 0) {
+      writeVarInt(client_fd, trades[i].out_item);
+      writeVarInt(client_fd, 0); // addedComponentCount
+      writeVarInt(client_fd, 0); // removedComponentCount
+    }
+
+    // Input item 2 (optional, absent)
+    writeByte(client_fd, 0); // false = no second input
+
+    // Trade meta
+    // Get trade uses and calculate if disabled
+    uint8_t uses = (mob_index >= 0 && mob_index < MAX_MOBS && i < 5) ? mob_trade_uses[mob_index][i] : 0;
+    uint8_t disabled = (uses >= trades[i].max_uses) ? 1 : 0;
+    writeByte(client_fd, disabled);  // tradeDisabled (bool)
+    writeUint32(client_fd, uses);   // uses
+    writeUint32(client_fd, trades[i].max_uses);
+    writeUint32(client_fd, 1);       // xp
+    writeUint32(client_fd, 0);       // specialPrice
+    writeFloat(client_fd, 0.05f);    // priceMultiplier
+    writeUint32(client_fd, 0);       // demand
+  }
+
+  writeVarInt(client_fd, villager_level);
+  writeVarInt(client_fd, getVillagerTradeDisplayExperience(mob_index));
+  writeByte(client_fd, 1);          // isRegularVillager (bool)
+  writeByte(client_fd, 0);          // canRestock (bool)
+  endPacket(client_fd);
+  return 0;
+}
+
+// C->S Select Trade (0x32) — used for trade selection
+int cs_containerButtonClick(int client_fd) {
+  int trade_index = readVarInt(client_fd);
+
+  PlayerData *player;
+  if (getPlayerData(client_fd, &player)) return 1;
+
+  if (player->merchant_open) {
+    if (trade_index >= 0 && trade_index < 10) {
+      selectMerchantTrade(player, (uint8_t)trade_index);
+    }
+  }
+
+  return 0;
+}
+
 int cs_playerLoaded (int client_fd) {
 
   PlayerData *player;

@@ -87,6 +87,8 @@ volatile int fluid_queue_head = 0;
 volatile int fluid_queue_tail = 0;
 
 MobData mob_data[MAX_MOBS];
+// Per-mob trade usage tracking [mob_index][trade_index]
+uint8_t mob_trade_uses[MAX_MOBS][5];
 XpOrbData xp_orb_data[MAX_XP_ORBS];
 ProjectileData projectile_data[MAX_PROJECTILES];
 

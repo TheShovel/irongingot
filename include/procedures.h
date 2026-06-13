@@ -82,7 +82,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
 void checkFluidUpdate (short x, int16_t y, short z, uint16_t block);
 void processFluidQueue (void);
 
-void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health, uint8_t dimension);
+void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health, uint8_t dimension, uint8_t profession);
 void spawnXpOrb (double x, double y, double z, uint8_t value, uint8_t dimension);
 void tickXpOrbs (void);
 void interactEntity (int entity_id, int interactor_id);
@@ -102,5 +102,10 @@ ssize_t writeEntityData (int client_fd, EntityData *data);
 
 int sizeEntityData (EntityData *data);
 int sizeEntityMetadata (EntityData *metadata, size_t length);
+uint8_t getVillagerTradeLevel (int mob_index);
+uint32_t getVillagerTradeExperience (int mob_index);
+uint32_t getVillagerTradeDisplayExperience (int mob_index);
+void selectMerchantTrade (PlayerData *player, uint8_t trade_index);
+void executeMerchantTrade (PlayerData *player, uint8_t trade_index, uint8_t to_inventory);
 
 #endif

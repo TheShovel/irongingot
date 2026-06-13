@@ -401,6 +401,101 @@ static int deserializeSpecialBlocks(cJSON *arr) {
   return 1;
 }
 
+static cJSON *serializeMobData(void) {
+  cJSON *arr = cJSON_CreateArray();
+  if (!arr) return NULL;
+
+  for (int i = 0; i < MAX_MOBS; i++) {
+    MobData *mob = &mob_data[i];
+    if (mob->type == 0 || (mob->data & 31) == 0) continue;
+
+    cJSON *obj = cJSON_CreateObject();
+    if (!obj) { cJSON_Delete(arr); return NULL; }
+
+    cJSON_AddNumberToObject(obj, "index", i);
+    cJSON_AddNumberToObject(obj, "type", mob->type);
+    cJSON_AddNumberToObject(obj, "x", mob->x);
+    cJSON_AddNumberToObject(obj, "y", mob->y);
+    cJSON_AddNumberToObject(obj, "z", mob->z);
+    cJSON_AddNumberToObject(obj, "move_dx", mob->move_dx);
+    cJSON_AddNumberToObject(obj, "move_dz", mob->move_dz);
+    cJSON_AddNumberToObject(obj, "move_dy", mob->move_dy);
+    cJSON_AddNumberToObject(obj, "move_timer", mob->move_timer);
+    cJSON_AddNumberToObject(obj, "anger_timer", mob->anger_timer);
+    cJSON_AddNumberToObject(obj, "yaw_store", mob->yaw_store);
+    cJSON_AddNumberToObject(obj, "data", mob->data);
+    cJSON_AddNumberToObject(obj, "profession", mob->profession);
+    cJSON_AddNumberToObject(obj, "dimension", mob->dimension);
+
+    if (mob->type == E_VILLAGER) {
+      cJSON *uses = cJSON_CreateArray();
+      if (uses) {
+        for (int t = 0; t < 5; t++) {
+          cJSON_AddItemToArray(uses, cJSON_CreateNumber(mob_trade_uses[i][t]));
+        }
+        cJSON_AddItemToObject(obj, "trade_uses", uses);
+      }
+    }
+
+    cJSON_AddItemToArray(arr, obj);
+  }
+
+  return arr;
+}
+
+static int deserializeMobData(cJSON *arr) {
+  if (!cJSON_IsArray(arr)) return 0;
+
+  memset(mob_data, 0, sizeof(mob_data));
+  memset(mob_trade_uses, 0, sizeof(mob_trade_uses));
+
+  int count = cJSON_GetArraySize(arr);
+  for (int n = 0; n < count; n++) {
+    cJSON *obj = cJSON_GetArrayItem(arr, n);
+    if (!cJSON_IsObject(obj)) continue;
+
+    cJSON *idx_json = cJSON_GetObjectItem(obj, "index");
+    if (!cJSON_IsNumber(idx_json)) continue;
+    int i = (int)cJSON_GetNumberValue(idx_json);
+    if (i < 0 || i >= MAX_MOBS) continue;
+
+    MobData *mob = &mob_data[i];
+
+    #define READ_MOB_NUMBER(field, json_name) do { \
+      cJSON *v = cJSON_GetObjectItem(obj, json_name); \
+      if (cJSON_IsNumber(v)) mob->field = (typeof(mob->field))cJSON_GetNumberValue(v); \
+    } while(0)
+
+    READ_MOB_NUMBER(type, "type");
+    READ_MOB_NUMBER(x, "x");
+    READ_MOB_NUMBER(y, "y");
+    READ_MOB_NUMBER(z, "z");
+    READ_MOB_NUMBER(move_dx, "move_dx");
+    READ_MOB_NUMBER(move_dz, "move_dz");
+    READ_MOB_NUMBER(move_dy, "move_dy");
+    READ_MOB_NUMBER(move_timer, "move_timer");
+    READ_MOB_NUMBER(anger_timer, "anger_timer");
+    READ_MOB_NUMBER(yaw_store, "yaw_store");
+    READ_MOB_NUMBER(data, "data");
+    READ_MOB_NUMBER(profession, "profession");
+    READ_MOB_NUMBER(dimension, "dimension");
+
+    #undef READ_MOB_NUMBER
+
+    cJSON *uses = cJSON_GetObjectItem(obj, "trade_uses");
+    if (cJSON_IsArray(uses)) {
+      int ucount = cJSON_GetArraySize(uses);
+      if (ucount > 5) ucount = 5;
+      for (int t = 0; t < ucount; t++) {
+        cJSON *v = cJSON_GetArrayItem(uses, t);
+        if (cJSON_IsNumber(v)) mob_trade_uses[i][t] = (uint8_t)cJSON_GetNumberValue(v);
+      }
+    }
+  }
+
+  return 1;
+}
+
 static int writeWorldJson(void) {
   FILE *file = fopen(FILE_PATH, "w");
   if (!file) {
@@ -424,6 +519,10 @@ static int writeWorldJson(void) {
   cJSON *sb = serializeSpecialBlocks();
   if (sb) cJSON_AddItemToObject(root, "special_blocks", sb);
   else cJSON_AddArrayToObject(root, "special_blocks");
+
+  cJSON *md = serializeMobData();
+  if (md) cJSON_AddItemToObject(root, "mobs", md);
+  else cJSON_AddArrayToObject(root, "mobs");
 
   char *json = cJSON_Print(root);
   if (!json) {
@@ -522,6 +621,11 @@ int initSerializer(void) {
     special_block_init();
   }
 
+  cJSON *md = cJSON_GetObjectItem(root, "mobs");
+  if (md && !deserializeMobData(md)) {
+    terminal_ui_log("Failed to deserialize mob data");
+  }
+
   // Rebuild any missing special block state entries from block changes.
   // This handles upgrades from older world.json files and any edge cases
   // where block state was not serialized for fences, wall torches, etc.
@@ -574,8 +678,10 @@ int initSerializer(void) {
     else if (b == B_chest || b == B_barrel) i += 14;
   }
 
-  terminal_ui_log("[LOAD] Loaded %d block changes, %d players, %d special blocks",
-    block_changes_count, player_data_count, special_blocks_count);
+  int mob_count = 0;
+  for (int i = 0; i < MAX_MOBS; i++) if (mob_data[i].type != 0) mob_count++;
+  terminal_ui_log("[LOAD] Loaded %d block changes, %d players, %d special blocks, %d mobs",
+    block_changes_count, player_data_count, special_blocks_count, mob_count);
 
   cJSON_Delete(root);
   return 0;
