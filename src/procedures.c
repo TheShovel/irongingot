@@ -6354,6 +6354,24 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
     damage = (uint8_t)(damage_f + 0.5f);
     if (damage < 1) damage = 1;
 
+    // ---- Critical Hit ----
+    // A critical hit occurs when a player attacks while falling:
+    // - Player is below their last grounded Y (falling at least 1 block)
+    // - Player is not in water
+    // - Player is not on a ladder or vine
+    {
+      uint16_t feet_block = getBlockAt2(player->x, player->y, player->z, player->dimension);
+      if (
+        player->y < player->grounded_y &&           // Falling
+        !(feet_block >= B_water && feet_block < B_water + 8) &&  // Not in water
+        feet_block != B_ladder                       // Not on ladder
+      ) {
+        // Vanilla critical hit: 1.5x damage (add half)
+        damage = (uint8_t)((float)damage * 1.5f + 0.5f);
+        if (damage < 1) damage = 1;
+      }
+    }
+
     // Update last attack time
     player->last_attack_time = now_us;
 

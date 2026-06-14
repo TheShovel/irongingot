@@ -158,7 +158,7 @@ These are advanced features or aesthetic improvements.
 
 ### 18. Combat Features
 
-- **Critical Hits** (Low) - Damage multiplier
+- ~~**Critical Hits** (Low)~~ - ✅ 1.5x damage when attacking while falling
 - **Shield Blocking** (Low) - Blocking mechanic
 
 ### 19. Visual/Aesthetic
@@ -195,9 +195,10 @@ These are advanced features or aesthetic improvements.
 **Phase 3 (Low Priority):**
 10. Redstone components
 11. Utility blocks and entities
-12. Advanced commands
-13. Structure improvements (ocean monuments, mansions)
-14. Visual effects and particles
+12. ~~Critical Hits~~ ✅ Completed
+13. Advanced commands
+14. Structure improvements (ocean monuments, mansions)
+15. Visual effects and particles
 
 ---
 
