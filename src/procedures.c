@@ -413,6 +413,7 @@ void resetPlayerData (PlayerData *player) {
   player->health = 20;
   player->hunger = 20;
   player->saturation = 2500;
+  player->air = 300;
   if (use_bed_spawn) {
     player->x = respawn_x;
     player->z = respawn_z;
@@ -976,6 +977,11 @@ void sendPlayerMetadata (int client_fd, PlayerData *player) {
       { entity_bit_mask }, // Value
     },
     {
+      1,                   // Index (Air)
+      1,                   // Type (VarInt)
+      { .varint = player->air },
+    },
+    {
       6,        // Index (Pose),
       21,       // Type (Pose),
       { pose }, // Value (Standing)
@@ -997,7 +1003,7 @@ void sendPlayerMetadata (int client_fd, PlayerData *player) {
     }
   };
 
-  sc_setEntityMetadata(client_fd, player->client_fd, metadata, 5);
+  sc_setEntityMetadata(client_fd, player->client_fd, metadata, 6);
 }
 
 void sendPlayerEquipment (int client_fd, PlayerData *player) {
@@ -6544,6 +6550,10 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
         strcpy((char *)recv_buffer + player_name_len, " was slain by ");
         strcpy((char *)recv_buffer + player_name_len + 14, attacker->name);
         recv_buffer[player_name_len + 14 + strlen(attacker->name)] = '\0';
+      } else if (damage_type == D_drown) {
+        // Killed by drowning
+        strcpy((char *)recv_buffer + player_name_len, " drowned");
+        recv_buffer[player_name_len + 8] = '\0';
       } else if (damage_type == D_cactus) {
         // Killed by being near a cactus
         strcpy((char *)recv_buffer + player_name_len, " was pricked to death");
@@ -6837,6 +6847,26 @@ void handleServerTick (int64_t time_since_last_tick) {
       #ifndef BROADCAST_ALL_MOVEMENT
         player->flags &= ~0x40;
       #endif
+
+      // ---- Air supply & drowning (runs every tick) ----
+      {
+        uint8_t pdim = player->dimension;
+        // Check if the player's head is in water (block at y+1)
+        uint16_t head_block = getBlockAt2(player->x, player->y + 1, player->z, pdim);
+        uint8_t head_in_water = (head_block >= B_water && head_block < B_water + 8);
+
+        if (head_in_water) {
+          // Submerged: deplete air
+          if (player->air > 0) player->air--;
+        } else {
+          // Not submerged: replenish air
+          if (player->air < 300) {
+            player->air += 4;
+            if (player->air > 300) player->air = 300;
+          }
+        }
+      }
+
       if (server_ticks % (uint32_t)TICKS_PER_SECOND != 0) continue;
       sc_keepAlive(player->client_fd);
       sc_updateTime(player->client_fd, world_time);
@@ -6861,6 +6891,10 @@ void handleServerTick (int64_t time_since_last_tick) {
         getBlockAt2(player->x, player->y, player->z - 1, pdim) == B_cactus
       ) hurtEntity(player->client_fd, -1, D_cactus, 4);
       #endif
+      // Drowning damage - deals 2 damage (1 heart) per second when air is depleted
+      if (player->air == 0) {
+        hurtEntity(player->client_fd, -1, D_drown, 2);
+      }
       if (player->health >= 20 || player->health == 0) continue;
       if (player->hunger < 18) continue;
       if (player->saturation >= 600) {
@@ -8278,6 +8312,25 @@ static void updatePlayerStateTask(void* arg) {
     player->flags &= ~0x40;
   #endif
 
+  // ---- Air supply & drowning (runs every tick) ----
+  {
+    uint8_t pdim = player->dimension;
+    // Check if the player's head is in water (block at y+1)
+    uint16_t head_block = getBlockAt2(player->x, player->y + 1, player->z, pdim);
+    uint8_t head_in_water = (head_block >= B_water && head_block < B_water + 8);
+
+    if (head_in_water) {
+      // Submerged: deplete air
+      if (player->air > 0) player->air--;
+    } else {
+      // Not submerged: replenish air
+      if (player->air < 300) {
+        player->air += 4;
+        if (player->air > 300) player->air = 300;
+      }
+    }
+  }
+
   // Process once-per-second state updates (no packet sending here)
   if (server_ticks % (uint32_t)TICKS_PER_SECOND == 0) {
     // Calculate lava damage (apply health change, packet sent separately)
@@ -8315,6 +8368,12 @@ static void updatePlayerStateTask(void* arg) {
     }
     #endif
 
+    // Drowning damage - deals 2 damage (1 heart) per second when air is depleted
+    if (player->air == 0) {
+      if (player->health > 2) player->health -= 2;
+      else player->health = 0;
+    }
+
     // Heal from saturation (update state only, packet sent separately)
     if (player->health < 20 && player->health != 0 && player->hunger >= 18) {
       if (player->saturation >= 600) {
@@ -8342,6 +8401,8 @@ static void sendPlayerUpdatePackets(int64_t time_since_last_tick) {
       sc_keepAlive(player->client_fd);
       sc_updateTime(player->client_fd, world_time);
       sc_setHealth(player->client_fd, player->health, player->hunger, player->saturation);
+      // Sync air value to client for oxygen bar display
+      sendPlayerMetadata(player->client_fd, player);
     }
 
     // Send eating completion packets if flag is set

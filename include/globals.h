@@ -431,6 +431,7 @@ typedef struct {
   uint8_t health;
   uint8_t hunger;
   uint16_t saturation;
+  uint16_t air;  // Remaining air ticks (300 = full, 0 = drowning)
   uint8_t hotbar;
   uint16_t inventory_items[41];
   uint16_t craft_items[9];
