@@ -482,7 +482,7 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
       // Sword recipes for any planks (check before the switch)
       if (isPlankItem(first_item) &&
           first_row == 0 &&
-          player->craft_items[first + 3] == first_item &&
+          isPlankItem(player->craft_items[first + 3]) &&
           player->craft_items[first + 6] == I_stick) {
         *item = I_wooden_sword;
         *count = 1;
@@ -579,9 +579,9 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
       // 2x2 crafting table from any planks
       if (isPlankItem(first_item) &&
           first_col != 2 && first_row != 2 &&
-          player->craft_items[first + 1] == first_item &&
-          player->craft_items[first + 3] == first_item &&
-          player->craft_items[first + 4] == first_item) {
+          isPlankItem(player->craft_items[first + 1]) &&
+          isPlankItem(player->craft_items[first + 3]) &&
+          isPlankItem(player->craft_items[first + 4])) {
         *item = getCraftingTableFromPlank(first_item);
         *count = 1;
         return;
@@ -691,8 +691,8 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
         // Pickaxe recipe
         if (
           first == 0 &&
-          player->craft_items[first + 1] == first_item &&
-          player->craft_items[first + 2] == first_item &&
+          isPlankItem(player->craft_items[first + 1]) &&
+          isPlankItem(player->craft_items[first + 2]) &&
           player->craft_items[first + 4] == I_stick &&
           player->craft_items[first + 7] == I_stick
         ) {
@@ -703,13 +703,13 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
         // Axe recipe
         if (
           first < 2 &&
-          player->craft_items[first + 1] == first_item &&
+          isPlankItem(player->craft_items[first + 1]) &&
           ((
-            player->craft_items[first + 3] == first_item &&
+            isPlankItem(player->craft_items[first + 3]) &&
             player->craft_items[first + 4] == I_stick &&
             player->craft_items[first + 7] == I_stick
           ) || (
-            player->craft_items[first + 4] == first_item &&
+            isPlankItem(player->craft_items[first + 4]) &&
             player->craft_items[first + 3] == I_stick &&
             player->craft_items[first + 6] == I_stick
           ))
@@ -902,18 +902,18 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
           return;
         }
       }
-      // Fence gate recipe (4 planks + 2 sticks)
+      // Fence gate recipe (2 planks + 4 sticks)
       // Pattern: stick-plank-stick / stick-plank-stick
       if (
         first_col == 0 && first_row == 0 &&
-        isPlankItem(first_item) &&
-        player->craft_items[1] == I_stick &&
-        player->craft_items[2] == first_item &&
+        first_item == I_stick &&
+        isPlankItem(player->craft_items[1]) &&
+        player->craft_items[2] == I_stick &&
         player->craft_items[3] == I_stick &&
-        player->craft_items[4] == first_item &&
-        player->craft_items[5] == first_item
+        player->craft_items[4] == player->craft_items[1] &&
+        player->craft_items[5] == I_stick
       ) {
-        uint16_t result = getFenceGateFromPlank(first_item);
+        uint16_t result = getFenceGateFromPlank(player->craft_items[1]);
         if (result != 0) {
           *item = result;
           *count = 1;
@@ -1069,20 +1069,27 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
       break;
 
     case 8:
+      #ifdef ALLOW_CHESTS
+      if (config.allow_chests && player->craft_items[4] == 0 &&
+          isPlankItem(player->craft_items[0]) &&
+          isPlankItem(player->craft_items[1]) &&
+          isPlankItem(player->craft_items[2]) &&
+          isPlankItem(player->craft_items[3]) &&
+          isPlankItem(player->craft_items[5]) &&
+          isPlankItem(player->craft_items[6]) &&
+          isPlankItem(player->craft_items[7]) &&
+          isPlankItem(player->craft_items[8])) {
+        *item = getChestFromPlank(first_item);
+        *count = 1;
+        return;
+      }
+      #endif
       if (identical) {
         if (player->craft_items[4] == 0) {
           // Center slot clear
           switch (first_item) {
             case I_cobblestone: *item = I_furnace; *count = 1; return;
-            #ifdef ALLOW_CHESTS
-            default:
-              if (config.allow_chests && isPlankItem(first_item)) {
-                *item = getChestFromPlank(first_item);
-                *count = 1;
-                return;
-              }
-              break;
-            #endif
+            default: break;
           }
         } else if (player->craft_items[1] == 0) {
           // Top-middle slot clear (chestplate recipes)
@@ -1153,14 +1160,14 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
       // B B B
       // P P P
       if (isPlankItem(first_item) && first == 0 &&
-          player->craft_items[1] == first_item &&
-          player->craft_items[2] == first_item &&
+          isPlankItem(player->craft_items[1]) &&
+          isPlankItem(player->craft_items[2]) &&
           player->craft_items[3] == I_book &&
           player->craft_items[4] == I_book &&
           player->craft_items[5] == I_book &&
-          player->craft_items[6] == first_item &&
-          player->craft_items[7] == first_item &&
-          player->craft_items[8] == first_item) {
+          isPlankItem(player->craft_items[6]) &&
+          isPlankItem(player->craft_items[7]) &&
+          isPlankItem(player->craft_items[8])) {
         *item = I_bookshelf;
         *count = 1;
         return;

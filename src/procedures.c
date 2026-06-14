@@ -696,12 +696,14 @@ uint8_t serverSlotToClientSlot (int window_id, uint8_t slot) {
   } else if (window_id == 12) { // crafting table
 
     if (slot >= 41 && slot <= 49) return slot - 40;
-    return serverSlotToClientSlot(0, slot - 1);
+    if (slot >= 9 && slot <= 35) return slot + 1;
+    if (slot <= 8) return slot + 37;
 
   } else if (window_id == 14) { // furnace
 
     if (slot >= 41 && slot <= 43) return slot - 41;
-    return serverSlotToClientSlot(0, slot + 6);
+    if (slot >= 9 && slot <= 35) return slot - 6;
+    if (slot <= 8) return slot + 30;
 
   } else if (window_id == 19) { // merchant
 
