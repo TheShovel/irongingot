@@ -199,6 +199,11 @@ static cJSON *serializePlayerData(void) {
     cJSON_AddNumberToObject(obj, "portal_ow_x", pd->portal_ow_x);
     cJSON_AddNumberToObject(obj, "portal_ow_y", pd->portal_ow_y);
     cJSON_AddNumberToObject(obj, "portal_ow_z", pd->portal_ow_z);
+    cJSON_AddNumberToObject(obj, "spawn_set", pd->spawn_set);
+    cJSON_AddNumberToObject(obj, "spawn_x", pd->spawn_x);
+    cJSON_AddNumberToObject(obj, "spawn_y", pd->spawn_y);
+    cJSON_AddNumberToObject(obj, "spawn_z", pd->spawn_z);
+    cJSON_AddNumberToObject(obj, "spawn_dimension", pd->spawn_dimension);
     cJSON_AddNumberToObject(obj, "visited_next", pd->visited_next);
 
     cJSON *inv_arr = cJSON_CreateArray();
@@ -312,6 +317,11 @@ static int deserializePlayerData(cJSON *arr) {
     READ_NUMBER(portal_ow_x, "portal_ow_x");
     READ_NUMBER(portal_ow_y, "portal_ow_y");
     READ_NUMBER(portal_ow_z, "portal_ow_z");
+    READ_NUMBER(spawn_set, "spawn_set");
+    READ_NUMBER(spawn_x, "spawn_x");
+    READ_NUMBER(spawn_y, "spawn_y");
+    READ_NUMBER(spawn_z, "spawn_z");
+    READ_NUMBER(spawn_dimension, "spawn_dimension");
     READ_NUMBER(visited_next, "visited_next");
 
     #define READ_ARRAY(field, json_name, len) do { \

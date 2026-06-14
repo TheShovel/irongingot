@@ -302,6 +302,15 @@ function mapBlock(state, reg, missing) {
     return 0x8000 | base | (tableIdx << 9);
   }
 
+  // Handle beds with facing/head/occupied encoding
+  if (name.endsWith("_bed") && reg.has(name) && props.facing) {
+    const base = reg.get(name);
+    const d = dirMap[props.facing] ?? 0;
+    const head = props.part === "head" ? 1 : 0;
+    const occupied = props.occupied === "true" ? 1 : 0;
+    return 0x8000 | base | (d << 9) | (head << 11) | (occupied << 12);
+  }
+
   // Handle lantern with hanging encoding
   if (name === "lantern" && reg.has("lantern") && props.hanging) {
     const base = reg.get("lantern");

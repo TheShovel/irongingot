@@ -563,7 +563,8 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
         } else if (on_ground) {
           int16_t damage = player->grounded_y - player->y - 3;
           uint8_t swimming = false;
-          if (damage > 0 && (GAMEMODE == 0 || GAMEMODE == 2)) {
+          uint8_t current_gamemode = getConfiguredGameMode();
+          if (damage > 0 && (current_gamemode == 0 || current_gamemode == 2)) {
             uint16_t block_feet = getBlockAt2(player->x, player->y, player->z, player->dimension);
             swimming = block_feet >= B_water && block_feet < B_water + 8;
             if (!swimming) hurtEntity(client_fd, -1, D_fall, damage);

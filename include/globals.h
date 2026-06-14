@@ -463,6 +463,12 @@ typedef struct {
   short portal_ow_x;
   int16_t portal_ow_y;
   short portal_ow_z;
+  // Bed respawn point (standing position, usually one block above the bed)
+  uint8_t spawn_set;
+  short spawn_x;
+  int16_t spawn_y;
+  short spawn_z;
+  uint8_t spawn_dimension;
   // Merchant/trade state (villager trading GUI)
   uint8_t merchant_open;         // 1 when merchant GUI is active
   int merchant_villager_eid;     // Entity ID of the villager

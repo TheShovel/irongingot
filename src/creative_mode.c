@@ -199,6 +199,24 @@ static const CreativeItem creative_items[] = {
   {I_purple_wool, "Purple Wool"},
   {I_blue_wool, "Blue Wool"},
   
+  // Beds
+  {I_white_bed, "White Bed"},
+  {I_orange_bed, "Orange Bed"},
+  {I_magenta_bed, "Magenta Bed"},
+  {I_light_blue_bed, "Light Blue Bed"},
+  {I_yellow_bed, "Yellow Bed"},
+  {I_lime_bed, "Lime Bed"},
+  {I_pink_bed, "Pink Bed"},
+  {I_gray_bed, "Gray Bed"},
+  {I_light_gray_bed, "Light Gray Bed"},
+  {I_cyan_bed, "Cyan Bed"},
+  {I_purple_bed, "Purple Bed"},
+  {I_blue_bed, "Blue Bed"},
+  {I_brown_bed, "Brown Bed"},
+  {I_green_bed, "Green Bed"},
+  {I_red_bed, "Red Bed"},
+  {I_black_bed, "Black Bed"},
+  
   // Other Building Blocks
   {I_glass, "Glass"},
   {I_crafting_table, "Crafting Table"},

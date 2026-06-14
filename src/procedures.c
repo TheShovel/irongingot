@@ -235,7 +235,7 @@ static int getPlayerIndexByPointer(PlayerData *player) {
   return (int)(player - player_data);
 }
 
-static uint8_t getConfiguredGameMode(void) {
+uint8_t getConfiguredGameMode(void) {
   if (config.gamemode < 0 || config.gamemode > 3) return GAMEMODE;
   return (uint8_t)config.gamemode;
 }
@@ -395,15 +395,38 @@ int getCompressionThreshold (int client_fd) {
 
 // Restores player data to initial state (fresh spawn)
 void resetPlayerData (PlayerData *player) {
+  uint8_t use_bed_spawn = false;
+  short respawn_x = player->spawn_x;
+  int16_t respawn_y = player->spawn_y;
+  short respawn_z = player->spawn_z;
+  uint8_t respawn_dimension = player->spawn_dimension;
+
+  if (player->spawn_set && respawn_y > 0) {
+    uint16_t spawn_block = getBlockAt2(respawn_x, respawn_y - 1, respawn_z, respawn_dimension);
+    if (is_bed_block(spawn_block)) {
+      use_bed_spawn = true;
+    } else {
+      player->spawn_set = 0;
+    }
+  }
+
   player->health = 20;
   player->hunger = 20;
   player->saturation = 2500;
-  player->x = 8;
-  player->z = 8;
-  player->y = 80;
-  player->dimension = DIMENSION_OVERWORLD;
-  player->flags |= 0x02;
-  player->grounded_y = 0;
+  if (use_bed_spawn) {
+    player->x = respawn_x;
+    player->z = respawn_z;
+    player->y = respawn_y;
+    player->dimension = respawn_dimension;
+    player->flags &= ~0x02;
+  } else {
+    player->x = 8;
+    player->z = 8;
+    player->y = 80;
+    player->dimension = DIMENSION_OVERWORLD;
+    player->flags |= 0x02;
+  }
+  player->grounded_y = player->y;
   for (int i = 0; i < 41; i ++) {
     player->inventory_items[i] = 0;
     player->inventory_count[i] = 0;
@@ -871,7 +894,8 @@ void spawnPlayer (PlayerData *player) {
   }
 
   #ifdef ENABLE_PLAYER_FLIGHT
-  if (GAMEMODE != 1 && GAMEMODE != 3) {
+  uint8_t configured_gamemode = getConfiguredGameMode();
+  if (configured_gamemode != 1 && configured_gamemode != 3) {
     // Give the player flight (for testing)
     sc_playerAbilities(player->client_fd, 0x04);
   }
@@ -881,7 +905,11 @@ void spawnPlayer (PlayerData *player) {
   short _x = div_floor(player->x, 16), _z = div_floor(player->z, 16);
 
   // Indicate that we're about to send chunk data
-  sc_setDefaultSpawnPosition(player->client_fd, 8, 80, 8);
+  if (player->spawn_set) {
+    sc_setDefaultSpawnPosition(player->client_fd, player->spawn_x, player->spawn_y, player->spawn_z);
+  } else {
+    sc_setDefaultSpawnPosition(player->client_fd, 8, 80, 8);
+  }
   sc_startWaitingForChunks(player->client_fd);
   sc_setCenterChunk(player->client_fd, _x, _z);
 
@@ -2295,7 +2323,9 @@ uint8_t getItemStackSize (uint16_t item) {
     item == I_bow ||
     // Filled buckets
     item == I_water_bucket ||
-    item == I_lava_bucket
+    item == I_lava_bucket ||
+    // Beds
+    (item >= I_white_bed && item <= I_black_bed)
   ) return 1;
 
   if (
@@ -2785,6 +2815,192 @@ static void clearNearbyNetherPortal(short x, short y, short z, uint8_t dimension
 
 }
 
+static void getBedDirectionOffset(uint8_t direction, short *dx, short *dz) {
+  *dx = 0;
+  *dz = 0;
+  switch (direction & 3) {
+    case 0: *dz = -1; break;  // north
+    case 1: *dx = 1; break;   // east
+    case 2: *dz = 1; break;   // south
+    case 3: *dx = -1; break;  // west
+    default: break;
+  }
+}
+
+static uint8_t getPlayerFacingDirection(PlayerData *player) {
+  if (player->yaw >= -96 && player->yaw < -32) return 1;  // East
+  if (player->yaw >= -32 && player->yaw < 32) return 2;   // South
+  if (player->yaw >= 32 && player->yaw < 96) return 3;    // West
+  return 0;                                                // North
+}
+
+static void broadcastBedUpdate(short x, int16_t y, short z, uint8_t dimension, uint16_t block) {
+  uint16_t state = special_block_get_state(x, y, z, dimension);
+  uint16_t state_id = get_bed_state_id(block, bed_get_head(state), bed_get_occupied(state), bed_get_direction(state));
+
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (player_data[i].client_fd == -1) continue;
+    if (player_data[i].flags & 0x20) continue;
+    if (player_data[i].dimension != dimension) continue;
+    sc_blockUpdateState(player_data[i].client_fd, x, y, z, state_id);
+  }
+}
+
+static uint8_t findOtherBedHalf(short x, int16_t y, short z, uint8_t dimension, uint16_t block, short *other_x, int16_t *other_y, short *other_z) {
+  if (special_block_has_entry(x, y, z, dimension)) {
+    uint16_t state = special_block_get_state(x, y, z, dimension);
+    short dx, dz;
+    getBedDirectionOffset(bed_get_direction(state), &dx, &dz);
+    if (bed_get_head(state)) {
+      dx = -dx;
+      dz = -dz;
+    }
+
+    *other_x = x + dx;
+    *other_y = y;
+    *other_z = z + dz;
+    if (getBlockAt2(*other_x, *other_y, *other_z, dimension) == block) return true;
+  }
+
+  static const int8_t adjacent[4][2] = {
+    {0, -1}, {1, 0}, {0, 1}, {-1, 0}
+  };
+  for (uint8_t i = 0; i < 4; i++) {
+    short nx = x + adjacent[i][0];
+    short nz = z + adjacent[i][1];
+    if (getBlockAt2(nx, y, nz, dimension) != block) continue;
+    *other_x = nx;
+    *other_y = y;
+    *other_z = nz;
+    return true;
+  }
+
+  return false;
+}
+
+static void setPlayerBedSpawn(PlayerData *player, short bed_x, int16_t bed_y, short bed_z) {
+  player->spawn_set = 1;
+  player->spawn_x = bed_x;
+  player->spawn_y = bed_y + 1;
+  player->spawn_z = bed_z;
+  player->spawn_dimension = player->dimension;
+  writePlayerDataToDisk();
+}
+
+static void broadcastSleepTimeAndWeather(void) {
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (player_data[i].client_fd == -1) continue;
+    if (player_data[i].flags & 0x20) continue;
+    sc_updateTime(player_data[i].client_fd, world_time);
+    if (player_data[i].dimension == DIMENSION_OVERWORLD) {
+      sc_gameEvent(player_data[i].client_fd, 2, 0.0f);
+      sc_gameEvent(player_data[i].client_fd, 7, 0.0f);
+      sc_gameEvent(player_data[i].client_fd, 8, 0.0f);
+    }
+  }
+}
+
+static void explodeUnsafeBed(PlayerData *player, short x, int16_t y, short z, uint16_t block) {
+  short other_x;
+  int16_t other_y;
+  short other_z;
+  if (findOtherBedHalf(x, y, z, player->dimension, block, &other_x, &other_y, &other_z)) {
+    special_block_clear(other_x, other_y, other_z, player->dimension);
+    makeBlockChange(other_x, other_y, other_z, 0, player->dimension);
+  }
+  special_block_clear(x, y, z, player->dimension);
+  makeBlockChange(x, y, z, 0, player->dimension);
+
+  double ex = (double)x + 0.5;
+  double ey = (double)y + 0.5;
+  double ez = (double)z + 0.5;
+
+  doExplosion(ex, ey, ez, 5.0f, player->dimension);
+
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (player_data[i].client_fd == -1) continue;
+    if (player_data[i].flags & 0x20) continue;
+    if (player_data[i].dimension != player->dimension) continue;
+    sc_soundEffect(player_data[i].client_fd, S_GENERIC_EXPLODE, SOUND_CATEGORY_BLOCKS, ex, ey, ez, 4.0f, 1.0f);
+  }
+
+  const double blast_radius = 6.0;
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (player_data[i].client_fd == -1) continue;
+    if (player_data[i].flags & 0x20) continue;
+    if (player_data[i].dimension != player->dimension) continue;
+
+    double dx = ((double)player_data[i].x + 0.5) - ex;
+    double dy = ((double)player_data[i].y + 0.5) - ey;
+    double dz = ((double)player_data[i].z + 0.5) - ez;
+    double horizontal_dist = sqrt(dx * dx + dz * dz);
+    if (horizontal_dist >= blast_radius || fabs(dy) >= blast_radius) continue;
+
+    uint8_t damage = (uint8_t)((blast_radius - horizontal_dist) * 6.0);
+    if (damage < 1) damage = 1;
+    hurtEntity(player_data[i].client_fd, -1, D_bad_respawn_point, damage);
+
+    if (horizontal_dist > 0.01) {
+      double force = (blast_radius - horizontal_dist) / blast_radius;
+      double vx = (dx / horizontal_dist) * force * 3.0;
+      double vz = (dz / horizontal_dist) * force * 3.0;
+      double vy = force * 0.8;
+      sc_setEntityVelocity(
+        player_data[i].client_fd, player_data[i].client_fd,
+        (int16_t)(vx * 8000.0), (int16_t)(vy * 8000.0), (int16_t)(vz * 8000.0)
+      );
+    }
+  }
+
+  for (int i = 0; i < MAX_MOBS; i++) {
+    if (mob_data[i].type == 0) continue;
+    if ((mob_data[i].data & 31) == 0) continue;
+    if (mob_data[i].dimension != player->dimension) continue;
+
+    double dx = mob_data[i].x - ex;
+    double dz = mob_data[i].z - ez;
+    double dist = sqrt(dx * dx + dz * dz);
+    if (dist >= 5.0 || fabs(mob_data[i].y - ey) >= 5.0) continue;
+
+    uint8_t damage = (uint8_t)((5.0 - dist) * 6.0);
+    if (damage < 1) damage = 1;
+    hurtEntity(-2 - i, -1, D_explosion, damage);
+  }
+}
+
+static void handleBedInteraction(PlayerData *player, short x, int16_t y, short z, uint16_t block) {
+  if (player->dimension != DIMENSION_OVERWORLD) {
+    explodeUnsafeBed(player, x, y, z, block);
+    return;
+  }
+
+  setPlayerBedSpawn(player, x, y, z);
+
+  uint8_t can_sleep = (world_time >= 12542 && world_time <= 23459) || !world_weather_clear;
+  if (!can_sleep) {
+    const char msg[] = "§aRespawn point set.";
+    sc_systemChat(player->client_fd, (char *)msg, (uint16_t)sizeof(msg) - 1);
+    return;
+  }
+
+  world_time = 1000;
+  world_weather_clear = 1;
+  world_rain_level = 0.0f;
+  world_thunder_level = 0.0f;
+  world_weather_rain_time = 0;
+  world_weather_thunder_time = 0;
+  world_weather_clear_time = 12000 + (int32_t)(fast_rand() % 168000);
+  broadcastSleepTimeAndWeather();
+
+  char msg[96];
+  int len = snprintf(msg, sizeof(msg), "§e%s slept and skipped to morning.", player->name);
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (player_data[i].client_fd == -1) continue;
+    if (player_data[i].flags & 0x20) continue;
+    sc_systemChat(player_data[i].client_fd, msg, (uint16_t)len);
+  }
+}
+
 void handlePlayerAction (PlayerData *player, int action, short x, short y, short z) {
 
   // Check spawn protection for block-breaking actions
@@ -2840,7 +3056,7 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
 
   // In creative, only the "start mining" action is sent
   // No additional verification is performed, the block is simply removed
-  if (action == 0 && GAMEMODE == 1) {
+  if (action == 0 && getConfiguredGameMode() == 1) {
     uint16_t block = getBlockAt2(x, y, z, player->dimension);
     makeBlockChange(x, y, z, 0, player->dimension);
     if (block == B_obsidian || block == B_nether_portal) {
@@ -2896,6 +3112,24 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
 
   uint16_t held_item = player->inventory_items[player->hotbar];
   uint16_t item = getMiningResult(held_item, block);
+
+  if (is_bed_block(block)) {
+    short other_x;
+    int16_t other_y;
+    short other_z;
+    if (findOtherBedHalf(x, y, z, player->dimension, block, &other_x, &other_y, &other_z)) {
+      special_block_clear(other_x, other_y, other_z, player->dimension);
+      makeBlockChange(other_x, other_y, other_z, 0, player->dimension);
+    }
+    special_block_clear(x, y, z, player->dimension);
+    if (item) {
+      #ifdef ENABLE_PICKUP_ANIMATION
+      playPickupAnimation(player, item, x, y, z);
+      #endif
+      givePlayerItem(player, item, 1);
+    }
+    return;
+  }
 
   #ifdef ALLOW_DOORS
   // If mining a door, also break the other half and clear state data
@@ -3973,6 +4207,9 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
         broadcastPlayerEquipment(player);
         return;
       }
+    } else if (is_bed_block(target)) {
+      handleBedInteraction(player, x, y, z, target);
+      return;
     }
     #ifdef ALLOW_CHESTS
     else if (target == B_chest && config.allow_chests) {
@@ -4408,6 +4645,54 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
   // If the selected item doesn't correspond to a block, exit
   uint16_t block = I_to_B(*item);
   if (block == 0) return;
+
+  // Special handling for bed placement (two horizontal halves)
+  if (is_bed_block(block)) {
+    short foot_x = x;
+    int16_t foot_y = y;
+    short foot_z = z;
+    if (!getFaceOffsetBlock(x, y, z, face, &foot_x, &foot_y, &foot_z)) return;
+    if (foot_y <= 0 || foot_y >= 319) return;
+
+    uint8_t direction = getPlayerFacingDirection(player);
+    short dx, dz;
+    getBedDirectionOffset(direction, &dx, &dz);
+    short head_x = foot_x + dx;
+    int16_t head_y = foot_y;
+    short head_z = foot_z + dz;
+
+    if (is_in_safe_area(foot_x, foot_z, player->dimension) || is_in_safe_area(head_x, head_z, player->dimension)) {
+      sc_systemChat(player->client_fd, "§cCannot interact with blocks in protected spawn area", 54);
+      return;
+    }
+
+    if (!isReplaceableBlock(getBlockAt2(foot_x, foot_y, foot_z, player->dimension))) return;
+    if (!isReplaceableBlock(getBlockAt2(head_x, head_y, head_z, player->dimension))) return;
+    if (isReplaceableBlock(getBlockAt2(foot_x, foot_y - 1, foot_z, player->dimension))) return;
+    if (isReplaceableBlock(getBlockAt2(head_x, head_y - 1, head_z, player->dimension))) return;
+
+    if (
+      (foot_x == player->x && (foot_y == player->y || foot_y == player->y + 1) && foot_z == player->z) ||
+      (head_x == player->x && (head_y == player->y || head_y == player->y + 1) && head_z == player->z)
+    ) return;
+
+    if (makeBlockChange(foot_x, foot_y, foot_z, block, player->dimension)) return;
+    if (makeBlockChange(head_x, head_y, head_z, block, player->dimension)) {
+      makeBlockChange(foot_x, foot_y, foot_z, 0, player->dimension);
+      return;
+    }
+
+    special_block_set_state(foot_x, foot_y, foot_z, player->dimension, block, bed_encode_state(0, 0, direction));
+    special_block_set_state(head_x, head_y, head_z, player->dimension, block, bed_encode_state(1, 0, direction));
+    broadcastBedUpdate(foot_x, foot_y, foot_z, player->dimension, block);
+    broadcastBedUpdate(head_x, head_y, head_z, player->dimension, block);
+
+    *count -= 1;
+    if (*count == 0) *item = 0;
+    sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, slot), *count, *item);
+    broadcastPlayerEquipment(player);
+    return;
+  }
 
   // Special handling for door placement
   #ifdef ALLOW_DOORS

@@ -40,9 +40,9 @@ These features are fundamental to a complete Minecraft experience and should be 
 
 ### 5. Basic Commands
 
-- `/gamemode` (High) - Game mode switching for admins
-- `/tp` (High) - Teleport command for server management
-- `/give` (High) - Essential admin command
+- ~~`/gamemode` (High)~~ - ✅ Runtime game mode switching for admins
+- ~~`/tp` (High)~~ - ✅ Teleport command for server management
+- ~~`/give` (High)~~ - ✅ Essential admin command
 
 ---
 
@@ -88,17 +88,17 @@ These features significantly improve gameplay but are not strictly required.
 
 ### 11. Missing Commands
 
-- `/time` (Medium) - Time control for admins
-- `/weather` (Medium) - Weather control
-- `/kill` (Medium) - Kill command
-- `/heal` (Low) - Heal command
-- `/feed` (Low) - Feed command
+- ~~`/time` (Medium)~~ - ✅ Time control for admins
+- ~~`/weather` (Medium)~~ - ✅ Weather control
+- ~~`/kill` (Medium)~~ - ✅ Kill command
+- ~~`/heal` (Low)~~ - ✅ Heal command
+- ~~`/feed` (Low)~~ - ✅ Feed command
 
 ### 12. Player Mechanics
 
-- **Sleeping** (Medium) - Skip night with beds
-- **Spawn Point Setting** (Medium) - Beds set respawn point
-- **Armor Protection** (Medium) - Armor damage reduction
+- ~~**Sleeping** (Medium)~~ - ✅ Skip night with beds
+- ~~**Spawn Point Setting** (Medium)~~ - ✅ Beds set respawn point
+- ~~**Armor Protection** (Medium)~~ - ✅ Armor damage reduction
 
 ---
 
@@ -183,14 +183,14 @@ These are advanced features or aesthetic improvements.
 1. Nether Fortresses + Blaze/Ghast mobs
 2. Villager Trading / Job Sites
 3. ~~End Chest + Barrel~~ ✅ Completed
-4. Basic admin commands (`/gamemode`, `/tp`, `/give`)
-5. Sleeping + Spawn Point mechanics
+4. ~~Basic admin commands (`/gamemode`, `/tp`, `/give`)~~ ✅ Completed
+5. ~~Sleeping + Spawn Point mechanics~~ ✅ Completed
 
 **Phase 2 (Medium Priority):**
 6. Brewing & Potions
 7. Enchanting + Anvil
 8. Missing mobs (Wither Skeleton, Drowned, Wolf, etc.)
-9. Armor protection
+9. ~~Armor protection~~ ✅ Completed
 
 **Phase 3 (Low Priority):**
 10. Redstone components

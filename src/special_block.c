@@ -222,6 +222,10 @@ uint8_t is_horizontal_facing_block(uint16_t block) {
     );
 }
 
+uint8_t is_bed_block(uint16_t block) {
+    return block >= B_white_bed && block <= B_black_bed;
+}
+
 /* ── State encoding / decoding ────────────────────────────────────── */
 
 /*
@@ -314,6 +318,18 @@ uint16_t get_horizontal_state_id(uint16_t block, uint8_t direction) {
     return horizontal_state_rows[row][direction & 3];
 }
 
+uint16_t get_bed_state_id(uint16_t block, uint8_t head, uint8_t occupied, uint8_t direction) {
+    /*
+     * Bed registry states are ordered by facing(n,s,w,e) × occupied(true,false)
+     * × part(head,foot). block_palette[bed] is the default north/false/foot
+     * state, which is index 3 in that ordering.
+     */
+    static const uint8_t table_facing[4] = {0, 3, 1, 2};  /* internal(n,e,s,w) → table(n,s,w,e) */
+    uint8_t tf = table_facing[direction & 3];
+    uint8_t idx = (uint8_t)(tf * 4 + (occupied ? 0 : 2) + (head ? 0 : 1));
+    return (uint16_t)(block_palette[block] + idx - 3);
+}
+
 /* Decode helpers */
 uint8_t door_get_open(uint16_t state)     { return (state >> 0) & 1; }
 uint8_t door_get_hinge(uint16_t state)    { return (state >> 1) & 1; }
@@ -340,6 +356,10 @@ uint8_t fence_get_north(uint16_t state) { return (state >> 0) & 1; }
 uint8_t fence_get_east(uint16_t state)  { return (state >> 1) & 1; }
 uint8_t fence_get_south(uint16_t state) { return (state >> 2) & 1; }
 uint8_t fence_get_west(uint16_t state)  { return (state >> 3) & 1; }
+
+uint8_t bed_get_direction(uint16_t state) { return state & 3; }
+uint8_t bed_get_head(uint16_t state)      { return (state >> 2) & 1; }
+uint8_t bed_get_occupied(uint16_t state)  { return (state >> 3) & 1; }
 
 /* Encode helpers */
 uint16_t door_encode_state(uint8_t open, uint8_t hinge, uint8_t direction) {
@@ -370,6 +390,10 @@ uint16_t fence_encode_state(uint8_t north, uint8_t east, uint8_t south, uint8_t 
 
 uint16_t horizontal_facing_encode_state(uint8_t direction) {
     return (uint16_t)(direction & 3);
+}
+
+uint16_t bed_encode_state(uint8_t head, uint8_t occupied, uint8_t direction) {
+    return (uint16_t)((direction & 3) | ((head & 1) << 2) | ((occupied & 1) << 3));
 }
 
 /* ── Interaction helpers ──────────────────────────────────────────── */

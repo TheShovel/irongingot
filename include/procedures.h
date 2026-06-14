@@ -92,6 +92,7 @@ void handleServerTick (int64_t time_since_last_tick);
 
 void switchPlayerDimension (PlayerData *player);
 void handlePortalTravel (PlayerData *player);
+uint8_t getConfiguredGameMode (void);
 uint8_t isPlayerNoclipEnabled (PlayerData *player);
 void setPlayerNoclip (PlayerData *player, uint8_t enabled);
 void syncPlayerNoclipState (PlayerData *player);

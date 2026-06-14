@@ -3907,7 +3907,7 @@ uint16_t buildChunkSection (int cx, int cy, int cz, uint8_t dimension) {
   for (int i = 0; i < block_changes_snapshot_count; i ++) {
     if (block_changes_snapshot[i].block == 0xFF) continue;
     // Skip special blocks — they use block updates, not chunk data
-    if (is_stair_block(block_changes_snapshot[i].block) || is_oriented_block(block_changes_snapshot[i].block) || is_fence_block(block_changes_snapshot[i].block) || is_horizontal_facing_block(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_lantern) {
+    if (is_stair_block(block_changes_snapshot[i].block) || is_oriented_block(block_changes_snapshot[i].block) || is_fence_block(block_changes_snapshot[i].block) || is_horizontal_facing_block(block_changes_snapshot[i].block) || is_bed_block(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_lantern) {
       if (block_changes_snapshot[i].block == B_chest || block_changes_snapshot[i].block == B_barrel) i += 14;
       else if (is_stair_block(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_furnace || block_changes_snapshot[i].block == B_ender_chest || is_fence_block(block_changes_snapshot[i].block) || is_horizontal_facing_block(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_lantern) i += 1;
       continue;

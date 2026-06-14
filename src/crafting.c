@@ -76,6 +76,28 @@ uint8_t isPlankItem(uint16_t item) {
   }
 }
 
+static uint16_t getBedFromWool(uint16_t wool) {
+  switch (wool) {
+    case I_white_wool: return I_white_bed;
+    case I_orange_wool: return I_orange_bed;
+    case I_magenta_wool: return I_magenta_bed;
+    case I_light_blue_wool: return I_light_blue_bed;
+    case I_yellow_wool: return I_yellow_bed;
+    case I_lime_wool: return I_lime_bed;
+    case I_pink_wool: return I_pink_bed;
+    case I_gray_wool: return I_gray_bed;
+    case I_light_gray_wool: return I_light_gray_bed;
+    case I_cyan_wool: return I_cyan_bed;
+    case I_purple_wool: return I_purple_bed;
+    case I_blue_wool: return I_blue_bed;
+    case I_brown_wool: return I_brown_bed;
+    case I_green_wool: return I_green_bed;
+    case I_red_wool: return I_red_bed;
+    case I_black_wool: return I_black_bed;
+    default: return 0;
+  }
+}
+
 // Helper function to get slab item from plank item
 uint16_t getSlabFromPlank(uint16_t plank) {
   uint16_t result = 0;
@@ -604,6 +626,21 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
         *count = 1;
         return;
       }
+      // Bed recipe: 3 matching wool over 3 planks
+      if (first_col == 0 && first_row < 2 &&
+          player->craft_items[first + 1] == first_item &&
+          player->craft_items[first + 2] == first_item &&
+          isPlankItem(player->craft_items[first + 3]) &&
+          isPlankItem(player->craft_items[first + 4]) &&
+          isPlankItem(player->craft_items[first + 5])) {
+        uint16_t result = getBedFromWool(first_item);
+        if (result != 0) {
+          *item = result;
+          *count = 1;
+          return;
+        }
+      }
+
       // Door recipes (2x3 pattern of planks) - all plank types
       if (config.allow_doors &&
           isPlankItem(first_item) && first_col == 0 && first_row == 0 &&

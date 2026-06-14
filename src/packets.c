@@ -28,6 +28,7 @@
 #include "chunk_generator.h"
 #include "special_block.h"
 #include "creative_mode.h"
+#include "config.h"
 
 #ifdef B_end_portal
 #define HAVE_B_END_PORTAL 1
@@ -117,6 +118,101 @@ static uint8_t isIntegerToken(const uint8_t *buffer, int start, int end) {
   }
 
   return true;
+}
+
+static uint8_t isCommandBoundary(const uint8_t *buffer, int offset) {
+  return buffer[offset] == '\0' || buffer[offset] == ' ';
+}
+
+static const char *gameModeName(uint8_t gamemode) {
+  switch (gamemode) {
+    case 0: return "survival";
+    case 1: return "creative";
+    case 2: return "adventure";
+    case 3: return "spectator";
+    default: return "unknown";
+  }
+}
+
+static uint8_t parseGameModeToken(const char *token, uint8_t *gamemode) {
+  if (!token || token[0] == '\0') return false;
+
+  if (!strcmp(token, "0") || !creative_strcasecmp(token, "survival") || !creative_strcasecmp(token, "s")) {
+    *gamemode = 0;
+    return true;
+  }
+  if (!strcmp(token, "1") || !creative_strcasecmp(token, "creative") || !creative_strcasecmp(token, "c")) {
+    *gamemode = 1;
+    return true;
+  }
+  if (!strcmp(token, "2") || !creative_strcasecmp(token, "adventure") || !creative_strcasecmp(token, "a")) {
+    *gamemode = 2;
+    return true;
+  }
+  if (!strcmp(token, "3") || !creative_strcasecmp(token, "spectator") || !creative_strcasecmp(token, "sp")) {
+    *gamemode = 3;
+    return true;
+  }
+
+  return false;
+}
+
+static uint8_t parseTimeToken(const char *token, int *ticks) {
+  if (!token || token[0] == '\0') return false;
+
+  if (!creative_strcasecmp(token, "day")) {
+    *ticks = 1000;
+    return true;
+  }
+  if (!creative_strcasecmp(token, "noon")) {
+    *ticks = 6000;
+    return true;
+  }
+  if (!creative_strcasecmp(token, "night")) {
+    *ticks = 13000;
+    return true;
+  }
+  if (!creative_strcasecmp(token, "midnight")) {
+    *ticks = 18000;
+    return true;
+  }
+
+  char *end = NULL;
+  long parsed = strtol(token, &end, 10);
+  if (end == token || *end != '\0') return false;
+  *ticks = (int)parsed;
+  return true;
+}
+
+static uint16_t normalizeWorldTime(int ticks) {
+  ticks %= 24000;
+  if (ticks < 0) ticks += 24000;
+  return (uint16_t)ticks;
+}
+
+static void broadcastTimeUpdate(void) {
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (player_data[i].client_fd == -1) continue;
+    if (player_data[i].flags & 0x20) continue;
+    sc_updateTime(player_data[i].client_fd, world_time);
+  }
+}
+
+static void syncConfiguredGameModeToPlayers(void) {
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (player_data[i].client_fd == -1) continue;
+    if (player_data[i].flags & 0x20) continue;
+
+    syncPlayerNoclipState(&player_data[i]);
+
+    uint8_t gamemode = isPlayerNoclipEnabled(&player_data[i]) ? 3 : getConfiguredGameMode();
+    for (int viewer = 0; viewer < MAX_PLAYERS; viewer++) {
+      if (viewer == i) continue;
+      if (player_data[viewer].client_fd == -1) continue;
+      if (player_data[viewer].flags & 0x20) continue;
+      sc_playerInfoUpdateUpdateGamemode(player_data[viewer].client_fd, player_data[i], gamemode);
+    }
+  }
 }
 
 // S->C Status Response (server list ping)
@@ -356,7 +452,7 @@ int sc_loginPlay (int client_fd, uint8_t dimension) {
   // hashed seed
   writeUint64(client_fd, 0x0123456789ABCDEF);
   // gamemode
-  writeByte(client_fd, GAMEMODE);
+  writeByte(client_fd, getConfiguredGameMode());
   // previous gamemode
   writeByte(client_fd, 0xFF);
   // is debug
@@ -682,6 +778,11 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
           } else if (is_horizontal_facing_block(_t)) { \
             uint8_t _d = (_pv >> 9) & 3; \
             val = get_horizontal_state_id(_t, _d); \
+          } else if (is_bed_block(_t)) { \
+            uint8_t _d = (_pv >> 9) & 3; \
+            uint8_t _h = (_pv >> 11) & 1; \
+            uint8_t _o = (_pv >> 12) & 1; \
+            val = get_bed_state_id(_t, _h, _o, _d); \
           } else if (_t == B_barrel) { \
             uint8_t _d = (_pv >> 9) & 7; \
             val = get_oriented_state_id(_t, _d); \
@@ -888,7 +989,8 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
       !isOrientedBlock(block_changes_snapshot[i].block) &&
       !isStairBlock(block_changes_snapshot[i].block) &&
       !is_fence_block(block_changes_snapshot[i].block) &&
-      !is_horizontal_facing_block(block_changes_snapshot[i].block)
+      !is_horizontal_facing_block(block_changes_snapshot[i].block) &&
+      !is_bed_block(block_changes_snapshot[i].block)
       #ifdef ALLOW_DOORS
       && !isDoorBlock(block_changes_snapshot[i].block)
       && !isTrapdoorBlock(block_changes_snapshot[i].block)
@@ -957,6 +1059,18 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
       continue;
     }
     #endif
+
+    if (is_bed_block(block_changes_snapshot[i].block)) {
+      uint16_t state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].dimension);
+      uint16_t state_id = get_bed_state_id(
+        block_changes_snapshot[i].block,
+        bed_get_head(state),
+        bed_get_occupied(state),
+        bed_get_direction(state)
+      );
+      sc_blockUpdateState(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, state_id);
+      continue;
+    }
 
     if (isOrientedBlock(block_changes_snapshot[i].block)) {
       // Read direction from the unified special block table
@@ -1078,7 +1192,8 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
       uint16_t block_type = (raw & 0x8000) ? (raw & 0x1FF) : raw;
       if (!isDoorBlock(block_type) && block_type != B_chest && block_type != B_barrel && block_type != B_lantern &&
           !isStairBlock(block_type) && !isTrapdoorBlock(block_type) &&
-          !is_fence_block(block_type) && !is_horizontal_facing_block(block_type)) continue;
+          !is_fence_block(block_type) && !is_horizontal_facing_block(block_type) &&
+          !is_bed_block(block_type)) continue;
 
       int address = (j & ~7) | (7 - (j & 7));
       int wx = x + (address & 15);
@@ -1094,7 +1209,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
 
       for (int k = 0; k < block_changes_snapshot_count && !skip; k++) {
         if (block_changes_snapshot[k].block == 0xFF) continue;
-        if ((isDoorBlock(block_changes_snapshot[k].block) || block_changes_snapshot[k].block == B_chest) &&
+        if ((isDoorBlock(block_changes_snapshot[k].block) || block_changes_snapshot[k].block == B_chest || is_bed_block(block_changes_snapshot[k].block)) &&
             block_changes_snapshot[k].x == wx &&
             block_changes_snapshot[k].y == wy &&
             block_changes_snapshot[k].z == wz) skip = 1;
@@ -1188,6 +1303,21 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
         if (!special_block_has_entry(wx, wy, wz, dimension))
           special_block_set_state(wx, wy, wz, dimension, block_type, trapdoor_encode_state(open, half, direction));
         uint16_t state_id = get_trapdoor_state_id(block_type, open, direction, half);
+        sc_blockUpdateState(client_fd, wx, wy, wz, state_id);
+        if (num_generated < 62) {
+          processed_generated[num_generated][0] = wx;
+          processed_generated[num_generated][1] = wy;
+          processed_generated[num_generated][2] = wz;
+          num_generated++;
+        }
+      } else if (is_bed_block(block_type)) {
+        // Decode bed state from raw: bit9-10=facing, bit11=head, bit12=occupied
+        uint8_t direction = (raw >> 9) & 3;
+        uint8_t head = (raw >> 11) & 1;
+        uint8_t occupied = (raw >> 12) & 1;
+        if (!special_block_has_entry(wx, wy, wz, dimension))
+          special_block_set_state(wx, wy, wz, dimension, block_type, bed_encode_state(head, occupied, direction));
+        uint16_t state_id = get_bed_state_id(block_type, head, occupied, direction);
         sc_blockUpdateState(client_fd, wx, wy, wz, state_id);
         if (num_generated < 62) {
           processed_generated[num_generated][0] = wx;
@@ -1959,7 +2089,7 @@ int sc_playerInfoUpdateAddPlayer (int client_fd, PlayerData player) {
   writePlayerProfileProperties(client_fd, appearance);
 
   // Update Game Mode fields
-  writeVarInt(client_fd, GAMEMODE);
+  writeVarInt(client_fd, getConfiguredGameMode());
 
   // Update Listed fields
   writeByte(client_fd, true);
@@ -2350,7 +2480,7 @@ int sc_respawn (int client_fd, uint8_t dimension) {
   // hashed seed
   writeUint64(client_fd, 0x0123456789ABCDEF);
   // gamemode
-  writeByte(client_fd, GAMEMODE);
+  writeByte(client_fd, getConfiguredGameMode());
   // previous gamemode
   writeByte(client_fd, 0xFF);
   // is debug
@@ -2418,7 +2548,7 @@ int cs_chat (int client_fd) {
   size_t message_len = strlen((char *)recv_buffer);
   uint8_t name_len = strlen(player->name);
 
-  if (recv_buffer[0] != '!') { // Standard chat message
+  if (recv_buffer[0] != '!' && recv_buffer[0] != '/') { // Standard chat message
 
     // Shift message contents forward to make space for player name tag
     memmove(recv_buffer + name_len + 3, recv_buffer, message_len + 1);
@@ -2444,6 +2574,8 @@ int cs_chat (int client_fd) {
     sc_systemChat(client_fd, "§cCommands are disabled on this server", 39);
     goto cleanup;
   }
+
+  if (recv_buffer[0] == '/') recv_buffer[0] = '!';
 
   if (!strncmp((char *)recv_buffer, "!msg", 4)) {
 
@@ -2574,22 +2706,233 @@ int cs_chat (int client_fd) {
     goto cleanup;
   }
 
+  if (!strncmp((char *)recv_buffer, "!gamemode", 9) && isCommandBoundary(recv_buffer, 9)) {
+    int arg_offset = 10;
+    while (arg_offset < 224 && recv_buffer[arg_offset] == ' ') arg_offset++;
+
+    int arg_end = arg_offset;
+    while (arg_end < 224 && recv_buffer[arg_end] != '\0' && recv_buffer[arg_end] != ' ') arg_end++;
+    if (arg_end <= arg_offset) {
+      const char usage[] = "§7Usage: /gamemode <survival|creative|adventure|spectator>";
+      sc_systemChat(client_fd, (char *)usage, (uint16_t)sizeof(usage) - 1);
+      goto cleanup;
+    }
+
+    char mode_buf[16];
+    int mode_len = arg_end - arg_offset;
+    if (mode_len > 15) mode_len = 15;
+    memcpy(mode_buf, recv_buffer + arg_offset, mode_len);
+    mode_buf[mode_len] = '\0';
+
+    uint8_t gamemode = 0;
+    if (!parseGameModeToken(mode_buf, &gamemode)) {
+      const char usage[] = "§7Usage: /gamemode <survival|creative|adventure|spectator>";
+      sc_systemChat(client_fd, (char *)usage, (uint16_t)sizeof(usage) - 1);
+      goto cleanup;
+    }
+
+    config.gamemode = gamemode;
+    syncConfiguredGameModeToPlayers();
+
+    char response[96];
+    int resp_len = snprintf(response, sizeof(response), "§aServer gamemode set to §f%s", gameModeName(gamemode));
+    sc_systemChat(client_fd, response, (uint16_t)resp_len);
+    goto cleanup;
+  }
+
+  if (!strncmp((char *)recv_buffer, "!give", 5) && isCommandBoundary(recv_buffer, 5)) {
+    int arg_start = 6;
+    while (arg_start < 224 && recv_buffer[arg_start] == ' ') arg_start++;
+
+    int arg_end = (int)message_len;
+    while (arg_end > arg_start && (recv_buffer[arg_end - 1] == ' ' || recv_buffer[arg_end - 1] == '\t')) arg_end--;
+
+    if (arg_end <= arg_start) {
+      const char usage[] = "§7Usage: /give [player] <item_name> [count]";
+      sc_systemChat(client_fd, (char *)usage, (uint16_t)sizeof(usage) - 1);
+      goto cleanup;
+    }
+
+    PlayerData *target = player;
+    int item_start = arg_start;
+    int first_token_end = arg_start;
+    while (first_token_end < arg_end && recv_buffer[first_token_end] != ' ') first_token_end++;
+    if (first_token_end < arg_end) {
+      PlayerData *maybe_target = getPlayerByName(arg_start, first_token_end, recv_buffer);
+      if (maybe_target != NULL) {
+        target = maybe_target;
+        item_start = first_token_end;
+        while (item_start < arg_end && recv_buffer[item_start] == ' ') item_start++;
+      }
+    }
+
+    int item_end = arg_end;
+    int count = 1;
+    int last_token_start = item_end;
+    while (last_token_start > item_start && recv_buffer[last_token_start - 1] != ' ') last_token_start--;
+    if (isIntegerToken(recv_buffer, last_token_start, item_end)) {
+      char count_buf[16];
+      int count_len = item_end - last_token_start;
+      if (count_len > 15) count_len = 15;
+      memcpy(count_buf, recv_buffer + last_token_start, count_len);
+      count_buf[count_len] = '\0';
+      count = atoi(count_buf);
+      if (count < 1) count = 1;
+      if (count > 2304) count = 2304;
+      item_end = last_token_start;
+      while (item_end > item_start && recv_buffer[item_end - 1] == ' ') item_end--;
+    }
+
+    if (item_end <= item_start) {
+      const char usage[] = "§7Usage: /give [player] <item_name> [count]";
+      sc_systemChat(client_fd, (char *)usage, (uint16_t)sizeof(usage) - 1);
+      goto cleanup;
+    }
+
+    char item_name[128];
+    int item_len = item_end - item_start;
+    if (item_len > 127) item_len = 127;
+    memcpy(item_name, recv_buffer + item_start, item_len);
+    item_name[item_len] = '\0';
+
+    char *lookup_name = item_name;
+    if (!strncmp(lookup_name, "minecraft:", 10)) lookup_name += 10;
+
+    uint16_t item_id = findCreativeItemByName(lookup_name);
+    if (item_id == 0) {
+      const char msg[] = "§cItem not found. Try names like §fdiamond§c or §foak_log§c.";
+      sc_systemChat(client_fd, (char *)msg, (uint16_t)sizeof(msg) - 1);
+      goto cleanup;
+    }
+
+    int remaining = count;
+    int given = 0;
+    uint8_t stack_size = getItemStackSize(item_id);
+    if (stack_size == 0) stack_size = 64;
+    while (remaining > 0) {
+      uint8_t give_count = remaining > stack_size ? stack_size : (uint8_t)remaining;
+      if (givePlayerItem(target, item_id, give_count)) break;
+      remaining -= give_count;
+      given += give_count;
+    }
+
+    if (given == 0) {
+      const char msg[] = "§cTarget inventory is full.";
+      sc_systemChat(client_fd, (char *)msg, (uint16_t)sizeof(msg) - 1);
+      goto cleanup;
+    }
+
+    char response[160];
+    int resp_len = snprintf(response, sizeof(response), "§aGave §f%d§a x §f%s§a to §f%s", given, lookup_name, target->name);
+    sc_systemChat(client_fd, response, (uint16_t)resp_len);
+    if (target->client_fd != client_fd) {
+      resp_len = snprintf(response, sizeof(response), "§aYou received §f%d§a x §f%s", given, lookup_name);
+      sc_systemChat(target->client_fd, response, (uint16_t)resp_len);
+    }
+    goto cleanup;
+  }
+
+  if (!strncmp((char *)recv_buffer, "!kill", 5) && isCommandBoundary(recv_buffer, 5)) {
+    PlayerData *target = player;
+    int target_start = 6;
+    while (target_start < 224 && recv_buffer[target_start] == ' ') target_start++;
+    if (recv_buffer[target_start] != '\0') {
+      int target_end = target_start;
+      while (target_end < 224 && recv_buffer[target_end] != '\0' && recv_buffer[target_end] != ' ') target_end++;
+      target = getPlayerByName(target_start, target_end, recv_buffer);
+      if (target == NULL) {
+        const char msg[] = "§cPlayer not found.";
+        sc_systemChat(client_fd, (char *)msg, (uint16_t)sizeof(msg) - 1);
+        goto cleanup;
+      }
+    }
+
+    if (target->health == 0) {
+      const char msg[] = "§7Target is already dead.";
+      sc_systemChat(client_fd, (char *)msg, (uint16_t)sizeof(msg) - 1);
+      goto cleanup;
+    }
+
+    hurtEntity(target->client_fd, -1, D_generic, 255);
+    goto cleanup;
+  }
+
+  if (!strncmp((char *)recv_buffer, "!heal", 5) && isCommandBoundary(recv_buffer, 5)) {
+    PlayerData *target = player;
+    int target_start = 6;
+    while (target_start < 224 && recv_buffer[target_start] == ' ') target_start++;
+    if (recv_buffer[target_start] != '\0') {
+      int target_end = target_start;
+      while (target_end < 224 && recv_buffer[target_end] != '\0' && recv_buffer[target_end] != ' ') target_end++;
+      target = getPlayerByName(target_start, target_end, recv_buffer);
+      if (target == NULL) {
+        const char msg[] = "§cPlayer not found.";
+        sc_systemChat(client_fd, (char *)msg, (uint16_t)sizeof(msg) - 1);
+        goto cleanup;
+      }
+    }
+
+    target->health = 20;
+    sc_setHealth(target->client_fd, target->health, target->hunger, target->saturation);
+
+    char response[96];
+    int resp_len = snprintf(response, sizeof(response), "§aHealed §f%s", target->name);
+    sc_systemChat(client_fd, response, (uint16_t)resp_len);
+    if (target->client_fd != client_fd) {
+      const char msg[] = "§aYou have been healed.";
+      sc_systemChat(target->client_fd, (char *)msg, (uint16_t)sizeof(msg) - 1);
+    }
+    goto cleanup;
+  }
+
+  if (!strncmp((char *)recv_buffer, "!feed", 5) && isCommandBoundary(recv_buffer, 5)) {
+    PlayerData *target = player;
+    int target_start = 6;
+    while (target_start < 224 && recv_buffer[target_start] == ' ') target_start++;
+    if (recv_buffer[target_start] != '\0') {
+      int target_end = target_start;
+      while (target_end < 224 && recv_buffer[target_end] != '\0' && recv_buffer[target_end] != ' ') target_end++;
+      target = getPlayerByName(target_start, target_end, recv_buffer);
+      if (target == NULL) {
+        const char msg[] = "§cPlayer not found.";
+        sc_systemChat(client_fd, (char *)msg, (uint16_t)sizeof(msg) - 1);
+        goto cleanup;
+      }
+    }
+
+    target->hunger = 20;
+    if (target->saturation < 2500) target->saturation = 2500;
+    sc_setHealth(target->client_fd, target->health, target->hunger, target->saturation);
+
+    char response[96];
+    int resp_len = snprintf(response, sizeof(response), "§aFed §f%s", target->name);
+    sc_systemChat(client_fd, response, (uint16_t)resp_len);
+    if (target->client_fd != client_fd) {
+      const char msg[] = "§aYour hunger has been restored.";
+      sc_systemChat(target->client_fd, (char *)msg, (uint16_t)sizeof(msg) - 1);
+    }
+    goto cleanup;
+  }
+
   if (!strncmp((char *)recv_buffer, "!help", 5)) {
     // Send command guide
-    const char help_msg[] = "§7Commands:\n"
+    const char help_msg[] = "§7Commands (use / or !):\n"
+    "  /gamemode <survival|creative|adventure|spectator> - Set server gamemode\n"
+    "  /tp <x> <y> <z> - Teleport to coordinates\n"
+    "  /give [player] <item_name> [count] - Give items\n"
+    "  /time set <ticks|day|noon|night|midnight> - Set world time\n"
+    "  /weather <clear|rain|thunder> - Set world weather\n"
+    "  /kill [player] - Kill a player\n"
+    "  /heal [player] - Restore health\n"
+    "  /feed [player] - Restore hunger\n"
     "  !msg <player> <message> - Send a private message\n"
     "  !portal - Build a Nether portal at your position\n"
     "  !biome [x z] - Show biome at current or given coordinates\n"
-    "  !tp <x> <y> <z> - Teleport to coordinates\n"
-    "  !timeset <ticks> - Set world time (0=day, 12000=night)\n"
     "  !findbiome <name> [radius] - Find and teleport to nearest biome\n"
-    "  !find biome <name> [radius] - Alias for !findbiome\n"
-    "  !creative - Toggle creative mode UI / !creative list - List all items\n"
-    "  !creative <item_name> - Give yourself an item (e.g., !creative oak_log)\n"
+    "  !creative <item_name> - Give yourself an item (creative mode)\n"
     "  !noclip [on|off] - Toggle spectator-style noclip movement\n"
-    "  !findstructure [radius] - Find and teleport to nearest nether structure\n"
-    "  !weather <clear|rain|thunder> - Set the world weather\n"
-    "  !help - Show this help message";
+    "  !findstructure [radius] - Find nearest nether structure\n"
+    "  /help - Show this help message";
     sc_systemChat(client_fd, (char *)help_msg, (uint16_t)sizeof(help_msg) - 1);
     goto cleanup;
   }
@@ -2738,34 +3081,52 @@ int cs_chat (int client_fd) {
     goto cleanup;
   }
 
-  // !timeset <ticks> - Set the world time (0-23999, 12000=night, 0=day)
-  if (!strncmp((char *)recv_buffer, "!timeset", 8)) {
-    if (message_len < 10) {
-      sc_systemChat(client_fd, "§7Usage: !timeset <ticks>", 28);
-      goto cleanup;
+  // /time set <ticks|day|noon|night|midnight> - Set the world time
+  if ((!strncmp((char *)recv_buffer, "!time", 5) && isCommandBoundary(recv_buffer, 5)) ||
+      (!strncmp((char *)recv_buffer, "!timeset", 8) && isCommandBoundary(recv_buffer, 8))) {
+    uint8_t legacy_timeset = !strncmp((char *)recv_buffer, "!timeset", 8);
+    int ci = legacy_timeset ? 9 : 6;
+    while (ci < 224 && recv_buffer[ci] == ' ') ci++;
+
+    uint8_t add_time = false;
+    if (!legacy_timeset) {
+      if (!strncmp((char *)recv_buffer + ci, "set", 3) && isCommandBoundary(recv_buffer, ci + 3)) {
+        ci += 3;
+        while (ci < 224 && recv_buffer[ci] == ' ') ci++;
+      } else if (!strncmp((char *)recv_buffer + ci, "add", 3) && isCommandBoundary(recv_buffer, ci + 3)) {
+        add_time = true;
+        ci += 3;
+        while (ci < 224 && recv_buffer[ci] == ' ') ci++;
+      }
     }
-    int ci = 9;
-    while (recv_buffer[ci] == ' ' && ci < 224) ci++;
+
     int ci_start = ci;
-    while (recv_buffer[ci] != ' ' && recv_buffer[ci] != '\0' && ci < 224) ci++;
+    while (ci < 224 && recv_buffer[ci] != ' ' && recv_buffer[ci] != '\0') ci++;
     if (ci <= ci_start) {
-      sc_systemChat(client_fd, "§7Usage: !timeset <ticks>", 28);
+      const char usage[] = "§7Usage: /time set <ticks|day|noon|night|midnight>";
+      sc_systemChat(client_fd, (char *)usage, (uint16_t)sizeof(usage) - 1);
       goto cleanup;
     }
-    char time_buf[16];
-    memcpy(time_buf, recv_buffer + ci_start, ci - ci_start);
-    time_buf[ci - ci_start] = '\0';
-    int new_time = atoi(time_buf);
-    new_time = new_time % 24000;
-    world_time = new_time;
-    char response[64];
-    int resp_len = snprintf(response, sizeof(response), "§7World time set to §f%d", new_time);
-    sc_systemChat(client_fd, response, (uint16_t)resp_len);
-    for (int i = 0; i < MAX_PLAYERS; i++) {
-      if (player_data[i].client_fd == -1) continue;
-      if (player_data[i].flags & 0x20) continue;
-      sc_updateTime(player_data[i].client_fd, world_time);
+
+    char time_buf[32];
+    int time_len = ci - ci_start;
+    if (time_len > 31) time_len = 31;
+    memcpy(time_buf, recv_buffer + ci_start, time_len);
+    time_buf[time_len] = '\0';
+
+    int parsed_time = 0;
+    if (!parseTimeToken(time_buf, &parsed_time)) {
+      const char usage[] = "§7Usage: /time set <ticks|day|noon|night|midnight>";
+      sc_systemChat(client_fd, (char *)usage, (uint16_t)sizeof(usage) - 1);
+      goto cleanup;
     }
+
+    world_time = add_time ? normalizeWorldTime((int)world_time + parsed_time) : normalizeWorldTime(parsed_time);
+    broadcastTimeUpdate();
+
+    char response[64];
+    int resp_len = snprintf(response, sizeof(response), "§7World time set to §f%d", world_time);
+    sc_systemChat(client_fd, response, (uint16_t)resp_len);
     goto cleanup;
   }
 
