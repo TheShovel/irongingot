@@ -534,6 +534,10 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
       if (state == STATE_PLAY) cs_interact(client_fd);
       break;
 
+    case 0x26:
+      if (state == STATE_PLAY) cs_craftRecipeRequest(client_fd);
+      break;
+
     case 0x1D:
     case 0x1E:
     case 0x1F:

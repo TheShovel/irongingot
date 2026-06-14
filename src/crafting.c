@@ -208,6 +208,67 @@ uint16_t getCraftingTableFromPlank(uint16_t plank) {
   return I_crafting_table;
 }
 
+// Helper function to get fence gate from plank type
+static uint16_t getFenceGateFromPlank(uint16_t plank) {
+  switch (plank) {
+    case I_oak_planks: return I_oak_fence_gate;
+    case I_spruce_planks: return I_spruce_fence_gate;
+    case I_birch_planks: return I_birch_fence_gate;
+    case I_jungle_planks: return I_jungle_fence_gate;
+    case I_acacia_planks: return I_acacia_fence_gate;
+    case I_dark_oak_planks: return I_dark_oak_fence_gate;
+    case I_mangrove_planks: return I_mangrove_fence_gate;
+    case I_cherry_planks: return I_cherry_fence_gate;
+    case I_pale_oak_planks: return I_pale_oak_fence_gate;
+    case I_bamboo_planks: return I_bamboo_fence_gate;
+    case I_crimson_planks: return I_crimson_fence_gate;
+    case I_warped_planks: return I_warped_fence_gate;
+    default: return 0;
+  }
+}
+
+// Helper function to get button from material type
+static uint16_t getButtonFromMaterial(uint16_t material) {
+  switch (material) {
+    case I_stone: return I_stone_button;
+    case I_polished_blackstone: return I_polished_blackstone_button;
+    case I_oak_planks: return I_oak_button;
+    case I_spruce_planks: return I_spruce_button;
+    case I_birch_planks: return I_birch_button;
+    case I_jungle_planks: return I_jungle_button;
+    case I_acacia_planks: return I_acacia_button;
+    case I_dark_oak_planks: return I_dark_oak_button;
+    case I_mangrove_planks: return I_mangrove_button;
+    case I_cherry_planks: return I_cherry_button;
+    case I_pale_oak_planks: return I_pale_oak_button;
+    case I_bamboo_planks: return I_bamboo_button;
+    case I_crimson_planks: return I_crimson_button;
+    case I_warped_planks: return I_warped_button;
+    default: return 0;
+  }
+}
+
+// Helper function to get pressure plate from material type
+static uint16_t getPressurePlateFromMaterial(uint16_t material) {
+  switch (material) {
+    case I_stone: return I_stone_pressure_plate;
+    case I_polished_blackstone: return I_polished_blackstone_pressure_plate;
+    case I_oak_planks: return I_oak_pressure_plate;
+    case I_spruce_planks: return I_spruce_pressure_plate;
+    case I_birch_planks: return I_birch_pressure_plate;
+    case I_jungle_planks: return I_jungle_pressure_plate;
+    case I_acacia_planks: return I_acacia_pressure_plate;
+    case I_dark_oak_planks: return I_dark_oak_pressure_plate;
+    case I_mangrove_planks: return I_mangrove_pressure_plate;
+    case I_cherry_planks: return I_cherry_pressure_plate;
+    case I_pale_oak_planks: return I_pale_oak_pressure_plate;
+    case I_bamboo_planks: return I_bamboo_pressure_plate;
+    case I_crimson_planks: return I_crimson_pressure_plate;
+    case I_warped_planks: return I_warped_pressure_plate;
+    default: return 0;
+  }
+}
+
 void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
 
   // Exit early if craft_items has been locked
@@ -239,6 +300,21 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
       return;
 
     case 1:
+      // Button recipes: 1 material anywhere → 1 button
+      {
+        uint16_t button = getButtonFromMaterial(first_item);
+        if (button != 0) {
+          *item = button;
+          *count = 1;
+          return;
+        }
+      }
+      // Bone meal: 1 bone → 3 bone meal
+      if (first_item == I_bone) {
+        *item = I_bone_meal;
+        *count = 3;
+        return;
+      }
       switch (first_item) {
         // Log to planks recipes
         case I_oak_log: *item = I_oak_planks; *count = 4; return;
@@ -260,12 +336,29 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
         case I_redstone_block: *item = I_redstone; *count = 9; return;
         case I_coal_block: *item = I_coal; *count = 9; return;
         case I_copper_block: *item = I_copper_ingot; *count = 9; return;
+        case I_netherite_block: *item = I_netherite_ingot; *count = 9; return;
+        case I_lapis_block: *item = I_lapis_lazuli; *count = 9; return;
+        case I_emerald_block: *item = I_emerald; *count = 9; return;
+        case I_hay_block: *item = I_wheat; *count = 9; return;
+        case I_dried_kelp_block: *item = I_dried_kelp; *count = 9; return;
+        case I_slime_block: *item = I_slime_ball; *count = 9; return;
+        case I_honey_block: *item = I_honey_bottle; *count = 4; return;
+        case I_bone_block: *item = I_bone_meal; *count = 9; return;
 
         default: break;
       }
       break;
 
     case 2:
+      // Pressure plate recipes: 2 same material horizontal → pressure plate
+      if (first_col == 0 && player->craft_items[first + 1] == first_item) {
+        uint16_t plate = getPressurePlateFromMaterial(first_item);
+        if (plate != 0) {
+          *item = plate;
+          *count = 1;
+          return;
+        }
+      }
       // Check for stick recipe (2 planks vertical)
       if (isPlankItem(first_item) && first_row != 2 && isPlankItem(player->craft_items[first + 3])) {
         *item = I_stick;
@@ -411,6 +504,37 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
             *count = 6;
             return;
           }
+          break;
+        // Stone brick slab: 3 stone bricks horizontal → 6 slabs
+        case I_stone_bricks:
+          if (first_col == 0 &&
+              player->craft_items[first + 1] == first_item &&
+              player->craft_items[first + 2] == first_item) {
+            *item = I_stone_brick_slab;
+            *count = 6;
+            return;
+          }
+          break;
+        // Brick slab: 3 bricks horizontal → 6 slabs
+        case I_bricks:
+          if (first_col == 0 &&
+              player->craft_items[first + 1] == first_item &&
+              player->craft_items[first + 2] == first_item) {
+            *item = I_brick_slab;
+            *count = 6;
+            return;
+          }
+          break;
+        // Nether brick slab: 3 nether bricks horizontal → 6 slabs
+        case I_nether_bricks:
+          if (first_col == 0 &&
+              player->craft_items[first + 1] == first_item &&
+              player->craft_items[first + 2] == first_item) {
+            *item = I_nether_brick_slab;
+            *count = 6;
+            return;
+          }
+          break;
         case I_iron_ingot:
         case I_gold_ingot:
         case I_diamond:
@@ -464,6 +588,16 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
       }
       switch (first_item) {
         case I_oak_log:
+        case I_spruce_log:
+        case I_birch_log:
+        case I_jungle_log:
+        case I_acacia_log:
+        case I_dark_oak_log:
+        case I_mangrove_log:
+        case I_cherry_log:
+        case I_pale_oak_log:
+        case I_crimson_stem:
+        case I_warped_stem:
         case I_snowball:
           // Uniform 2x2 shaped recipes
           if (
@@ -472,8 +606,57 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
             player->craft_items[first + 3] == first_item &&
             player->craft_items[first + 4] == first_item
           ) {
-            if (first_item == I_oak_log) { *item = I_oak_wood; *count = 3; }
-            else if (first_item == I_snowball) { *item = I_snow_block; *count = 3; }
+            if (first_item == I_snowball) { *item = I_snow_block; *count = 3; }
+            else if (first_item == I_oak_log) { *item = I_oak_wood; *count = 3; }
+            else if (first_item == I_spruce_log) { *item = I_spruce_wood; *count = 3; }
+            else if (first_item == I_birch_log) { *item = I_birch_wood; *count = 3; }
+            else if (first_item == I_jungle_log) { *item = I_jungle_wood; *count = 3; }
+            else if (first_item == I_acacia_log) { *item = I_acacia_wood; *count = 3; }
+            else if (first_item == I_dark_oak_log) { *item = I_dark_oak_wood; *count = 3; }
+            else if (first_item == I_mangrove_log) { *item = I_mangrove_wood; *count = 3; }
+            else if (first_item == I_cherry_log) { *item = I_cherry_wood; *count = 3; }
+            else if (first_item == I_pale_oak_log) { *item = I_pale_oak_wood; *count = 3; }
+            else if (first_item == I_crimson_stem) { *item = I_crimson_hyphae; *count = 3; }
+            else if (first_item == I_warped_stem) { *item = I_warped_hyphae; *count = 3; }
+            return;
+          }
+          break;
+        // 2x2 stone to stone bricks
+        case I_stone:
+          if (
+            first_col != 2 && first_row != 2 &&
+            player->craft_items[first + 1] == first_item &&
+            player->craft_items[first + 3] == first_item &&
+            player->craft_items[first + 4] == first_item
+          ) {
+            *item = I_stone_bricks;
+            *count = 4;
+            return;
+          }
+          break;
+        // 2x2 brick items to brick block
+        case I_brick:
+          if (
+            first_col != 2 && first_row != 2 &&
+            player->craft_items[first + 1] == first_item &&
+            player->craft_items[first + 3] == first_item &&
+            player->craft_items[first + 4] == first_item
+          ) {
+            *item = I_bricks;
+            *count = 1;
+            return;
+          }
+          break;
+        // 2x2 nether_brick items to nether_bricks
+        case I_nether_brick:
+          if (
+            first_col != 2 && first_row != 2 &&
+            player->craft_items[first + 1] == first_item &&
+            player->craft_items[first + 3] == first_item &&
+            player->craft_items[first + 4] == first_item
+          ) {
+            *item = I_nether_bricks;
+            *count = 1;
             return;
           }
           break;
@@ -719,6 +902,80 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
           return;
         }
       }
+      // Fence gate recipe (4 planks + 2 sticks)
+      // Pattern: stick-plank-stick / stick-plank-stick
+      if (
+        first_col == 0 && first_row == 0 &&
+        isPlankItem(first_item) &&
+        player->craft_items[1] == I_stick &&
+        player->craft_items[2] == first_item &&
+        player->craft_items[3] == I_stick &&
+        player->craft_items[4] == first_item &&
+        player->craft_items[5] == first_item
+      ) {
+        uint16_t result = getFenceGateFromPlank(first_item);
+        if (result != 0) {
+          *item = result;
+          *count = 1;
+          return;
+        }
+      }
+      // Glass pane: 6 glass in 2 rows of 3
+      if (first_item == I_glass && first_col == 0 && first_row == 0 &&
+          player->craft_items[1] == I_glass &&
+          player->craft_items[2] == I_glass &&
+          player->craft_items[3] == I_glass &&
+          player->craft_items[4] == I_glass &&
+          player->craft_items[5] == I_glass) {
+        *item = I_glass_pane;
+        *count = 16;
+        return;
+      }
+      // Iron bars: 6 iron ingots in 2 rows of 3
+      if (first_item == I_iron_ingot && first_col == 0 && first_row == 0 &&
+          player->craft_items[1] == I_iron_ingot &&
+          player->craft_items[2] == I_iron_ingot &&
+          player->craft_items[3] == I_iron_ingot &&
+          player->craft_items[4] == I_iron_ingot &&
+          player->craft_items[5] == I_iron_ingot) {
+        *item = I_iron_bars;
+        *count = 16;
+        return;
+      }
+      // Cobblestone wall: 6 cobblestone in 2 rows of 3
+      if (first_item == I_cobblestone && first_col == 0 && first_row == 0 &&
+          player->craft_items[1] == I_cobblestone &&
+          player->craft_items[2] == I_cobblestone &&
+          player->craft_items[3] == I_cobblestone &&
+          player->craft_items[4] == I_cobblestone &&
+          player->craft_items[5] == I_cobblestone) {
+        *item = I_cobblestone_wall;
+        *count = 6;
+        return;
+      }
+      // Stone brick stairs (6 stone bricks in stair pattern)
+      // Pattern 1: X.. / XX. / XXX (slots 0,3,4,6,7,8)
+      if (first_item == I_stone_bricks && first_col == 0 && first_row == 0 &&
+          player->craft_items[3] == first_item &&
+          player->craft_items[4] == first_item &&
+          player->craft_items[6] == first_item &&
+          player->craft_items[7] == first_item &&
+          player->craft_items[8] == first_item) {
+        *item = I_stone_brick_stairs;
+        *count = 4;
+        return;
+      }
+      // Pattern 2: ..X / .XX / XXX (slots 2,4,5,6,7,8)
+      if (first_item == I_stone_bricks && first_col == 2 && first_row == 0 &&
+          player->craft_items[4] == first_item &&
+          player->craft_items[5] == first_item &&
+          player->craft_items[6] == first_item &&
+          player->craft_items[7] == first_item &&
+          player->craft_items[8] == first_item) {
+        *item = I_stone_brick_stairs;
+        *count = 4;
+        return;
+      }
       // Cobblestone stairs (6 cobblestone in stair pattern)
       // Pattern 1: X.. / XX. / XXX (slots 0,3,4,6,7,8)
       if (first_item == I_cobblestone && first_col == 0 && first_row == 0 &&
@@ -745,6 +1002,25 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
       break;
 
     case 7:
+      // Ladder recipe: 7 sticks in H pattern
+      // S . S
+      // S S S
+      // S . S
+      if (
+        player->craft_items[0] == I_stick &&
+        player->craft_items[2] == I_stick &&
+        player->craft_items[3] == I_stick &&
+        player->craft_items[4] == I_stick &&
+        player->craft_items[5] == I_stick &&
+        player->craft_items[6] == I_stick &&
+        player->craft_items[8] == I_stick &&
+        player->craft_items[1] == 0 &&
+        player->craft_items[7] == 0
+      ) {
+        *item = I_ladder;
+        *count = 3;
+        return;
+      }
       // Shield recipe: 1 iron ingot, 6 planks
       // P I P
       // P P P
@@ -872,6 +1148,42 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
         *count = 1;
         return;
       }
+      // Bookshelf recipe: 6 planks + 3 books
+      // P P P
+      // B B B
+      // P P P
+      if (isPlankItem(first_item) && first == 0 &&
+          player->craft_items[1] == first_item &&
+          player->craft_items[2] == first_item &&
+          player->craft_items[3] == I_book &&
+          player->craft_items[4] == I_book &&
+          player->craft_items[5] == I_book &&
+          player->craft_items[6] == first_item &&
+          player->craft_items[7] == first_item &&
+          player->craft_items[8] == first_item) {
+        *item = I_bookshelf;
+        *count = 1;
+        return;
+      }
+      // Campfire recipe: 3 sticks + 1 coal/charcoal + 3 logs
+      // S S S
+      // S C S
+      // L L L
+      if (
+        player->craft_items[0] == I_stick &&
+        player->craft_items[1] == I_stick &&
+        player->craft_items[2] == I_stick &&
+        player->craft_items[3] == I_stick &&
+        (player->craft_items[4] == I_coal || player->craft_items[4] == I_charcoal) &&
+        player->craft_items[5] == I_stick &&
+        isBurnableLogOrWoodItem(player->craft_items[6]) &&
+        isBurnableLogOrWoodItem(player->craft_items[7]) &&
+        isBurnableLogOrWoodItem(player->craft_items[8])
+      ) {
+        *item = I_campfire;
+        *count = 1;
+        return;
+      }
       // Uniform 3x3 shaped recipes
       if (identical) switch (first_item) {
         case I_iron_ingot: *item = I_iron_block; *count = 1; return;
@@ -880,6 +1192,14 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
         case I_redstone: *item = I_redstone_block; *count = 1; return;
         case I_coal: *item = I_coal_block; *count = 1; return;
         case I_copper_ingot: *item = I_copper_block; *count = 1; return;
+        case I_emerald: *item = I_emerald_block; *count = 1; return;
+        case I_netherite_ingot: *item = I_netherite_block; *count = 1; return;
+        case I_lapis_lazuli: *item = I_lapis_block; *count = 1; return;
+        case I_wheat: *item = I_hay_block; *count = 1; return;
+        case I_dried_kelp: *item = I_dried_kelp_block; *count = 1; return;
+        case I_slime_ball: *item = I_slime_block; *count = 1; return;
+        case I_bone_meal: *item = I_bone_block; *count = 1; return;
+        case I_melon_slice: *item = I_melon; *count = 1; return;
         default: break;
       }
       break;
@@ -972,6 +1292,20 @@ void getSmeltingOutput (PlayerData *player) {
   else registerSmeltingRecipe(I_salmon, I_cooked_salmon);
   else registerSmeltingRecipe(I_rabbit, I_cooked_rabbit);
   else registerSmeltingRecipe(I_potato, I_baked_potato);
+  // Ore blocks can be smelted directly
+  else registerSmeltingRecipe(I_iron_ore, I_iron_ingot);
+  else registerSmeltingRecipe(I_gold_ore, I_gold_ingot);
+  else registerSmeltingRecipe(I_copper_ore, I_copper_ingot);
+  else registerSmeltingRecipe(I_deepslate_iron_ore, I_iron_ingot);
+  else registerSmeltingRecipe(I_deepslate_gold_ore, I_gold_ingot);
+  else registerSmeltingRecipe(I_deepslate_copper_ore, I_copper_ingot);
+  // Clay and other materials
+  else registerSmeltingRecipe(I_clay_ball, I_brick);
+  else registerSmeltingRecipe(I_stone, I_smooth_stone);
+  else registerSmeltingRecipe(I_cobblestone, I_stone);
+  else registerSmeltingRecipe(I_rotten_flesh, I_leather);
+  else registerSmeltingRecipe(I_sponge, I_wet_sponge);
+  else registerSmeltingRecipe(I_wet_sponge, I_sponge);
   else return;
 
   *output_count += exchange;

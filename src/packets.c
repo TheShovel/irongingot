@@ -3801,6 +3801,1362 @@ int cs_containerButtonClick(int client_fd) {
   return 0;
 }
 
+// Helper: write a prefixed string (VarInt length + data)
+static void write_pstring(int client_fd, const char *str) {
+  size_t len = strlen(str);
+  writeVarInt(client_fd, len);
+  send_all(client_fd, str, len);
+}
+
+// Helper: write a single ingredient slot (one option, one item)
+// Item slot format: VarInt count, VarInt item_id, VarInt components
+static void write_single_ingredient(int client_fd, uint16_t item_id) {
+  writeVarInt(client_fd, 1); // 1 alternative
+  writeVarInt(client_fd, 1); // stack count (1 item)
+  writeVarInt(client_fd, item_id);
+  writeVarInt(client_fd, 0); // no components
+}
+
+// Helper: write an empty ingredient slot
+static void write_empty_ingredient(int client_fd) {
+  writeVarInt(client_fd, 0); // 0 alternatives = empty
+}
+
+// Write a shaped recipe to the packet.
+// 'ingredients' is a width*height array of item IDs (0 for empty).
+// Result: count items of 'result_id'.
+static void write_shaped_recipe(int client_fd, const char *id,
+    int w, int h, const uint16_t *ingredients,
+    uint16_t result_id, int result_count) {
+  write_pstring(client_fd, "minecraft:crafting_shaped");
+  write_pstring(client_fd, id);
+  write_pstring(client_fd, ""); // group
+  writeVarInt(client_fd, w);
+  writeVarInt(client_fd, h);
+  for (int _i = 0; _i < w * h; _i++) {
+    if (ingredients[_i] == 0) {
+      writeVarInt(client_fd, 0); // empty slot
+    } else {
+      writeVarInt(client_fd, 1); // 1 alternative
+      writeVarInt(client_fd, 1); // stack count = 1
+      writeVarInt(client_fd, ingredients[_i]);
+      writeVarInt(client_fd, 0); // no components
+    }
+  }
+  writeVarInt(client_fd, result_count); // result quantity
+  writeVarInt(client_fd, result_id);
+  writeVarInt(client_fd, 0); // no components
+}
+
+// Write a smelting recipe to the packet.
+static void write_smelting_recipe(int client_fd, const char *id,
+    uint16_t ingredient_id, uint16_t result_id,
+    float xp, int cook_time) {
+  write_pstring(client_fd, "minecraft:smelting");
+  write_pstring(client_fd, id);
+  write_pstring(client_fd, ""); // group
+  writeVarInt(client_fd, 1); // 1 ingredient alternative
+  writeVarInt(client_fd, 1); // stack count = 1
+  writeVarInt(client_fd, ingredient_id);
+  writeVarInt(client_fd, 0); // no components
+  writeVarInt(client_fd, 1); // result count = 1
+  writeVarInt(client_fd, result_id);
+  writeVarInt(client_fd, 0); // no components
+  writeFloat(client_fd, xp);
+  writeVarInt(client_fd, cook_time);
+}
+
+// Write a shapeless recipe to the packet.
+static void write_shapeless_recipe(int client_fd, const char *id,
+    int num_ingredients, const uint16_t *ingredients,
+    uint16_t result_id, int result_count) {
+  write_pstring(client_fd, "minecraft:crafting_shapeless");
+  write_pstring(client_fd, id);
+  write_pstring(client_fd, ""); // group
+  writeVarInt(client_fd, num_ingredients);
+  for (int _i = 0; _i < num_ingredients; _i++) {
+    writeVarInt(client_fd, 1); // 1 alternative
+    writeVarInt(client_fd, 1); // stack count = 1
+    writeVarInt(client_fd, ingredients[_i]);
+    writeVarInt(client_fd, 0); // no components
+  }
+  writeVarInt(client_fd, result_count);
+  writeVarInt(client_fd, result_id);
+  writeVarInt(client_fd, 0); // no components
+}
+
+// ─── Recipe declaration helpers ────────────────────────────────────────────
+
+// Write a single ingredient slot with one item
+static void writeIngredient(int client_fd, uint16_t item) {
+  writeVarInt(client_fd, 1); // 1 alternative
+  writeVarInt(client_fd, 1); // stack count
+  writeVarInt(client_fd, item);
+  writeVarInt(client_fd, 0); // no components
+}
+
+// Write an empty ingredient slot
+static void writeEmptyIng(int client_fd) {
+  writeVarInt(client_fd, 0);
+}
+
+// Write a recipe result
+static void writeResult(int client_fd, uint8_t count, uint16_t item) {
+  writeVarInt(client_fd, count);
+  writeVarInt(client_fd, item);
+  writeVarInt(client_fd, 0); // no components
+}
+
+// Write a shaped recipe. `ing` is a w×h grid of item IDs (0 = empty slot)
+static void writeShaped(int client_fd, const char *id, const char *group,
+    int w, int h, const uint16_t *ing, int rcount, uint16_t ritem) {
+  write_pstring(client_fd, "minecraft:crafting_shaped");
+  write_pstring(client_fd, id);
+  write_pstring(client_fd, group);
+  writeVarInt(client_fd, w);
+  writeVarInt(client_fd, h);
+  for (int _i = 0; _i < w * h; _i++) {
+    if (ing[_i]) writeIngredient(client_fd, ing[_i]);
+    else writeEmptyIng(client_fd);
+  }
+  writeResult(client_fd, rcount, ritem);
+}
+
+// Write a smelting recipe.
+// The ingredient is a single Ingredient compound (which already has its own
+// alternatives count), so we write it directly — no extra wrapping list count.
+static void writeSmelting(int client_fd, const char *id,
+    uint16_t ingredient, uint16_t result, float exp, int cook_time) {
+  write_pstring(client_fd, "minecraft:smelting");
+  write_pstring(client_fd, id);
+  write_pstring(client_fd, "");
+  writeIngredient(client_fd, ingredient);
+  writeResult(client_fd, 1, result);
+  writeFloat(client_fd, exp);
+  writeVarInt(client_fd, cook_time);
+}
+
+// Build a recipe ID string "rN" from a counter
+#define RECIPE_ID_BUF_SIZE 16
+static void recipeId(int n, char *buf) {
+  buf[0] = 'r';
+  int p = 1;
+  if (n >= 10000) buf[p++] = '0' + (n / 10000) % 10;
+  if (n >= 1000)  buf[p++] = '0' + (n / 1000) % 10;
+  if (n >= 100)   buf[p++] = '0' + (n / 100) % 10;
+  if (n >= 10)    buf[p++] = '0' + (n / 10) % 10;
+  buf[p++] = '0' + n % 10;
+  buf[p] = '\0';
+}
+
+// ─── Recipe data tables ────────────────────────────────────────────────────
+
+// Log/Stem → 4 Planks (1×1)
+#define LOG_PLANKS_ENTRIES 12
+static const uint16_t g_log_planks[LOG_PLANKS_ENTRIES][2] = {
+  {I_oak_log, I_oak_planks},
+  {I_spruce_log, I_spruce_planks},
+  {I_birch_log, I_birch_planks},
+  {I_jungle_log, I_jungle_planks},
+  {I_acacia_log, I_acacia_planks},
+  {I_cherry_log, I_cherry_planks},
+  {I_dark_oak_log, I_dark_oak_planks},
+  {I_pale_oak_log, I_pale_oak_planks},
+  {I_mangrove_log, I_mangrove_planks},
+  {I_bamboo_block, I_bamboo_planks},
+  {I_crimson_stem, I_crimson_planks},
+  {I_warped_stem, I_warped_planks},
+};
+
+// Block → 9 Items (1×1) and block → 4 items
+#define DECOMPOSE_ENTRIES 12
+static const uint16_t g_decompose[DECOMPOSE_ENTRIES][3] = {
+  {I_iron_block, I_iron_ingot, 9},
+  {I_gold_block, I_gold_ingot, 9},
+  {I_diamond_block, I_diamond, 9},
+  {I_redstone_block, I_redstone, 9},
+  {I_coal_block, I_coal, 9},
+  {I_copper_block, I_copper_ingot, 9},
+  {I_netherite_block, I_netherite_ingot, 9},
+  {I_lapis_block, I_lapis_lazuli, 9},
+  {I_emerald_block, I_emerald, 9},
+  {I_hay_block, I_wheat, 9},
+  {I_dried_kelp_block, I_dried_kelp, 9},
+  {I_slime_block, I_slime_ball, 9},
+};
+
+// Log/Stem → 3 Wood/Hyphae (2×2)
+#define WOOD_ENTRIES 11
+static const uint16_t g_wood[WOOD_ENTRIES][2] = {
+  {I_oak_log, I_oak_wood},
+  {I_spruce_log, I_spruce_wood},
+  {I_birch_log, I_birch_wood},
+  {I_jungle_log, I_jungle_wood},
+  {I_acacia_log, I_acacia_wood},
+  {I_cherry_log, I_cherry_wood},
+  {I_dark_oak_log, I_dark_oak_wood},
+  {I_mangrove_log, I_mangrove_wood},
+  {I_pale_oak_log, I_pale_oak_wood},
+  {I_crimson_stem, I_crimson_hyphae},
+  {I_warped_stem, I_warped_hyphae},
+};
+
+// 6 items from 9 -> 1 block (3×3 uniform)
+#define BLOCK_CRAFT_ENTRIES 13
+static const uint16_t g_block_craft[BLOCK_CRAFT_ENTRIES][2] = {
+  {I_iron_ingot, I_iron_block},
+  {I_gold_ingot, I_gold_block},
+  {I_diamond, I_diamond_block},
+  {I_redstone, I_redstone_block},
+  {I_coal, I_coal_block},
+  {I_copper_ingot, I_copper_block},
+  {I_emerald, I_emerald_block},
+  {I_netherite_ingot, I_netherite_block},
+  {I_lapis_lazuli, I_lapis_block},
+  {I_wheat, I_hay_block},
+  {I_dried_kelp, I_dried_kelp_block},
+  {I_slime_ball, I_slime_block},
+  {I_bone_meal, I_bone_block},
+};
+
+// Plank types for per-wood-type recipes (12 types)
+#define PLANK_TYPES 12
+static const uint16_t g_planks[PLANK_TYPES] = {
+  I_oak_planks, I_spruce_planks, I_birch_planks, I_jungle_planks,
+  I_acacia_planks, I_cherry_planks, I_dark_oak_planks, I_pale_oak_planks,
+  I_mangrove_planks, I_bamboo_planks, I_crimson_planks, I_warped_planks,
+};
+
+// Corresponding slabs, stairs, doors, trapdoors, fences, fence gates, buttons, pressure plates
+#define SLAB_TYPES 12
+static const uint16_t g_slabs[SLAB_TYPES] = {
+  I_oak_slab, I_spruce_slab, I_birch_slab, I_jungle_slab,
+  I_acacia_slab, I_cherry_slab, I_dark_oak_slab, I_pale_oak_slab,
+  I_mangrove_slab, I_bamboo_slab, I_crimson_slab, I_warped_slab,
+};
+
+#define STAIR_TYPES 12
+static const uint16_t g_stairs[STAIR_TYPES] = {
+  I_oak_stairs, I_spruce_stairs, I_birch_stairs, I_jungle_stairs,
+  I_acacia_stairs, I_cherry_stairs, I_dark_oak_stairs, I_pale_oak_stairs,
+  I_mangrove_stairs, I_bamboo_stairs, I_crimson_stairs, I_warped_stairs,
+};
+
+#define DOOR_TYPES 10
+static const uint16_t g_doors[DOOR_TYPES] = {
+  I_oak_door, I_spruce_door, I_birch_door, I_jungle_door,
+  I_acacia_door, I_cherry_door, I_dark_oak_door, I_pale_oak_door,
+  I_mangrove_door, I_bamboo_door,
+};
+
+#define TRAPDOOR_TYPES 9
+static const uint16_t g_trapdoors[TRAPDOOR_TYPES] = {
+  I_oak_trapdoor, I_spruce_trapdoor, I_birch_trapdoor, I_jungle_trapdoor,
+  I_acacia_trapdoor, I_cherry_trapdoor, I_dark_oak_trapdoor, I_pale_oak_trapdoor,
+  I_mangrove_trapdoor,
+};
+
+#define FENCE_TYPES 10
+static const uint16_t g_fences[FENCE_TYPES] = {
+  I_oak_fence, I_spruce_fence, I_birch_fence, I_jungle_fence,
+  I_acacia_fence, I_cherry_fence, I_dark_oak_fence, I_pale_oak_fence,
+  I_mangrove_fence, I_bamboo_fence,
+};
+
+#define FENCE_GATE_TYPES 12
+static const uint16_t g_fence_gates[FENCE_GATE_TYPES] = {
+  I_oak_fence_gate, I_spruce_fence_gate, I_birch_fence_gate, I_jungle_fence_gate,
+  I_acacia_fence_gate, I_cherry_fence_gate, I_dark_oak_fence_gate, I_pale_oak_fence_gate,
+  I_mangrove_fence_gate, I_bamboo_fence_gate, I_crimson_fence_gate, I_warped_fence_gate,
+};
+
+#define BUTTON_TYPES 14
+static const uint16_t g_buttons[BUTTON_TYPES] = {
+  I_stone_button, I_polished_blackstone_button,
+  I_oak_button, I_spruce_button, I_birch_button, I_jungle_button,
+  I_acacia_button, I_cherry_button, I_dark_oak_button, I_pale_oak_button,
+  I_mangrove_button, I_bamboo_button, I_crimson_button, I_warped_button,
+};
+
+#define BUTTON_MATERIALS 14
+static const uint16_t g_button_materials[BUTTON_TYPES] = {
+  I_stone, I_polished_blackstone,
+  I_oak_planks, I_spruce_planks, I_birch_planks, I_jungle_planks,
+  I_acacia_planks, I_cherry_planks, I_dark_oak_planks, I_pale_oak_planks,
+  I_mangrove_planks, I_bamboo_planks, I_crimson_planks, I_warped_planks,
+};
+
+#define PRESSURE_PLATE_TYPES 14
+static const uint16_t g_pressure_plates[PRESSURE_PLATE_TYPES] = {
+  I_stone_pressure_plate, I_polished_blackstone_pressure_plate,
+  I_oak_pressure_plate, I_spruce_pressure_plate, I_birch_pressure_plate,
+  I_jungle_pressure_plate, I_acacia_pressure_plate, I_cherry_pressure_plate,
+  I_dark_oak_pressure_plate, I_pale_oak_pressure_plate, I_mangrove_pressure_plate,
+  I_bamboo_pressure_plate, I_crimson_pressure_plate, I_warped_pressure_plate,
+};
+
+static const uint16_t g_pressure_materials[PRESSURE_PLATE_TYPES] = {
+  I_stone, I_polished_blackstone,
+  I_oak_planks, I_spruce_planks, I_birch_planks, I_jungle_planks,
+  I_acacia_planks, I_cherry_planks, I_dark_oak_planks, I_pale_oak_planks,
+  I_mangrove_planks, I_bamboo_planks, I_crimson_planks, I_warped_planks,
+};
+
+// Tool materials: cobblestone, iron, gold, diamond, netherite (also planks handled separately)
+#define TOOL_MATERIALS 5
+static const uint16_t g_tool_materials[TOOL_MATERIALS] = {
+  I_cobblestone, I_iron_ingot, I_gold_ingot, I_diamond, I_netherite_ingot,
+};
+
+static const uint16_t g_shovels[TOOL_MATERIALS] = {
+  I_stone_shovel, I_iron_shovel, I_golden_shovel, I_diamond_shovel, I_netherite_shovel,
+};
+
+static const uint16_t g_swords[TOOL_MATERIALS] = {
+  I_stone_sword, I_iron_sword, I_golden_sword, I_diamond_sword, I_netherite_sword,
+};
+
+static const uint16_t g_pickaxes[TOOL_MATERIALS] = {
+  I_stone_pickaxe, I_iron_pickaxe, I_golden_pickaxe, I_diamond_pickaxe, I_netherite_pickaxe,
+};
+
+static const uint16_t g_axes[TOOL_MATERIALS] = {
+  I_stone_axe, I_iron_axe, I_golden_axe, I_diamond_axe, I_netherite_axe,
+};
+
+// Armor materials: leather, iron, gold, diamond, netherite
+#define ARMOR_MATERIALS 5
+static const uint16_t g_armor_materials[ARMOR_MATERIALS] = {
+  I_leather, I_iron_ingot, I_gold_ingot, I_diamond, I_netherite_ingot,
+};
+
+static const uint16_t g_helmets[ARMOR_MATERIALS] = {
+  I_leather_helmet, I_iron_helmet, I_golden_helmet, I_diamond_helmet, I_netherite_helmet,
+};
+
+static const uint16_t g_chestplates[ARMOR_MATERIALS] = {
+  I_leather_chestplate, I_iron_chestplate, I_golden_chestplate, I_diamond_chestplate, I_netherite_chestplate,
+};
+
+static const uint16_t g_leggings_arr[ARMOR_MATERIALS] = {
+  I_leather_leggings, I_iron_leggings, I_golden_leggings, I_diamond_leggings, I_netherite_leggings,
+};
+
+static const uint16_t g_boots[ARMOR_MATERIALS] = {
+  I_leather_boots, I_iron_boots, I_golden_boots, I_diamond_boots, I_netherite_boots,
+};
+
+// Beds and wools (16 colors)
+#define BED_COLORS 16
+static const uint16_t g_wools[BED_COLORS] = {
+  I_white_wool, I_orange_wool, I_magenta_wool, I_light_blue_wool,
+  I_yellow_wool, I_lime_wool, I_pink_wool, I_gray_wool,
+  I_light_gray_wool, I_cyan_wool, I_purple_wool, I_blue_wool,
+  I_brown_wool, I_green_wool, I_red_wool, I_black_wool,
+};
+
+static const uint16_t g_beds[BED_COLORS] = {
+  I_white_bed, I_orange_bed, I_magenta_bed, I_light_blue_bed,
+  I_yellow_bed, I_lime_bed, I_pink_bed, I_gray_bed,
+  I_light_gray_bed, I_cyan_bed, I_purple_bed, I_blue_bed,
+  I_brown_bed, I_green_bed, I_red_bed, I_black_bed,
+};
+
+// ─── Smelting recipe data ──────────────────────────────────────────────────
+
+#define SMELTING_ENTRIES 26
+static const uint16_t g_smelting_in[SMELTING_ENTRIES] = {
+  I_cobblestone, I_oak_log, I_raw_iron, I_raw_gold, I_raw_copper,
+  I_ancient_debris, I_sand, I_red_sand, I_netherrack, I_cactus,
+  I_chicken, I_beef, I_porkchop, I_mutton, I_cod, I_salmon, I_rabbit,
+  I_potato, I_iron_ore, I_gold_ore, I_copper_ore,
+  I_deepslate_iron_ore, I_deepslate_gold_ore, I_deepslate_copper_ore,
+  I_clay_ball, I_rotten_flesh,
+};
+
+static const uint16_t g_smelting_out[SMELTING_ENTRIES] = {
+  I_stone, I_charcoal, I_iron_ingot, I_gold_ingot, I_copper_ingot,
+  I_netherite_scrap, I_glass, I_glass, I_nether_brick, I_green_dye,
+  I_cooked_chicken, I_cooked_beef, I_cooked_porkchop, I_cooked_mutton,
+  I_cooked_cod, I_cooked_salmon, I_cooked_rabbit,
+  I_baked_potato, I_iron_ingot, I_gold_ingot, I_copper_ingot,
+  I_iron_ingot, I_gold_ingot, I_copper_ingot,
+  I_brick, I_leather,
+};
+
+// Also smelting for stone -> smooth_stone, sponge -> wet_sponge and reverse
+#define SMELTING_EXTRA 3
+static const uint16_t g_smelting_extra_in[SMELTING_EXTRA] = { I_stone, I_sponge, I_wet_sponge };
+static const uint16_t g_smelting_extra_out[SMELTING_EXTRA] = { I_smooth_stone, I_wet_sponge, I_sponge };
+
+// ─── SlotDisplay / RecipeDisplay helpers (1.21.8) ─────────────────────────
+
+// Write a SlotDisplay showing a single item (type 3 = "item_stack").
+// Uses full ItemStack format so the client can identify the item for availability checks.
+static void writeSlotItem(int client_fd, uint16_t item_id) {
+  writeVarInt(client_fd, 3);  // type: "item_stack"
+  writeVarInt(client_fd, 1);  // itemCount (non-zero = present)
+  writeVarInt(client_fd, item_id);
+  writeVarInt(client_fd, 0);  // addedComponentCount
+  writeVarInt(client_fd, 0);  // removedComponentCount
+}
+
+// Write a SlotDisplay for an empty slot (type 0 = "empty").
+static void writeSlotEmpty(int client_fd) {
+  writeVarInt(client_fd, 0);  // type: "empty"
+}
+
+// Write a RecipeDisplay for a crafting_shaped recipe.
+// `ing` is a w×h array of item IDs (0 = empty), `num_ing` = w × h.
+static void writeDisplayShaped(int client_fd, int w, int h,
+    const uint16_t *ing, int num_ing,
+    uint16_t result, uint16_t station) {
+  writeVarInt(client_fd, 1);  // type: crafting_shaped
+  writeVarInt(client_fd, w);
+  writeVarInt(client_fd, h);
+  writeVarInt(client_fd, num_ing);
+  for (int i = 0; i < num_ing; i++) {
+    if (ing[i]) writeSlotItem(client_fd, ing[i]);
+    else writeSlotEmpty(client_fd);
+  }
+  writeSlotItem(client_fd, result);
+  writeSlotItem(client_fd, station);
+}
+
+// ─── Recipe iteration helpers ────────────────────────────────────────────
+
+// Write one recipe declaration entry (for packet 0x7E).
+static void writeDeclareEntry(int client_fd, const char *rid,
+    const uint16_t *items, int num_items) {
+  write_pstring(client_fd, rid);
+  writeVarInt(client_fd, num_items);
+  for (int _i = 0; _i < num_items; _i++) {
+    writeVarInt(client_fd, items[_i]);
+  }
+}
+
+// Write one recipe_book_add entry for a shaped recipe.
+static void writeAddShaped(int client_fd, int display_id,
+    int w, int h, const uint16_t *grid,
+    uint16_t result, int category) {
+  writeVarInt(client_fd, display_id);
+  writeDisplayShaped(client_fd, w, h, grid, w * h, result, I_crafting_table);
+  writeVarInt(client_fd, 0);  // group
+  writeVarInt(client_fd, category);
+  writeByte(client_fd, 0);  // requirements absent
+  writeByte(client_fd, 0);  // flags
+}
+
+// ─── Declare Recipes (1.21.8, packet 0x7E) ───────────────────────────────
+int sc_declareRecipes(int client_fd) {
+  startPacket(client_fd, 0x7E);
+
+  int total = 0;
+  // Count recipes (same categories as recipe_book_add)
+  total += LOG_PLANKS_ENTRIES; total += 1; total += DECOMPOSE_ENTRIES;
+  total += 2; total += BUTTON_TYPES; total += PRESSURE_PLATE_TYPES;
+  total += 1; total += 1; total += 1; total += 1; total += 1; total += 1;
+  total += SLAB_TYPES + 5; total += 1 + TOOL_MATERIALS;
+  total += 1 + TOOL_MATERIALS; total += 1; total += WOOD_ENTRIES + 4;
+  total += ARMOR_MATERIALS; total += 1 + TOOL_MATERIALS;
+  total += 1 + TOOL_MATERIALS; total += ARMOR_MATERIALS;
+  total += ARMOR_MATERIALS; total += ARMOR_MATERIALS; total += 1;
+  total += BED_COLORS; total += DOOR_TYPES; total += STAIR_TYPES;
+  total += FENCE_TYPES; total += TRAPDOOR_TYPES; total += FENCE_GATE_TYPES;
+  total += 5; total += 1; total += 1; total += 1; total += 1;
+  total += 1; total += 1; total += 1; total += 1; total += 1;
+  total += BLOCK_CRAFT_ENTRIES + 1; total += 1;
+  total += SMELTING_ENTRIES + SMELTING_EXTRA;
+
+  writeVarInt(client_fd, total);
+
+  char rid[RECIPE_ID_BUF_SIZE];
+  uint16_t grid[9];
+  uint16_t items[16];
+  int idx = 0;
+
+  // Helper lambda-like blocks for each recipe group
+  #define DECLARE_1x1(ing, res) do { \
+    recipeId(idx++, rid); items[0] = ing; items[1] = res; \
+    writeDeclareEntry(client_fd, rid, items, 2); } while(0)
+
+  #define DECLARE_RESULT(ing1, ing2, res) do { \
+    recipeId(idx++, rid); items[0] = ing1; items[1] = ing2; items[2] = res; \
+    writeDeclareEntry(client_fd, rid, items, 3); } while(0)
+
+  // 1. Log → 4 Planks
+  for (int i = 0; i < LOG_PLANKS_ENTRIES; i++)
+    DECLARE_1x1(g_log_planks[i][0], g_log_planks[i][1]);
+
+  // 2. Bone → 3 Bone Meal
+  DECLARE_1x1(I_bone, I_bone_meal);
+
+  // 3. Block decomposition
+  for (int i = 0; i < DECOMPOSE_ENTRIES; i++)
+    DECLARE_1x1(g_decompose[i][0], g_decompose[i][1]);
+  DECLARE_1x1(I_honey_block, I_honey_bottle);
+  DECLARE_1x1(I_bone_block, I_bone_meal);
+
+  // 4. Buttons (1×1)
+  for (int i = 0; i < BUTTON_TYPES; i++)
+    DECLARE_1x1(g_button_materials[i], g_buttons[i]);
+
+  // 5. Pressure plates (2×1)
+  for (int i = 0; i < PRESSURE_PLATE_TYPES; i++) {
+    recipeId(idx++, rid);
+    items[0] = items[1] = g_pressure_materials[i];
+    items[2] = g_pressure_plates[i];
+    writeDeclareEntry(client_fd, rid, items, 3);
+  }
+
+  // 6. Stick (2 planks vertical)
+  { recipeId(idx++, rid); items[0] = g_planks[0]; items[1] = I_stick;
+    writeDeclareEntry(client_fd, rid, items, 2); }
+
+  // 7. Torch
+  { recipeId(idx++, rid); items[0] = I_coal; items[1] = I_stick; items[2] = I_torch;
+    writeDeclareEntry(client_fd, rid, items, 3); }
+
+  // 8. Shears
+  { recipeId(idx++, rid); items[0] = I_iron_ingot; items[1] = I_shears;
+    writeDeclareEntry(client_fd, rid, items, 2); }
+
+  // 9. Arrow
+  { recipeId(idx++, rid); items[0] = I_flint; items[1] = I_stick; items[2] = I_feather; items[3] = I_arrow;
+    writeDeclareEntry(client_fd, rid, items, 4); }
+
+  // 10. Bucket
+  { recipeId(idx++, rid); items[0] = I_iron_ingot; items[1] = I_bucket;
+    writeDeclareEntry(client_fd, rid, items, 2); }
+
+  // 11. Bread
+  { recipeId(idx++, rid); items[0] = I_wheat; items[1] = I_bread;
+    writeDeclareEntry(client_fd, rid, items, 2); }
+
+  // 12. Slabs
+  for (int i = 0; i < SLAB_TYPES; i++) {
+    recipeId(idx++, rid); items[0] = g_planks[i]; items[1] = g_slabs[i];
+    writeDeclareEntry(client_fd, rid, items, 2); }
+  DECLARE_1x1(I_cobblestone, I_cobblestone_slab);
+  DECLARE_1x1(I_stone, I_stone_slab);
+  DECLARE_1x1(I_stone_bricks, I_stone_brick_slab);
+  DECLARE_1x1(I_bricks, I_brick_slab);
+  DECLARE_1x1(I_nether_bricks, I_nether_brick_slab);
+
+  // 13. Shovels (1 material + 2 sticks)
+  { recipeId(idx++, rid); items[0] = g_planks[0]; items[1] = I_stick; items[2] = I_wooden_shovel;
+    writeDeclareEntry(client_fd, rid, items, 3); }
+  for (int i = 0; i < TOOL_MATERIALS; i++) {
+    recipeId(idx++, rid); items[0] = g_tool_materials[i]; items[1] = I_stick; items[2] = g_shovels[i];
+    writeDeclareEntry(client_fd, rid, items, 3); }
+
+  // 14. Swords
+  { recipeId(idx++, rid); items[0] = g_planks[0]; items[1] = I_stick; items[2] = I_wooden_sword;
+    writeDeclareEntry(client_fd, rid, items, 3); }
+  for (int i = 0; i < TOOL_MATERIALS; i++) {
+    recipeId(idx++, rid); items[0] = g_tool_materials[i]; items[1] = I_stick; items[2] = g_swords[i];
+    writeDeclareEntry(client_fd, rid, items, 3); }
+
+  // 15. Crafting Table
+  { recipeId(idx++, rid); items[0] = g_planks[0]; items[1] = I_crafting_table;
+    writeDeclareEntry(client_fd, rid, items, 2); }
+
+  // 16. 2×2 Uniform
+  for (int i = 0; i < WOOD_ENTRIES; i++)
+    DECLARE_1x1(g_wood[i][0], g_wood[i][1]);
+  DECLARE_1x1(I_snowball, I_snow_block);
+  DECLARE_1x1(I_stone, I_stone_bricks);
+  DECLARE_1x1(I_brick, I_bricks);
+  DECLARE_1x1(I_nether_brick, I_nether_bricks);
+
+  // 17. Boots
+  for (int i = 0; i < ARMOR_MATERIALS; i++)
+    DECLARE_1x1(g_armor_materials[i], g_boots[i]);
+
+  // 18. Pickaxes
+  { recipeId(idx++, rid); items[0] = g_planks[0]; items[1] = I_stick; items[2] = I_wooden_pickaxe;
+    writeDeclareEntry(client_fd, rid, items, 3); }
+  for (int i = 0; i < TOOL_MATERIALS; i++) {
+    recipeId(idx++, rid); items[0] = g_tool_materials[i]; items[1] = I_stick; items[2] = g_pickaxes[i];
+    writeDeclareEntry(client_fd, rid, items, 3); }
+
+  // 19. Axes
+  { recipeId(idx++, rid); items[0] = g_planks[0]; items[1] = I_stick; items[2] = I_wooden_axe;
+    writeDeclareEntry(client_fd, rid, items, 3); }
+  for (int i = 0; i < TOOL_MATERIALS; i++) {
+    recipeId(idx++, rid); items[0] = g_tool_materials[i]; items[1] = I_stick; items[2] = g_axes[i];
+    writeDeclareEntry(client_fd, rid, items, 3); }
+
+  // 20. Helmets
+  for (int i = 0; i < ARMOR_MATERIALS; i++)
+    DECLARE_1x1(g_armor_materials[i], g_helmets[i]);
+
+  // 21. Chestplates
+  for (int i = 0; i < ARMOR_MATERIALS; i++)
+    DECLARE_1x1(g_armor_materials[i], g_chestplates[i]);
+
+  // 22. Leggings
+  for (int i = 0; i < ARMOR_MATERIALS; i++)
+    DECLARE_1x1(g_armor_materials[i], g_leggings_arr[i]);
+
+  // 23. Bow
+  { recipeId(idx++, rid); items[0] = I_stick; items[1] = I_string; items[2] = I_bow;
+    writeDeclareEntry(client_fd, rid, items, 3); }
+
+  // 24. Beds
+  for (int i = 0; i < BED_COLORS; i++) {
+    recipeId(idx++, rid); items[0] = g_wools[i]; items[1] = g_beds[i];
+    writeDeclareEntry(client_fd, rid, items, 2); }
+
+  // 25. Doors
+  for (int i = 0; i < DOOR_TYPES; i++) {
+    recipeId(idx++, rid); items[0] = g_planks[i]; items[1] = g_doors[i];
+    writeDeclareEntry(client_fd, rid, items, 2); }
+
+  // 26. Stairs
+  for (int i = 0; i < STAIR_TYPES; i++) {
+    recipeId(idx++, rid); items[0] = g_planks[i]; items[1] = g_stairs[i];
+    writeDeclareEntry(client_fd, rid, items, 2); }
+
+  // 27. Fences
+  for (int i = 0; i < FENCE_TYPES; i++) {
+    recipeId(idx++, rid); items[0] = g_planks[i]; items[1] = I_stick; items[2] = g_fences[i];
+    writeDeclareEntry(client_fd, rid, items, 3); }
+
+  // 28. Trapdoors
+  for (int i = 0; i < TRAPDOOR_TYPES; i++) {
+    recipeId(idx++, rid); items[0] = g_planks[i]; items[1] = g_trapdoors[i];
+    writeDeclareEntry(client_fd, rid, items, 2); }
+
+  // 29. Fence gates
+  for (int i = 0; i < FENCE_GATE_TYPES; i++) {
+    recipeId(idx++, rid); items[0] = g_planks[i]; items[1] = I_stick; items[2] = g_fence_gates[i];
+    writeDeclareEntry(client_fd, rid, items, 3); }
+
+  // 30-34. Glass, bars, wall, stairs
+  DECLARE_1x1(I_glass, I_glass_pane);
+  DECLARE_1x1(I_iron_ingot, I_iron_bars);
+  DECLARE_1x1(I_cobblestone, I_cobblestone_wall);
+  DECLARE_1x1(I_stone_bricks, I_stone_brick_stairs);
+  DECLARE_1x1(I_cobblestone, I_cobblestone_stairs);
+
+  // 35. Ladder
+  { recipeId(idx++, rid); items[0] = I_stick; items[1] = I_ladder;
+    writeDeclareEntry(client_fd, rid, items, 2); }
+
+  // 36. Shield
+  { recipeId(idx++, rid); items[0] = g_planks[0]; items[1] = I_iron_ingot; items[2] = I_shield;
+    writeDeclareEntry(client_fd, rid, items, 3); }
+
+  // 37. Composter
+  DECLARE_1x1(I_oak_slab, I_composter);
+
+  // 38. Furnace
+  DECLARE_1x1(I_cobblestone, I_furnace);
+
+  // 39. Chest
+  DECLARE_1x1(g_planks[0], I_chest);
+
+  // 40. Barrel
+  { recipeId(idx++, rid); items[0] = g_planks[0]; items[1] = I_oak_slab; items[2] = I_barrel;
+    writeDeclareEntry(client_fd, rid, items, 3); }
+
+  // 41. Ender chest
+  { recipeId(idx++, rid); items[0] = I_obsidian; items[1] = I_ender_eye; items[2] = I_ender_chest;
+    writeDeclareEntry(client_fd, rid, items, 3); }
+
+  // 42. Bookshelf
+  { recipeId(idx++, rid); items[0] = g_planks[0]; items[1] = I_book; items[2] = I_bookshelf;
+    writeDeclareEntry(client_fd, rid, items, 3); }
+
+  // 43. Campfire
+  { recipeId(idx++, rid); items[0] = I_stick; items[1] = I_coal; items[2] = I_oak_log; items[3] = I_campfire;
+    writeDeclareEntry(client_fd, rid, items, 4); }
+
+  // 44. 3×3 Uniform + Melon
+  for (int i = 0; i < BLOCK_CRAFT_ENTRIES; i++)
+    DECLARE_1x1(g_block_craft[i][0], g_block_craft[i][1]);
+  DECLARE_1x1(I_melon_slice, I_melon);
+
+  // 45. Flint & Steel
+  { recipeId(idx++, rid); items[0] = I_iron_ingot; items[1] = I_flint; items[2] = I_flint_and_steel;
+    writeDeclareEntry(client_fd, rid, items, 3); }
+
+  // 46. Smelting
+  for (int i = 0; i < SMELTING_ENTRIES; i++) {
+    recipeId(idx++, rid); items[0] = g_smelting_in[i]; items[1] = g_smelting_out[i];
+    writeDeclareEntry(client_fd, rid, items, 2); }
+  for (int i = 0; i < SMELTING_EXTRA; i++) {
+    recipeId(idx++, rid); items[0] = g_smelting_extra_in[i]; items[1] = g_smelting_extra_out[i];
+    writeDeclareEntry(client_fd, rid, items, 2); }
+
+  // Stonecutter recipes: none
+  writeVarInt(client_fd, 0);
+
+  endPacket(client_fd);
+  return idx;
+}
+
+// ─── Recipe Book Add (1.21.8, packet 0x43) ───────────────────────────────
+int sc_unlockRecipes(int client_fd) {
+  startPacket(client_fd, 0x43);
+
+  // Count entries (same as declare_recipes)
+  int total = 0;
+  total += LOG_PLANKS_ENTRIES; total += 1; total += DECOMPOSE_ENTRIES;
+  total += 2; total += BUTTON_TYPES; total += PRESSURE_PLATE_TYPES;
+  total += 1; total += 1; total += 1; total += 1; total += 1; total += 1;
+  total += SLAB_TYPES + 5; total += 1 + TOOL_MATERIALS;
+  total += 1 + TOOL_MATERIALS; total += 1; total += WOOD_ENTRIES + 4;
+  total += ARMOR_MATERIALS; total += 1 + TOOL_MATERIALS;
+  total += 1 + TOOL_MATERIALS; total += ARMOR_MATERIALS;
+  total += ARMOR_MATERIALS; total += ARMOR_MATERIALS; total += 1;
+  total += BED_COLORS; total += DOOR_TYPES; total += STAIR_TYPES;
+  total += FENCE_TYPES; total += TRAPDOOR_TYPES; total += FENCE_GATE_TYPES;
+  total += 5; total += 1; total += 1; total += 1; total += 1;
+  total += 1; total += 1; total += 1; total += 1; total += 1;
+  total += BLOCK_CRAFT_ENTRIES + 1; total += 1;
+  total += SMELTING_ENTRIES + SMELTING_EXTRA;
+
+  writeVarInt(client_fd, total);
+
+  char rid[RECIPE_ID_BUF_SIZE];
+  uint16_t grid[9];
+  int idx = 0;
+  (void)rid;
+
+  // Helper: write shaped entry
+  #define ADD_SHAPED(w, h, g, r, cat) do { \
+    writeAddShaped(client_fd, idx++, w, h, g, r, cat); } while(0)
+
+  // Categories: 0=building_blocks, 2=equipment, 3=misc
+  // (skipping 1=redstone, no redstone recipes)
+
+  // 1. Log → 4 Planks (1×1)
+  for (int i = 0; i < LOG_PLANKS_ENTRIES; i++) {
+    grid[0] = g_log_planks[i][0];
+    ADD_SHAPED(1, 1, grid, g_log_planks[i][1], 0);
+  }
+
+  // 2. Bone → 3 Bone Meal (1×1)
+  grid[0] = I_bone;
+  ADD_SHAPED(1, 1, grid, I_bone_meal, 3);
+
+  // 3. Block decomposition (1×1)
+  for (int i = 0; i < DECOMPOSE_ENTRIES; i++) {
+    grid[0] = g_decompose[i][0];
+    ADD_SHAPED(1, 1, grid, g_decompose[i][1], 0);
+  }
+  grid[0] = I_honey_block; ADD_SHAPED(1, 1, grid, I_honey_bottle, 3);
+  grid[0] = I_bone_block; ADD_SHAPED(1, 1, grid, I_bone_meal, 3);
+
+  // 4. Buttons (1×1)
+  for (int i = 0; i < BUTTON_TYPES; i++) {
+    grid[0] = g_button_materials[i];
+    ADD_SHAPED(1, 1, grid, g_buttons[i], 0);
+  }
+
+  // 5. Pressure plates (2×1)
+  for (int i = 0; i < PRESSURE_PLATE_TYPES; i++) {
+    grid[0] = grid[1] = g_pressure_materials[i];
+    ADD_SHAPED(2, 1, grid, g_pressure_plates[i], 0);
+  }
+
+  // 6. Stick (2×1)
+  grid[0] = grid[1] = g_planks[0];
+  ADD_SHAPED(2, 1, grid, I_stick, 0);
+
+  // 7. Torch (2×1)
+  grid[0] = I_coal; grid[1] = I_stick;
+  ADD_SHAPED(2, 1, grid, I_torch, 3);
+
+  // 8. Shears (2×2 diagonal)
+  grid[0] = I_iron_ingot; grid[1] = 0; grid[2] = 0; grid[3] = I_iron_ingot;
+  ADD_SHAPED(2, 2, grid, I_shears, 2);
+
+  // 9. Arrow (3×1)
+  grid[0] = I_flint; grid[1] = I_stick; grid[2] = I_feather;
+  ADD_SHAPED(3, 1, grid, I_arrow, 3);
+
+  // 10. Bucket (3×2 V)
+  grid[0] = I_iron_ingot; grid[1] = 0; grid[2] = I_iron_ingot;
+  grid[3] = 0; grid[4] = I_iron_ingot; grid[5] = 0;
+  ADD_SHAPED(3, 2, grid, I_bucket, 3);
+
+  // 11. Bread (3×1)
+  grid[0] = grid[1] = grid[2] = I_wheat;
+  ADD_SHAPED(3, 1, grid, I_bread, 3);
+
+  // 12. Slabs (3×1)
+  for (int i = 0; i < SLAB_TYPES; i++) {
+    grid[0] = grid[1] = grid[2] = g_planks[i];
+    ADD_SHAPED(3, 1, grid, g_slabs[i], 0);
+  }
+  grid[0] = grid[1] = grid[2] = I_cobblestone;
+  ADD_SHAPED(3, 1, grid, I_cobblestone_slab, 0);
+  grid[0] = grid[1] = grid[2] = I_stone;
+  ADD_SHAPED(3, 1, grid, I_stone_slab, 0);
+  grid[0] = grid[1] = grid[2] = I_stone_bricks;
+  ADD_SHAPED(3, 1, grid, I_stone_brick_slab, 0);
+  grid[0] = grid[1] = grid[2] = I_bricks;
+  ADD_SHAPED(3, 1, grid, I_brick_slab, 0);
+  grid[0] = grid[1] = grid[2] = I_nether_bricks;
+  ADD_SHAPED(3, 1, grid, I_nether_brick_slab, 0);
+
+  // 13. Shovels (3×1)
+  grid[0] = g_planks[0]; grid[1] = I_stick; grid[2] = I_stick;
+  ADD_SHAPED(3, 1, grid, I_wooden_shovel, 2);
+  for (int i = 0; i < TOOL_MATERIALS; i++) {
+    grid[0] = g_tool_materials[i]; grid[1] = I_stick; grid[2] = I_stick;
+    ADD_SHAPED(3, 1, grid, g_shovels[i], 2);
+  }
+
+  // 14. Swords (3×1)
+  grid[0] = grid[1] = g_planks[0]; grid[2] = I_stick;
+  ADD_SHAPED(3, 1, grid, I_wooden_sword, 2);
+  for (int i = 0; i < TOOL_MATERIALS; i++) {
+    grid[0] = grid[1] = g_tool_materials[i]; grid[2] = I_stick;
+    ADD_SHAPED(3, 1, grid, g_swords[i], 2);
+  }
+
+  // 15. Crafting Table (2×2)
+  grid[0] = grid[1] = grid[2] = grid[3] = g_planks[0];
+  ADD_SHAPED(2, 2, grid, I_crafting_table, 0);
+
+  // 16. 2×2 Uniform
+  for (int i = 0; i < WOOD_ENTRIES; i++) {
+    grid[0] = grid[1] = grid[2] = grid[3] = g_wood[i][0];
+    ADD_SHAPED(2, 2, grid, g_wood[i][1], 0);
+  }
+  grid[0] = grid[1] = grid[2] = grid[3] = I_snowball;
+  ADD_SHAPED(2, 2, grid, I_snow_block, 0);
+  grid[0] = grid[1] = grid[2] = grid[3] = I_stone;
+  ADD_SHAPED(2, 2, grid, I_stone_bricks, 0);
+  grid[0] = grid[1] = grid[2] = grid[3] = I_brick;
+  ADD_SHAPED(2, 2, grid, I_bricks, 0);
+  grid[0] = grid[1] = grid[2] = grid[3] = I_nether_brick;
+  ADD_SHAPED(2, 2, grid, I_nether_bricks, 0);
+
+  // 17. Boots (3×2)
+  for (int i = 0; i < ARMOR_MATERIALS; i++) {
+    grid[0] = g_armor_materials[i]; grid[1] = 0; grid[2] = g_armor_materials[i];
+    grid[3] = g_armor_materials[i]; grid[4] = 0; grid[5] = g_armor_materials[i];
+    ADD_SHAPED(3, 2, grid, g_boots[i], 2);
+  }
+
+  // 18. Pickaxes (3×3)
+  grid[0] = grid[1] = grid[2] = g_planks[0];
+  grid[3] = 0; grid[4] = I_stick; grid[5] = 0;
+  grid[6] = 0; grid[7] = I_stick; grid[8] = 0;
+  ADD_SHAPED(3, 3, grid, I_wooden_pickaxe, 2);
+  for (int i = 0; i < TOOL_MATERIALS; i++) {
+    grid[0] = grid[1] = grid[2] = g_tool_materials[i];
+    grid[3] = 0; grid[4] = I_stick; grid[5] = 0;
+    grid[6] = 0; grid[7] = I_stick; grid[8] = 0;
+    ADD_SHAPED(3, 3, grid, g_pickaxes[i], 2);
+  }
+
+  // 19. Axes (2×3)
+  grid[0] = grid[1] = g_planks[0]; grid[2] = g_planks[0]; grid[3] = I_stick;
+  grid[4] = 0; grid[5] = I_stick;
+  ADD_SHAPED(2, 3, grid, I_wooden_axe, 2);
+  for (int i = 0; i < TOOL_MATERIALS; i++) {
+    grid[0] = grid[1] = g_tool_materials[i]; grid[2] = g_tool_materials[i];
+    grid[3] = I_stick; grid[4] = 0; grid[5] = I_stick;
+    ADD_SHAPED(2, 3, grid, g_axes[i], 2);
+  }
+
+  // 20. Helmets (3×2)
+  for (int i = 0; i < ARMOR_MATERIALS; i++) {
+    grid[0] = grid[1] = grid[2] = g_armor_materials[i];
+    grid[3] = g_armor_materials[i]; grid[4] = 0; grid[5] = g_armor_materials[i];
+    ADD_SHAPED(3, 2, grid, g_helmets[i], 2);
+  }
+
+  // 21. Chestplates (3×3)
+  for (int i = 0; i < ARMOR_MATERIALS; i++) {
+    grid[0] = g_armor_materials[i]; grid[1] = 0; grid[2] = g_armor_materials[i];
+    grid[3] = g_armor_materials[i]; grid[4] = g_armor_materials[i]; grid[5] = g_armor_materials[i];
+    grid[6] = g_armor_materials[i]; grid[7] = 0; grid[8] = g_armor_materials[i];
+    ADD_SHAPED(3, 3, grid, g_chestplates[i], 2);
+  }
+
+  // 22. Leggings (3×3)
+  for (int i = 0; i < ARMOR_MATERIALS; i++) {
+    grid[0] = grid[1] = grid[2] = g_armor_materials[i];
+    grid[3] = g_armor_materials[i]; grid[4] = 0; grid[5] = g_armor_materials[i];
+    grid[6] = g_armor_materials[i]; grid[7] = 0; grid[8] = g_armor_materials[i];
+    ADD_SHAPED(3, 3, grid, g_leggings_arr[i], 2);
+  }
+
+  // 23. Bow (3×3)
+  grid[0] = 0; grid[1] = I_stick; grid[2] = I_string;
+  grid[3] = I_stick; grid[4] = 0; grid[5] = I_string;
+  grid[6] = 0; grid[7] = I_stick; grid[8] = I_string;
+  ADD_SHAPED(3, 3, grid, I_bow, 2);
+
+  // 24. Beds (3×2)
+  for (int i = 0; i < BED_COLORS; i++) {
+    grid[0] = grid[1] = grid[2] = g_wools[i];
+    grid[3] = grid[4] = grid[5] = g_planks[0];
+    ADD_SHAPED(3, 2, grid, g_beds[i], 0);
+  }
+
+  // 25. Doors (2×3)
+  for (int i = 0; i < DOOR_TYPES; i++) {
+    grid[0] = grid[2] = grid[3] = grid[5] = g_planks[i];
+    grid[1] = grid[4] = g_planks[i];
+    ADD_SHAPED(2, 3, grid, g_doors[i], 0);
+  }
+
+  // 26. Stairs (3×3 stair pattern)
+  for (int i = 0; i < STAIR_TYPES; i++) {
+    grid[0] = g_planks[i]; grid[1] = 0; grid[2] = 0;
+    grid[3] = g_planks[i]; grid[4] = g_planks[i]; grid[5] = 0;
+    grid[6] = g_planks[i]; grid[7] = g_planks[i]; grid[8] = g_planks[i];
+    ADD_SHAPED(3, 3, grid, g_stairs[i], 0);
+  }
+
+  // 27. Fences (3×2)
+  for (int i = 0; i < FENCE_TYPES; i++) {
+    grid[0] = g_planks[i]; grid[1] = I_stick; grid[2] = g_planks[i];
+    grid[3] = g_planks[i]; grid[4] = I_stick; grid[5] = g_planks[i];
+    ADD_SHAPED(3, 2, grid, g_fences[i], 0);
+  }
+
+  // 28. Trapdoors (3×2)
+  for (int i = 0; i < TRAPDOOR_TYPES; i++) {
+    grid[0] = grid[1] = grid[2] = g_planks[i];
+    grid[3] = grid[4] = grid[5] = g_planks[i];
+    ADD_SHAPED(3, 2, grid, g_trapdoors[i], 0);
+  }
+
+  // 29. Fence gates (3×2)
+  for (int i = 0; i < FENCE_GATE_TYPES; i++) {
+    grid[0] = I_stick; grid[1] = g_planks[i]; grid[2] = I_stick;
+    grid[3] = I_stick; grid[4] = g_planks[i]; grid[5] = I_stick;
+    ADD_SHAPED(3, 2, grid, g_fence_gates[i], 0);
+  }
+
+  // 30-34. Glass pane, iron bars, wall, stairs
+  grid[0] = grid[1] = grid[2] = grid[3] = grid[4] = grid[5] = I_glass;
+  ADD_SHAPED(3, 2, grid, I_glass_pane, 0);
+  grid[0] = grid[1] = grid[2] = grid[3] = grid[4] = grid[5] = I_iron_ingot;
+  ADD_SHAPED(3, 2, grid, I_iron_bars, 0);
+  grid[0] = grid[1] = grid[2] = grid[3] = grid[4] = grid[5] = I_cobblestone;
+  ADD_SHAPED(3, 2, grid, I_cobblestone_wall, 0);
+  grid[0] = I_stone_bricks; grid[1] = 0; grid[2] = 0;
+  grid[3] = I_stone_bricks; grid[4] = I_stone_bricks; grid[5] = 0;
+  grid[6] = I_stone_bricks; grid[7] = I_stone_bricks; grid[8] = I_stone_bricks;
+  ADD_SHAPED(3, 3, grid, I_stone_brick_stairs, 0);
+  grid[0] = I_cobblestone; grid[1] = 0; grid[2] = 0;
+  grid[3] = I_cobblestone; grid[4] = I_cobblestone; grid[5] = 0;
+  grid[6] = I_cobblestone; grid[7] = I_cobblestone; grid[8] = I_cobblestone;
+  ADD_SHAPED(3, 3, grid, I_cobblestone_stairs, 0);
+
+  // 35. Ladder (3×3)
+  grid[0] = I_stick; grid[1] = 0; grid[2] = I_stick;
+  grid[3] = I_stick; grid[4] = I_stick; grid[5] = I_stick;
+  grid[6] = I_stick; grid[7] = 0; grid[8] = I_stick;
+  ADD_SHAPED(3, 3, grid, I_ladder, 3);
+
+  // 36. Shield (3×3)
+  grid[0] = g_planks[0]; grid[1] = I_iron_ingot; grid[2] = g_planks[0];
+  grid[3] = g_planks[0]; grid[4] = g_planks[0]; grid[5] = g_planks[0];
+  grid[6] = 0; grid[7] = g_planks[0]; grid[8] = 0;
+  ADD_SHAPED(3, 3, grid, I_shield, 2);
+
+  // 37. Composter (3×3)
+  grid[0] = I_oak_slab; grid[1] = 0; grid[2] = I_oak_slab;
+  grid[3] = I_oak_slab; grid[4] = 0; grid[5] = I_oak_slab;
+  grid[6] = I_oak_slab; grid[7] = I_oak_slab; grid[8] = I_oak_slab;
+  ADD_SHAPED(3, 3, grid, I_composter, 3);
+
+  // 38. Furnace (3×3)
+  grid[0] = grid[1] = grid[2] = I_cobblestone;
+  grid[3] = I_cobblestone; grid[4] = 0; grid[5] = I_cobblestone;
+  grid[6] = grid[7] = grid[8] = I_cobblestone;
+  ADD_SHAPED(3, 3, grid, I_furnace, 0);
+
+  // 39. Chest (3×3)
+  grid[0] = grid[1] = grid[2] = g_planks[0];
+  grid[3] = g_planks[0]; grid[4] = 0; grid[5] = g_planks[0];
+  grid[6] = grid[7] = grid[8] = g_planks[0];
+  ADD_SHAPED(3, 3, grid, I_chest, 0);
+
+  // 40. Barrel (3×3)
+  grid[0] = g_planks[0]; grid[1] = I_oak_slab; grid[2] = g_planks[0];
+  grid[3] = g_planks[0]; grid[4] = 0; grid[5] = g_planks[0];
+  grid[6] = g_planks[0]; grid[7] = I_oak_slab; grid[8] = g_planks[0];
+  ADD_SHAPED(3, 3, grid, I_barrel, 0);
+
+  // 41. Ender chest (3×3)
+  grid[0] = grid[1] = grid[2] = I_obsidian;
+  grid[3] = I_obsidian; grid[4] = I_ender_eye; grid[5] = I_obsidian;
+  grid[6] = grid[7] = grid[8] = I_obsidian;
+  ADD_SHAPED(3, 3, grid, I_ender_chest, 0);
+
+  // 42. Bookshelf (3×3)
+  grid[0] = grid[1] = grid[2] = g_planks[0];
+  grid[3] = grid[4] = grid[5] = I_book;
+  grid[6] = grid[7] = grid[8] = g_planks[0];
+  ADD_SHAPED(3, 3, grid, I_bookshelf, 3);
+
+  // 43. Campfire (3×3)
+  grid[0] = grid[1] = grid[2] = I_stick;
+  grid[3] = I_stick; grid[4] = I_coal; grid[5] = I_stick;
+  grid[6] = grid[7] = grid[8] = I_oak_log;
+  ADD_SHAPED(3, 3, grid, I_campfire, 3);
+
+  // 44. 3×3 Uniform + Melon
+  for (int i = 0; i < BLOCK_CRAFT_ENTRIES; i++) {
+    uint16_t m = g_block_craft[i][0];
+    grid[0] = grid[1] = grid[2] = grid[3] = grid[4] = m;
+    grid[5] = grid[6] = grid[7] = grid[8] = m;
+    ADD_SHAPED(3, 3, grid, g_block_craft[i][1], 0);
+  }
+  { uint16_t m = I_melon_slice;
+    grid[0] = grid[1] = grid[2] = grid[3] = grid[4] = m;
+    grid[5] = grid[6] = grid[7] = grid[8] = m;
+    ADD_SHAPED(3, 3, grid, I_melon, 3); }
+
+  // 45. Flint & Steel (shapeless display)
+  {
+    writeVarInt(client_fd, idx++);  // displayId
+    writeVarInt(client_fd, 0);      // type: crafting_shapeless
+    writeVarInt(client_fd, 2);      // 2 ingredients
+    writeSlotItem(client_fd, I_iron_ingot);
+    writeSlotItem(client_fd, I_flint);
+    writeSlotItem(client_fd, I_flint_and_steel);  // result
+    writeSlotItem(client_fd, I_crafting_table);   // station
+    writeVarInt(client_fd, 0);  // group
+    writeVarInt(client_fd, 3);  // category: misc
+    writeByte(client_fd, 0);    // requirements
+    writeByte(client_fd, 0);    // flags
+  }
+
+  // 46. Smelting (furnace display)
+  for (int i = 0; i < SMELTING_ENTRIES; i++) {
+    writeVarInt(client_fd, idx++);
+    writeVarInt(client_fd, 2);      // type: furnace
+    writeSlotItem(client_fd, g_smelting_in[i]);   // ingredient
+    writeVarInt(client_fd, 1);                     // fuel: any_fuel
+    writeSlotItem(client_fd, g_smelting_out[i]);   // result
+    writeSlotItem(client_fd, I_furnace);           // station
+    writeVarInt(client_fd, 200);  // duration
+    writeFloat(client_fd, 0.1f); // experience
+    writeVarInt(client_fd, 0);    // group
+    {
+      // category: furnace_food or furnace_blocks
+      int cat = 4;  // furnace_food
+      uint16_t o = g_smelting_out[i];
+      if (o == I_cooked_chicken || o == I_cooked_beef || o == I_cooked_porkchop ||
+          o == I_cooked_mutton || o == I_cooked_cod || o == I_cooked_salmon ||
+          o == I_cooked_rabbit || o == I_baked_potato) cat = 4; // food
+      else if (o == I_green_dye || o == I_leather || o == I_brick) cat = 6; // misc
+      else cat = 5; // blocks
+      writeVarInt(client_fd, cat);
+    }
+    writeByte(client_fd, 0);  // requirements
+    writeByte(client_fd, 0);  // flags
+  }
+  // Extra smelting (stone->smooth_stone, sponge->wet, wet->sponge)
+  for (int i = 0; i < SMELTING_EXTRA; i++) {
+    writeVarInt(client_fd, idx++);
+    writeVarInt(client_fd, 2);
+    writeSlotItem(client_fd, g_smelting_extra_in[i]);
+    writeVarInt(client_fd, 1);  // any_fuel
+    writeSlotItem(client_fd, g_smelting_extra_out[i]);
+    writeSlotItem(client_fd, I_furnace);
+    writeVarInt(client_fd, 200);
+    writeFloat(client_fd, 0.1f);
+    writeVarInt(client_fd, 0);
+    writeVarInt(client_fd, 5);  // category: blocks
+    writeByte(client_fd, 0);
+    writeByte(client_fd, 0);
+  }
+
+  writeByte(client_fd, 0);    // replace = false
+
+  endPacket(client_fd);
+  return 0;
+}
+
+// Handle C->S Craft Recipe Request (0x26) — player clicked a recipe in the book.
+int cs_craftRecipeRequest(int client_fd) {
+  PlayerData *player;
+  if (getPlayerData(client_fd, &player)) return 1;
+
+  int window_id = readVarInt(client_fd);
+  int recipe_id = readVarInt(client_fd);
+  readByte(client_fd); // make_all — unused
+
+  if (window_id != 0) return 0;
+
+  // Map recipe_id to ingredient items + grid info
+  uint16_t ing[9] = {0};
+  int w = 1, h = 1;
+  int rid = recipe_id;
+
+  // ── Ranges (matched to sc_declareRecipes order) ──
+  // 1. Log → 4 Planks (12 × 1×1)
+  if (rid < LOG_PLANKS_ENTRIES) {
+    ing[0] = g_log_planks[rid][0]; w=1; h=1; goto found; }
+  rid -= LOG_PLANKS_ENTRIES;
+
+  // 2. Bone Meal
+  if (rid == 0) { ing[0] = I_bone; goto found; } rid--;
+
+  // 3. Block decompose (12) + honey + bone
+  if (rid < DECOMPOSE_ENTRIES) { ing[0] = g_decompose[rid][0]; goto found; }
+  rid -= DECOMPOSE_ENTRIES;
+  if (rid == 0) { ing[0] = I_honey_block; goto found; } rid--;
+  if (rid == 0) { ing[0] = I_bone_block; goto found; } rid--;
+
+  // 4. Buttons (14 × 1×1)
+  if (rid < BUTTON_TYPES) { ing[0] = g_button_materials[rid]; goto found; }
+  rid -= BUTTON_TYPES;
+
+  // 5. Pressure plates (14 × 2×1 horz)
+  if (rid < PRESSURE_PLATE_TYPES) {
+    ing[0]=ing[1]=g_pressure_materials[rid]; w=2; goto found; }
+  rid -= PRESSURE_PLATE_TYPES;
+
+  // 6. Stick
+  if (rid == 0) { ing[0]=ing[1]=g_planks[0]; w=2; goto found; } rid--;
+
+  // 7. Torch
+  if (rid == 0) { ing[0]=I_coal; ing[1]=I_stick; w=2; goto found; } rid--;
+
+  // 8. Shears (2×2 diagonal)
+  if (rid == 0) { ing[0]=I_iron_ingot; ing[3]=I_iron_ingot; w=2; h=2; goto found; } rid--;
+
+  // 9. Arrow
+  if (rid == 0) { ing[0]=I_flint; ing[1]=I_stick; ing[2]=I_feather; w=3; goto found; } rid--;
+
+  // 10. Bucket (3×2 V)
+  if (rid == 0) {
+    ing[0]=I_iron_ingot; ing[2]=I_iron_ingot; ing[4]=I_iron_ingot; w=3; h=2; goto found; } rid--;
+
+  // 11. Bread
+  if (rid == 0) { ing[0]=ing[1]=ing[2]=I_wheat; w=3; goto found; } rid--;
+
+  // 12. Slabs: 12 plank + 5 stone
+  if (rid < SLAB_TYPES) { ing[0]=ing[1]=ing[2]=g_planks[rid]; w=3; goto found; }
+  rid -= SLAB_TYPES;
+  if (rid == 0) { ing[0]=ing[1]=ing[2]=I_cobblestone; w=3; goto found; } rid--;
+  if (rid == 0) { ing[0]=ing[1]=ing[2]=I_stone; w=3; goto found; } rid--;
+  if (rid == 0) { ing[0]=ing[1]=ing[2]=I_stone_bricks; w=3; goto found; } rid--;
+  if (rid == 0) { ing[0]=ing[1]=ing[2]=I_bricks; w=3; goto found; } rid--;
+  if (rid == 0) { ing[0]=ing[1]=ing[2]=I_nether_bricks; w=3; goto found; } rid--;
+
+  // 13. Shovels (1 wood + 5 tool)
+  if (rid == 0) { ing[0]=g_planks[0]; ing[1]=ing[2]=I_stick; w=3; goto found; } rid--;
+  if (rid < TOOL_MATERIALS) { ing[0]=g_tool_materials[rid]; ing[1]=ing[2]=I_stick; w=3; goto found; }
+  rid -= TOOL_MATERIALS;
+
+  // 14. Swords (1 wood + 5 tool)
+  if (rid == 0) { ing[0]=ing[1]=g_planks[0]; ing[2]=I_stick; w=3; goto found; } rid--;
+  if (rid < TOOL_MATERIALS) { ing[0]=ing[1]=g_tool_materials[rid]; ing[2]=I_stick; w=3; goto found; }
+  rid -= TOOL_MATERIALS;
+
+  // 15. Crafting Table
+  if (rid == 0) { ing[0]=ing[1]=ing[2]=ing[3]=g_planks[0]; w=2; h=2; goto found; } rid--;
+
+  // 16. 2×2 Uniform (11 wood + snow + stonebrick + brick + netherbrick)
+  if (rid < WOOD_ENTRIES) {
+    ing[0]=ing[1]=ing[2]=ing[3]=g_wood[rid][0]; w=2; h=2; goto found; }
+  rid -= WOOD_ENTRIES;
+  if (rid == 0) { ing[0]=ing[1]=ing[2]=ing[3]=I_snowball; w=2; h=2; goto found; } rid--;
+  if (rid == 0) { ing[0]=ing[1]=ing[2]=ing[3]=I_stone; w=2; h=2; goto found; } rid--;
+  if (rid == 0) { ing[0]=ing[1]=ing[2]=ing[3]=I_brick; w=2; h=2; goto found; } rid--;
+  if (rid == 0) { ing[0]=ing[1]=ing[2]=ing[3]=I_nether_brick; w=2; h=2; goto found; } rid--;
+
+  // 17. Boots (5 armor)
+  if (rid < ARMOR_MATERIALS) {
+    ing[0]=ing[2]=ing[3]=ing[5]=g_armor_materials[rid]; w=3; h=2; goto found; }
+  rid -= ARMOR_MATERIALS;
+
+  // 18. Pickaxes (1 wood + 5 tool)
+  if (rid == 0) {
+    ing[0]=ing[1]=ing[2]=g_planks[0]; ing[4]=ing[7]=I_stick; w=3; h=3; goto found; } rid--;
+  if (rid < TOOL_MATERIALS) {
+    ing[0]=ing[1]=ing[2]=g_tool_materials[rid]; ing[4]=ing[7]=I_stick; w=3; h=3; goto found; }
+  rid -= TOOL_MATERIALS;
+
+  // 19. Axes (1 wood + 5 tool)
+  if (rid == 0) {
+    ing[0]=ing[1]=g_planks[0]; ing[2]=g_planks[0]; ing[3]=I_stick; ing[5]=I_stick; w=2; h=3; goto found; } rid--;
+  if (rid < TOOL_MATERIALS) {
+    ing[0]=ing[1]=g_tool_materials[rid]; ing[2]=g_tool_materials[rid]; ing[3]=I_stick; ing[5]=I_stick; w=2; h=3; goto found; }
+  rid -= TOOL_MATERIALS;
+
+  // 20. Helmets (5 armor)
+  if (rid < ARMOR_MATERIALS) {
+    ing[0]=ing[1]=ing[2]=ing[3]=ing[5]=g_armor_materials[rid]; w=3; h=2; goto found; }
+  rid -= ARMOR_MATERIALS;
+
+  // 21. Chestplates (5 armor)
+  if (rid < ARMOR_MATERIALS) {
+    ing[0]=ing[2]=g_armor_materials[rid]; ing[3]=ing[4]=ing[5]=g_armor_materials[rid];
+    ing[6]=ing[8]=g_armor_materials[rid]; w=3; h=3; goto found; }
+  rid -= ARMOR_MATERIALS;
+
+  // 22. Leggings (5 armor)
+  if (rid < ARMOR_MATERIALS) {
+    ing[0]=ing[1]=ing[2]=ing[3]=ing[5]=ing[6]=ing[8]=g_armor_materials[rid]; w=3; h=3; goto found; }
+  rid -= ARMOR_MATERIALS;
+
+  // 23. Bow — complex 3×3
+  if (rid == 0) {
+    ing[1]=I_stick; ing[2]=I_string; ing[3]=I_stick; ing[5]=I_string; ing[7]=I_stick; ing[8]=I_string; w=3; h=3; goto found; } rid--;
+
+  // 24. Beds (16 × 3 wool + 3 planks)
+  if (rid < BED_COLORS) {
+    ing[0]=ing[1]=ing[2]=g_wools[rid]; ing[3]=ing[4]=ing[5]=g_planks[0]; w=3; h=2; goto found; }
+  rid -= BED_COLORS;
+
+  // 25. Doors (10 × 2×3)
+  if (rid < DOOR_TYPES) {
+    ing[0]=ing[1]=ing[2]=ing[3]=ing[4]=ing[5]=g_planks[rid]; w=2; h=3; goto found; }
+  rid -= DOOR_TYPES;
+
+  // 26. Stairs (12 × 3×3 pattern)
+  if (rid < STAIR_TYPES) {
+    ing[0]=ing[3]=ing[4]=ing[6]=ing[7]=ing[8]=g_planks[rid]; w=3; h=3; goto found; }
+  rid -= STAIR_TYPES;
+
+  // 27. Fences (10 × 3×2)
+  if (rid < FENCE_TYPES) {
+    ing[0]=ing[2]=ing[3]=ing[5]=g_planks[rid]; ing[1]=ing[4]=I_stick; w=3; h=2; goto found; }
+  rid -= FENCE_TYPES;
+
+  // 28. Trapdoors (9 × 3×2 full)
+  if (rid < TRAPDOOR_TYPES) {
+    ing[0]=ing[1]=ing[2]=ing[3]=ing[4]=ing[5]=g_planks[rid]; w=3; h=2; goto found; }
+  rid -= TRAPDOOR_TYPES;
+
+  // 29. Fence gates (12 × 3×2)
+  if (rid < FENCE_GATE_TYPES) {
+    ing[0]=ing[2]=I_stick; ing[1]=ing[4]=g_planks[rid]; ing[3]=ing[5]=I_stick; w=3; h=2; goto found; }
+  rid -= FENCE_GATE_TYPES;
+
+  // 30. Glass pane
+  if (rid == 0) { ing[0]=ing[1]=ing[2]=ing[3]=ing[4]=ing[5]=I_glass; w=3; h=2; goto found; } rid--;
+  // 31. Iron bars
+  if (rid == 0) { ing[0]=ing[1]=ing[2]=ing[3]=ing[4]=ing[5]=I_iron_ingot; w=3; h=2; goto found; } rid--;
+  // 32. Cobblestone wall
+  if (rid == 0) { ing[0]=ing[1]=ing[2]=ing[3]=ing[4]=ing[5]=I_cobblestone; w=3; h=2; goto found; } rid--;
+  // 33. Stone brick stairs
+  if (rid == 0) {
+    ing[0]=ing[3]=ing[4]=ing[6]=ing[7]=ing[8]=I_stone_bricks; w=3; h=3; goto found; } rid--;
+  // 34. Cobblestone stairs
+  if (rid == 0) {
+    ing[0]=ing[3]=ing[4]=ing[6]=ing[7]=ing[8]=I_cobblestone; w=3; h=3; goto found; } rid--;
+
+  // 35. Ladder
+  if (rid == 0) {
+    ing[0]=ing[2]=ing[3]=ing[4]=ing[5]=ing[6]=ing[8]=I_stick; w=3; h=3; goto found; } rid--;
+
+  // 36. Shield
+  if (rid == 0) {
+    ing[0]=ing[2]=g_planks[0]; ing[1]=I_iron_ingot; ing[3]=ing[4]=ing[5]=ing[7]=g_planks[0]; w=3; h=3; goto found; } rid--;
+
+  // 37. Composter
+  if (rid == 0) {
+    ing[0]=ing[2]=ing[3]=ing[5]=ing[6]=ing[7]=ing[8]=I_oak_slab; w=3; h=3; goto found; } rid--;
+
+  // 38. Furnace
+  if (rid == 0) {
+    ing[0]=ing[1]=ing[2]=ing[3]=ing[5]=ing[6]=ing[7]=ing[8]=I_cobblestone; w=3; h=3; goto found; } rid--;
+
+  // 39. Chest
+  if (rid == 0) {
+    ing[0]=ing[1]=ing[2]=ing[3]=ing[5]=ing[6]=ing[7]=ing[8]=g_planks[0]; w=3; h=3; goto found; } rid--;
+
+  // 40. Barrel
+  if (rid == 0) {
+    ing[0]=ing[2]=ing[3]=ing[5]=ing[6]=ing[8]=g_planks[0]; ing[1]=ing[7]=I_oak_slab; w=3; h=3; goto found; } rid--;
+
+  // 41. Ender chest
+  if (rid == 0) {
+    ing[0]=ing[1]=ing[2]=ing[3]=ing[5]=ing[6]=ing[7]=ing[8]=I_obsidian; ing[4]=I_ender_eye; w=3; h=3; goto found; } rid--;
+
+  // 42. Bookshelf
+  if (rid == 0) {
+    ing[0]=ing[1]=ing[2]=ing[6]=ing[7]=ing[8]=g_planks[0]; ing[3]=ing[4]=ing[5]=I_book; w=3; h=3; goto found; } rid--;
+
+  // 43. Campfire
+  if (rid == 0) {
+    ing[0]=ing[1]=ing[2]=ing[3]=ing[5]=I_stick; ing[4]=I_coal; ing[6]=ing[7]=ing[8]=I_oak_log; w=3; h=3; goto found; } rid--;
+
+  // 44. 3×3 Uniform (13 + melon)
+  if (rid < BLOCK_CRAFT_ENTRIES) {
+    uint16_t m = g_block_craft[rid][0];
+    for (int i=0;i<9;i++) ing[i]=m; w=3; h=3; goto found; }
+  rid -= BLOCK_CRAFT_ENTRIES;
+  if (rid == 0) { for (int i=0;i<9;i++) ing[i]=I_melon_slice; w=3; h=3; goto found; } rid--;
+
+  // 45. Flint & Steel (shapeless — 2 items, any position)
+  if (rid == 0) { ing[0]=I_iron_ingot; ing[1]=I_flint; w=2; h=1; goto found; } rid--;
+
+  // 46. Smelting (furnace — single ingredient, not grid craftable)
+  // Skip — smelting requires a furnace GUI, not the crafting grid.
+
+  return 0;  // Unknown or furnace recipe
+
+found:
+  // We have the ingredients. Now fill the grid (server slots 0,1,3,4 for 2×2).
+  // The `ing` array is row-major but only w×h slots matter.
+  // Map to server craft slots {0,1,3,4}: slot 0=top-left, 1=top-right, 3=bottom-left, 4=bottom-right
+  uint8_t craft_slots[] = {0, 1, 3, 4};
+  for (int i = 0; i < 4; i++) {
+    player->craft_items[craft_slots[i]] = 0;
+    player->craft_count[craft_slots[i]] = 0;
+  }
+
+  // For a 1×1,1×2,2×1 recipe: slot 0 gets ing[0]; if w>1, slot1 gets ing[1]; if h>1, slot3 gets ing[2], slot4 gets ing[3]
+  // ing layout: row-major: ing[0]=top-left, ing[1]=top-right, ing[2]=bottom-left, ing[3]=bottom-right
+  // Map to server slots 0,1,3,4 (the 2×2 player crafting grid)
+  int sip[9] = {0,1,-1,3,4,-1,-1,-1,-1}; // server slot index for each logical position
+  int failed = 0;
+  for (int row = 0; row < h && row < 2; row++) {
+    for (int col = 0; col < w && col < 2; col++) {
+      int si = row * 2 + col;  // logical slot within 2×2
+      int gi = row * w + col;  // index into ing array
+      uint16_t need = ing[gi];
+      if (need == 0) continue;
+      // Find in inventory
+      int fs = -1;
+      for (int k = 0; k < 36; k++) {
+        if (player->inventory_items[k] == need && player->inventory_count[k] > 0) {
+          fs = k; break;
+        }
+      }
+      if (fs == -1) { failed = 1; break; }
+      // Move from inventory to grid
+      player->inventory_count[fs]--;
+      if (player->inventory_count[fs] == 0) player->inventory_items[fs] = 0;
+      uint8_t cs = serverSlotToClientSlot(0, fs);
+      if (cs != 255)
+        sc_setContainerSlot(client_fd, 0, cs, player->inventory_count[fs], player->inventory_items[fs]);
+      // Place in grid at craft_slots[si]
+      player->craft_items[craft_slots[si]] = need;
+      player->craft_count[craft_slots[si]] = 1;
+    }
+    if (failed) break;
+  }
+
+  if (failed) return 0;
+
+  syncCraftingSlots(player, 0);
+  uint16_t out_item = 0;
+  uint8_t out_count = 0;
+  getCraftingOutput(player, &out_count, &out_item);
+  sc_setContainerSlot(client_fd, 0, 0, out_count, out_item);
+  return 1;
+}
+
 int cs_playerLoaded (int client_fd) {
 
   PlayerData *player;

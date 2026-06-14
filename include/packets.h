@@ -80,7 +80,10 @@ int sc_soundEffect (int client_fd, int sound_id, int category, double x, double 
 int sc_removeEntity (int client_fd, int entity_id);
 int sc_pickupItem (int client_fd, int collected, int collector, uint8_t count);
 int sc_registries (int client_fd);
+int sc_declareRecipes(int client_fd);
+int sc_unlockRecipes(int client_fd);
 int sc_setTradeOffers(int client_fd, int window_id, uint8_t profession, int mob_index);
 int cs_containerButtonClick(int client_fd);
+int cs_craftRecipeRequest(int client_fd);
 
 #endif

@@ -622,6 +622,10 @@ void handlePlayerDisconnect (int client_fd) {
 // Marks a client as connected and broadcasts their data to other players
 void handlePlayerJoin (PlayerData* player) {
 
+  // Send recipe book data to the joining player
+  sc_declareRecipes(player->client_fd);
+  sc_unlockRecipes(player->client_fd);
+
   // Prepare join message for broadcast
   uint8_t player_name_len = strlen(player->name);
   strcpy((char *)recv_buffer, player->name);
@@ -2213,9 +2217,11 @@ uint8_t isPassableBlock (uint16_t block) {
     block == B_oxeye_daisy ||
     block == B_cornflower ||
     block == B_wither_rose ||
-    block == B_lily_of_the_valley
+    block == B_lily_of_the_valley ||
+    block == B_campfire
   );
 }
+
 // Checks whether the given block is non-solid and spawnable
 uint8_t isPassableSpawnBlock (uint16_t block) {
     if ((block >= B_water && block < B_water + 8) ||
@@ -2277,6 +2283,23 @@ uint32_t isCompostItem (uint16_t item) {
   ) return 398818392;
 
   return 0;
+}
+
+// Maps raw food items to their campfire-cooked counterpart.
+// Returns 0 if the item is not cookable.
+static uint16_t getCampfireCookedItem (uint16_t item) {
+  switch (item) {
+    case I_chicken: return I_cooked_chicken;
+    case I_beef: return I_cooked_beef;
+    case I_porkchop: return I_cooked_porkchop;
+    case I_mutton: return I_cooked_mutton;
+    case I_cod: return I_cooked_cod;
+    case I_salmon: return I_cooked_salmon;
+    case I_rabbit: return I_cooked_rabbit;
+    case I_potato: return I_baked_potato;
+    case I_kelp: return I_dried_kelp;
+    default: return 0;
+  }
 }
 
 // Returns the maximum stack size of an item
@@ -4204,6 +4227,16 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
         if (fast_rand() < compost_chance) {
           givePlayerItem(player, I_bone_meal, 1);
         }
+        broadcastPlayerEquipment(player);
+        return;
+      }
+    } else if (target == B_campfire) {
+      // Campfire cooking - right-click with raw food to cook it instantly
+      if (*count == 0) return;
+      uint16_t cooked = getCampfireCookedItem(*item);
+      if (cooked != 0) {
+        *item = cooked;
+        sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
         broadcastPlayerEquipment(player);
         return;
       }
@@ -6494,6 +6527,10 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
         // Killed by standing on magma
         strcpy((char *)recv_buffer + player_name_len, " discovered the floor was lava");
         recv_buffer[player_name_len + 31] = '\0';
+      } else if (damage_type == D_campfire) {
+        // Killed by standing in a campfire
+        strcpy((char *)recv_buffer + player_name_len, " went up in flames");
+        recv_buffer[player_name_len + 17] = '\0';
       } else if (attacker_id < -1) {
         // Killed by a mob
         strcpy((char *)recv_buffer + player_name_len, " was slain by a mob");
@@ -6808,6 +6845,11 @@ void handleServerTick (int64_t time_since_last_tick) {
       }
       if (!(player->flags & 0x04) && getBlockAt2(player->x, player->y - 1, player->z, pdim) == B_magma_block) {
         hurtEntity(player->client_fd, -1, D_hot_floor, 1);
+      }
+      // Campfire damage - standing inside a campfire
+      uint16_t block_at_feet = getBlockAt2(player->x, player->y, player->z, pdim);
+      if (block_at_feet == B_campfire || getBlockAt2(player->x, player->y - 1, player->z, pdim) == B_campfire) {
+        hurtEntity(player->client_fd, -1, D_campfire, 1);
       }
       #ifdef ENABLE_CACTUS_DAMAGE
       if (block == B_cactus ||
@@ -8244,6 +8286,12 @@ static void updatePlayerStateTask(void* arg) {
       else player->health = 0;
     }
     if (!(player->flags & 0x04) && getBlockAt2(player->x, player->y - 1, player->z, pdim) == B_magma_block) {
+      if (player->health > 1) player->health -= 1;
+      else player->health = 0;
+    }
+    // Campfire damage - standing inside a campfire
+    uint16_t cf_block = getBlockAt2(player->x, player->y, player->z, pdim);
+    if (cf_block == B_campfire || getBlockAt2(player->x, player->y - 1, player->z, pdim) == B_campfire) {
       if (player->health > 1) player->health -= 1;
       else player->health = 0;
     }

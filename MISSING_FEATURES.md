@@ -61,6 +61,7 @@ These features significantly improve gameplay but are not strictly required.
 - **Enchantment Tables** (Medium) - Core enchantment mechanics
 - **Anvil UI** (Medium) - Repair and combine items
 - **Smithing Table** (Low) - Trim armor (cosmetic)
+- **Recipe Book** (Low) - Needs correct packet IDs for protocol 772. `0x6C` is `set_titles_animation` in this version.
 
 ### 8. Missing Mobs - Hostile
 
@@ -126,9 +127,27 @@ These are advanced features or aesthetic improvements.
 - **Item Frame** (Low) - Item display
 - **Flower Pot** (Low) - Plant decoration
 - **Cauldron** (Low) - Water/mud mechanics
-- **Composter** (Low) - Bone meal crafting
-- **Bell** (Low) - Village feature
-- **Lantern/Campfire** (Low) - Light sources
+- ~~**Composter** (Low)~~ - ✅ Bone meal crafting
+- ~~**Bell** (Low)~~ - ✅ Village feature (available in creative)
+- ~~**Lantern** (Low)~~ - ✅ Hanging light source
+- ~~**Campfire** (Low)~~ - ✅ Light source with cooking and damage
+- ~~**Bookshelf** (Low)~~ - ✅ Decorative and functional
+- ~~**Hay Bale** (Low)~~ - ✅ Wheat storage block
+- ~~**Ladder** (Low)~~ - ✅ Climbable
+- ~~**Glass Pane** (Low)~~ - ✅ Decorative transparent barrier
+- ~~**Iron Bars** (Low)~~ - ✅ Decorative barrier
+- ~~**Cobblestone Wall** (Low)~~ - ✅ Decorative wall
+- ~~**Stone Bricks + variants** (Low)~~ - ✅ Craftable building blocks
+- ~~**Bricks + variants** (Low)~~ - ✅ Craftable building blocks
+- ~~**Fence Gates** (Low)~~ - ✅ All wood types, craftable
+- ~~**Buttons** (Low)~~ - ✅ All types, craftable
+- ~~**Pressure Plates** (Low)~~ - ✅ All types, craftable
+- ~~**Signs** (Low)~~ - ✅ Available in creative
+- ~~**Terracotta** (Low)~~ - ✅ All colors in creative
+- ~~**Carpets** (Low)~~ - ✅ All colors in creative
+- ~~**Stripped Logs/Wood** (Low)~~ - ✅ All types in creative
+- ~~**Crimson/Warped sets** (Low)~~ - ✅ Stems, hyphae, planks, nylium in creative
+- ~~**Pale Oak set** (Low)~~ - ✅ Log, wood, planks, leaves, sapling in creative
 
 ### 15. Utility Entities
 
