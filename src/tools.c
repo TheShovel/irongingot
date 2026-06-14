@@ -16,6 +16,9 @@
   #endif
   #include <unistd.h>
   #include <time.h>
+  #ifdef __linux__
+    #include <sched.h>
+  #endif
   #ifndef CLOCK_MONOTONIC
     #define CLOCK_MONOTONIC 1
   #endif
@@ -96,8 +99,10 @@ static ClientState* get_client_state_by_fd(int client_fd) {
 static inline void socket_io_backoff(void) {
   #ifdef ESP_PLATFORM
   task_yield();
+  #elif defined(__linux__)
+  sched_yield();
   #else
-  usleep(1000);  // 1ms
+  usleep(100);  // 100us
   #endif
 }
 

@@ -27,6 +27,7 @@
   #else
     #include <sys/socket.h>
     #include <netinet/in.h>
+    #include <netinet/tcp.h>
     #include <arpa/inet.h>
     #ifdef __linux__
       #include <sys/prctl.h>
@@ -78,7 +79,7 @@ static void server_idle_backoff(void) {
   #elif defined(_WIN32)
     Sleep(1);
   #else
-    usleep(1000);  // 1ms: prevents nonblocking idle spin without noticeable latency
+    usleep(100);  // 100us: prevents nonblocking idle spin without noticeable latency
   #endif
 }
 
@@ -305,8 +306,8 @@ static void shutdown_chunk_streamer(void) {
   terminal_ui_log("Chunk streamer thread stopped");
 }
 
-#define MAX_PACKETS_PER_CLIENT_TURN 8
-#define MAX_MOVEMENT_PACKETS_PER_CLIENT_TURN 2
+#define MAX_PACKETS_PER_CLIENT_TURN 64
+#define MAX_MOVEMENT_PACKETS_PER_CLIENT_TURN 64
 
 static inline uint8_t isMovementPacketInPlayState(int state, int packet_id) {
   if (state != STATE_PLAY) return false;
@@ -950,9 +951,12 @@ int main () {
       (const char*)&opt, sizeof(opt)) < 0) {
 #else
   if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
-#endif    
+#endif
     fatal_errno_exit("socket options failed");
   }
+
+  // Disable Nagle's algorithm on accepted sockets for low latency
+  // (set per-client after accept; inherited socket options vary by OS)
 
   // Bind socket to IP/port
   server_addr.sin_family = AF_INET;
@@ -1033,6 +1037,12 @@ int main () {
         int flags = fcntl(clients[i], F_GETFL, 0);
         fcntl(clients[i], F_SETFL, flags | O_NONBLOCK);
       #endif
+        #ifndef ESP_PLATFORM
+        // Disable Nagle's algorithm on client sockets for low latency
+        if (setsockopt(clients[i], IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt)) < 0) {
+          terminal_ui_log("Warning: TCP_NODELAY failed for client fd=%d", clients[i]);
+        }
+        #endif
         client_count ++;
         did_work = true;
       }
@@ -1055,11 +1065,16 @@ int main () {
     // Handle periodic events (server ticks)
     int64_t time_since_last_tick = get_program_time() - last_tick_time;
     if (time_since_last_tick > TIME_BETWEEN_TICKS) {
-      handleServerTick(time_since_last_tick);
+      // Catch up on missed ticks, but cap to prevent death spiral
+      int ticks_behind = (int)(time_since_last_tick / TIME_BETWEEN_TICKS);
+      if (ticks_behind > 5) ticks_behind = 5;
+      for (int t = 0; t < ticks_behind; t++) {
+        handleServerTick(TIME_BETWEEN_TICKS);
+      }
       terminal_ui_record_tick(time_since_last_tick);
       // Periodically drain old packets to free memory
       drain_client_queues();
-      last_tick_time = get_program_time();
+      last_tick_time += (int64_t)ticks_behind * TIME_BETWEEN_TICKS;
       did_work = true;
     }
 
