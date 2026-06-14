@@ -94,16 +94,28 @@ static void writePlayerProfileProperties(int client_fd, PlayerAppearance *appear
   send_all(client_fd, appearance->texture_signature, appearance->texture_signature_len);
 }
 
-static void writeItemSlot(int client_fd, uint8_t count, uint16_t item) {
+#define DATA_COMPONENT_DAMAGE 3
+
+static void writeItemSlotWithDamage(int client_fd, uint8_t count, uint16_t item, uint16_t damage) {
   if (count == 0 || item == 0) {
     writeVarInt(client_fd, 0);
     return;
   }
 
+  if (!isDamageableItem(item)) damage = 0;
+
   writeVarInt(client_fd, count);
   writeVarInt(client_fd, item);
+  writeVarInt(client_fd, damage ? 1 : 0);
   writeVarInt(client_fd, 0);
-  writeVarInt(client_fd, 0);
+  if (damage) {
+    writeVarInt(client_fd, DATA_COMPONENT_DAMAGE);
+    writeVarInt(client_fd, damage);
+  }
+}
+
+static void writeItemSlot(int client_fd, uint8_t count, uint16_t item) {
+  writeItemSlotWithDamage(client_fd, count, item, 0);
 }
 
 static uint8_t isIntegerToken(const uint8_t *buffer, int start, int end) {
@@ -1385,12 +1397,16 @@ int sc_setContainerSlot (int client_fd, int window_id, uint16_t slot, uint8_t co
   writeVarInt(client_fd, 0);
   writeUint16(client_fd, slot);
 
-  writeVarInt(client_fd, count);
-  if (count > 0) {
-    writeVarInt(client_fd, item);
-    writeVarInt(client_fd, 0);
-    writeVarInt(client_fd, 0);
+  uint16_t damage = 0;
+  if (count > 0 && isDamageableItem(item)) {
+    PlayerData *player;
+    if (!getPlayerData(client_fd, &player)) {
+      uint8_t server_slot = clientSlotToServerSlot(window_id == -2 ? 0 : window_id, slot);
+      if (server_slot <= 40) damage = player->inventory_damage[server_slot];
+      else if (window_id != 2 && server_slot >= 41 && server_slot < 50) damage = player->craft_damage[server_slot - 41];
+    }
   }
+  writeItemSlotWithDamage(client_fd, count, item, damage);
 
   endPacket(client_fd);
 
@@ -1599,8 +1615,12 @@ static void consumeCraftingIngredients (PlayerData *player, int window_id, uint8
     // Otherwise reduce the still-unchanged slot server-side to keep crafting authoritative.
     if (player->craft_items[i] == before_items[i] && player->craft_count[i] > expected) {
       player->craft_count[i] = expected;
-      if (expected == 0) player->craft_items[i] = 0;
+      if (expected == 0) {
+        player->craft_items[i] = 0;
+        player->craft_damage[i] = 0;
+      }
     }
+    if (player->craft_count[i] == 0 || !isDamageableItem(player->craft_items[i])) player->craft_damage[i] = 0;
   }
 
 }
@@ -1618,6 +1638,42 @@ static void syncCraftingSlots (PlayerData *player, int window_id) {
     }
   }
 
+}
+
+static void reconcileSlotDamages(
+  uint16_t *items,
+  uint8_t *counts,
+  uint16_t *damages,
+  uint8_t len,
+  const uint16_t *before_items,
+  const uint8_t *before_counts,
+  const uint16_t *before_damages
+) {
+  uint8_t used[41] = {0};
+
+  for (uint8_t i = 0; i < len; i++) {
+    if (counts[i] == 0 || items[i] == 0 || !isDamageableItem(items[i])) {
+      damages[i] = 0;
+      continue;
+    }
+    if (items[i] == before_items[i] && counts[i] == before_counts[i]) {
+      damages[i] = before_damages[i];
+      used[i] = 1;
+    } else {
+      damages[i] = 0;
+    }
+  }
+
+  for (uint8_t i = 0; i < len; i++) {
+    if (counts[i] == 0 || items[i] == 0 || !isDamageableItem(items[i]) || damages[i] != 0) continue;
+    for (uint8_t j = 0; j < len; j++) {
+      if (used[j]) continue;
+      if (before_items[j] != items[i] || before_counts[j] != counts[i]) continue;
+      damages[i] = before_damages[j];
+      used[j] = 1;
+      break;
+    }
+  }
 }
 
 // C->S Click Container
@@ -1638,12 +1694,16 @@ int cs_clickContainer (int client_fd) {
 
   uint16_t before_inventory_items[41];
   uint8_t before_inventory_count[41];
+  uint16_t before_inventory_damage[41];
   uint16_t before_craft_items[9];
   uint8_t before_craft_count[9];
+  uint16_t before_craft_damage[9];
   memcpy(before_inventory_items, player->inventory_items, sizeof(before_inventory_items));
   memcpy(before_inventory_count, player->inventory_count, sizeof(before_inventory_count));
+  memcpy(before_inventory_damage, player->inventory_damage, sizeof(before_inventory_damage));
   memcpy(before_craft_items, player->craft_items, sizeof(before_craft_items));
   memcpy(before_craft_count, player->craft_count, sizeof(before_craft_count));
+  memcpy(before_craft_damage, player->craft_damage, sizeof(before_craft_damage));
 
   uint8_t output_click = false;
   uint8_t output_count = 0;
@@ -1799,6 +1859,13 @@ int cs_clickContainer (int client_fd) {
 	      #endif
     }
 
+  }
+
+  if (apply_changes) {
+    reconcileSlotDamages(player->inventory_items, player->inventory_count, player->inventory_damage, 41,
+      before_inventory_items, before_inventory_count, before_inventory_damage);
+    reconcileSlotDamages(player->craft_items, player->craft_count, player->craft_damage, 9,
+      before_craft_items, before_craft_count, before_craft_damage);
   }
 
   // window 0 is player inventory, window 12 is crafting table
@@ -2314,10 +2381,11 @@ int sc_setEquipment (int client_fd, int entity_id, PlayerData *player) {
     if (i + 1 < sizeof(equipment_slot_ids)) equipment_slot |= 0x80;
 
     writeByte(client_fd, equipment_slot);
-    writeItemSlot(
+    writeItemSlotWithDamage(
       client_fd,
       player->inventory_count[inventory_slot],
-      player->inventory_items[inventory_slot]
+      player->inventory_items[inventory_slot],
+      player->inventory_damage[inventory_slot]
     );
   }
 

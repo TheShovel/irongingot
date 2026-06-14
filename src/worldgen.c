@@ -1609,6 +1609,46 @@ uint8_t getVillageProfession(int x, int z) {
   return 0;
 }
 
+// Returns the profession (0-12) at a position inside a village building,
+// or 0xFF if no building contains this position.
+uint8_t getVillageProfessionAt(int x, int z) {
+  VillageLayout v;
+  if (!getVillageLayout(x, z, &v)) return 0xFF;
+
+  for (int i = 0; i < v.houses; i++) {
+    int hx = v.hx[i];
+    int hz = v.hz[i];
+    int dx = x - hx;
+    int dz = z - hz;
+    int adx = dx < 0 ? -dx : dx;
+    int adz = dz < 0 ? -dz : dz;
+    uint8_t prof = v.profession[i];
+    uint8_t house_biome = getChunkBiome(div_floor(hx, 32), div_floor(hz, 32));
+    if (!isVillageHouseBiome(house_biome)) continue;
+
+    uint8_t style = getVillageTemplateStyleForBiome(house_biome);
+    const VillageTemplate *vt = &village_templates[style][prof];
+
+    if (vt->block_count > 0) {
+      // Template-based building: check template footprint
+      int lx = dx + (int)vt->origin_x;
+      int lz = dz + (int)vt->origin_z;
+      if (lx >= 0 && lx < (int)vt->size_x && lz >= 0 && lz < (int)vt->size_z) {
+        return prof;
+      }
+    } else if (prof == VILLAGE_PROF_FARMER) {
+      // Farmer is a special open structure (5x5)
+      if (adx <= 5 && adz <= 5) return prof;
+    } else {
+      // Procedural building: use half_x/half_z + 1 for overhang
+      int half_x = (prof == VILLAGE_PROF_LIBRARIAN || prof == VILLAGE_PROF_CLERIC) ? 5 : 4;
+      int half_z = (prof == VILLAGE_PROF_LIBRARIAN || prof == VILLAGE_PROF_CLERIC) ? 5 : 4;
+      if (adx <= half_x && adz <= half_z) return prof;
+    }
+  }
+  return 0xFF;
+}
+
 
 uint16_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor anchor, ChunkFeature feature, uint8_t height) {
 

@@ -437,6 +437,8 @@ typedef struct {
   uint16_t craft_items[9];
   uint8_t inventory_count[41];
   uint8_t craft_count[9];
+  uint16_t inventory_damage[41];
+  uint16_t craft_damage[9];
   // Usage depends on player's flags, see below
   // When no flags are set, acts as cursor item ID
   uint16_t flagval_16;
@@ -477,6 +479,7 @@ typedef struct {
   // Ender chest inventory (per-player, cross-dimension)
   uint16_t ender_chest_items[27];
   uint8_t ender_chest_count[27];
+  uint16_t ender_chest_damage[27];
 } PlayerData;
 
 #define PLAYER_TEXTURE_VALUE_MAX 4096

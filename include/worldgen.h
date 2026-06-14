@@ -48,6 +48,7 @@ uint32_t getQueryKeywordMask(const char* name, uint8_t name_len);
 uint8_t getBiomeAtBlockCoords(int x, int z);
 uint8_t getVillageHousePositions(int x, int z, short *house_x, short *house_z, uint8_t max_houses);
 uint8_t getVillageProfession(int x, int z);
+uint8_t getVillageProfessionAt(int x, int z);
 uint8_t getDungeonChestInfo(short x, uint8_t y, short z, uint8_t *direction, uint8_t *variant);
 uint8_t getNearbyDungeonSpawners(int px, int py, int pz, int radius, DungeonSpawnerInfo *out, uint8_t max_spawners);
 

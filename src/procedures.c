@@ -103,6 +103,112 @@ static void handlePlayerUpdatesParallel(int64_t time_since_last_tick, ThreadPool
 static void setPlayerActiveHand(PlayerData *player, uint8_t active);
 static uint8_t shootBowArrow(PlayerData *player);
 
+uint16_t getItemMaxDamage (uint16_t item) {
+  switch (item) {
+    case I_wooden_sword:
+    case I_wooden_pickaxe:
+    case I_wooden_axe:
+    case I_wooden_shovel:
+    case I_wooden_hoe:
+      return 59;
+    case I_stone_sword:
+    case I_stone_pickaxe:
+    case I_stone_axe:
+    case I_stone_shovel:
+    case I_stone_hoe:
+      return 131;
+    case I_iron_sword:
+    case I_iron_pickaxe:
+    case I_iron_axe:
+    case I_iron_shovel:
+    case I_iron_hoe:
+      return 250;
+    case I_diamond_sword:
+    case I_diamond_pickaxe:
+    case I_diamond_axe:
+    case I_diamond_shovel:
+    case I_diamond_hoe:
+      return 1561;
+    case I_golden_sword:
+    case I_golden_pickaxe:
+    case I_golden_axe:
+    case I_golden_shovel:
+    case I_golden_hoe:
+      return 32;
+    case I_netherite_sword:
+    case I_netherite_pickaxe:
+    case I_netherite_axe:
+    case I_netherite_shovel:
+    case I_netherite_hoe:
+      return 2031;
+    case I_shears: return 238;
+    case I_fishing_rod: return 64;
+    case I_bow: return 384;
+    case I_crossbow: return 465;
+    case I_shield: return 336;
+    case I_flint_and_steel: return 64;
+    case I_trident: return 250;
+    case I_mace: return 500;
+    case I_brush: return 64;
+    case I_carrot_on_a_stick: return 25;
+    case I_warped_fungus_on_a_stick: return 100;
+    case I_elytra: return 432;
+    default: return 0;
+  }
+}
+
+uint8_t isDamageableItem (uint16_t item) {
+  return getItemMaxDamage(item) != 0;
+}
+
+static uint8_t getBlockBreakDurabilityCost(uint16_t item) {
+  switch (item) {
+    case I_wooden_sword:
+    case I_stone_sword:
+    case I_iron_sword:
+    case I_golden_sword:
+    case I_diamond_sword:
+    case I_netherite_sword:
+      return 2;
+    default:
+      return isDamageableItem(item) ? 1 : 0;
+  }
+}
+
+static void damageHeldItem(PlayerData *player, uint8_t amount) {
+  uint8_t slot = player->hotbar;
+  uint16_t item = player->inventory_items[slot];
+  uint16_t max_damage = getItemMaxDamage(item);
+  if (amount == 0 || max_damage == 0 || player->inventory_count[slot] == 0) return;
+
+  uint32_t new_damage = (uint32_t)player->inventory_damage[slot] + amount;
+  if (new_damage >= max_damage) {
+    player->inventory_items[slot] = 0;
+    player->inventory_count[slot] = 0;
+    player->inventory_damage[slot] = 0;
+  } else {
+    player->inventory_damage[slot] = (uint16_t)new_damage;
+  }
+
+  sc_setContainerSlot(
+    player->client_fd, 0,
+    serverSlotToClientSlot(0, slot),
+    player->inventory_count[slot],
+    player->inventory_items[slot]
+  );
+  broadcastPlayerEquipment(player);
+  sc_updateEntityAttributes(player->client_fd, player->client_fd, player->inventory_items[slot]);
+}
+
+static void damageAttackerItem(int attacker_id, uint8_t damage_type) {
+  if (attacker_id <= 0 || damage_type != D_player_attack) return;
+  if (getConfiguredGameMode() == 1) return;
+
+  PlayerData *attacker;
+  if (getPlayerData(attacker_id, &attacker)) return;
+  damageHeldItem(attacker, 1);
+}
+
 // ---- Vanilla Java Combat Stats ----
 
 // Returns the base attack damage for a held item (vanilla Java 1.9+ values).
@@ -798,6 +904,7 @@ int givePlayerItem (PlayerData *player, uint16_t item, uint8_t count) {
 
   player->inventory_items[slot] = item;
   player->inventory_count[slot] += count;
+  if (!isDamageableItem(item)) player->inventory_damage[slot] = 0;
   sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, slot), player->inventory_count[slot], item);
   if (slot == player->hotbar) {
     broadcastPlayerEquipment(player);
@@ -837,6 +944,7 @@ void spawnPlayer (PlayerData *player) {
     // Determine spawning Y coordinate based on terrain height
     spawn_y = getHeightAt(8, 8) + 1;
     player->y = spawn_y;
+    player->grounded_y = (int16_t)spawn_y;
     player->flags &= ~0x02;
   } else { // Not a new player
     // Calculate spawn position from player data
@@ -856,6 +964,7 @@ void spawnPlayer (PlayerData *player) {
         spawn_y = (float)(fh + 2);
       }
       player->y = (int16_t)spawn_y;
+      player->grounded_y = (int16_t)spawn_y;
     }
     spawn_yaw = player->yaw * 180 / 127;
     spawn_pitch = player->pitch * 90 / 127;
@@ -880,6 +989,8 @@ void spawnPlayer (PlayerData *player) {
   sc_updateEntityAttributes(player->client_fd, player->client_fd, player->inventory_items[player->hotbar]);
   // Sync client health and hunger
   sc_setHealth(player->client_fd, player->health, player->hunger, player->saturation);
+  // Sync player entity metadata (air, skin parts, etc.) to the joining player
+  sendPlayerMetadata(player->client_fd, player);
   // Sync client XP
   sc_setExperience(player->client_fd, player->xp_total, player->xp_level, player->xp_progress);
   // Sync client clock time
@@ -2349,9 +2460,19 @@ uint8_t getItemStackSize (uint16_t item) {
     item == I_golden_hoe ||
     item == I_diamond_hoe ||
     item == I_netherite_hoe ||
-    // Shears
+    // Utility tools and weapons
     item == I_shears ||
+    item == I_fishing_rod ||
     item == I_bow ||
+    item == I_crossbow ||
+    item == I_shield ||
+    item == I_flint_and_steel ||
+    item == I_trident ||
+    item == I_mace ||
+    item == I_brush ||
+    item == I_carrot_on_a_stick ||
+    item == I_warped_fungus_on_a_stick ||
+    item == I_elytra ||
     // Filled buckets
     item == I_water_bucket ||
     item == I_lava_bucket ||
@@ -3143,6 +3264,7 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
 
   uint16_t held_item = player->inventory_items[player->hotbar];
   uint16_t item = getMiningResult(held_item, block);
+  uint8_t durability_cost = getBlockBreakDurabilityCost(held_item);
 
   if (is_bed_block(block)) {
     short other_x;
@@ -3159,6 +3281,7 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
       #endif
       givePlayerItem(player, item, 1);
     }
+    damageHeldItem(player, durability_cost);
     return;
   }
 
@@ -3198,6 +3321,7 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
       #endif
       givePlayerItem(player, item, 1);
     }
+    damageHeldItem(player, durability_cost);
     return;
   }
   #endif
@@ -3226,6 +3350,8 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
     breakConnectedLeaves(x, y, z, block, player, &broken_count);
     breakFloatingLeaves(x, y, z, block, player, &broken_count);
   }
+
+  damageHeldItem(player, durability_cost);
 
   // Update nearby fluids
   uint16_t block_above = getBlockAt2(x, y + 1, z, player->dimension);
@@ -3905,6 +4031,229 @@ static void populateDungeonChestLoot(uint8_t *slots, short x, int16_t y, short z
   }
 }
 
+// Loot tables for each village profession building.
+// Each table has items appropriate to the building's trade.
+static void populateVillageChestLoot(uint8_t *slots, short x, int16_t y, short z, uint8_t profession) {
+  uint64_t seed = splitmix64(
+    ((uint64_t)(uint16_t)x << 48) ^
+    ((uint64_t)(uint16_t)z << 32) ^
+    ((uint64_t)(uint16_t)y << 16) ^
+    ((uint64_t)profession << 8) ^
+    (uint64_t)world_seed ^
+    0xC0FFEEBEEFULL
+  );
+
+  static const ChestLootEntry farmer[] = {
+    { I_wheat, 3, 8, 12 },
+    { I_carrot, 2, 6, 10 },
+    { I_potato, 2, 6, 10 },
+    { I_bread, 2, 5, 10 },
+    { I_pumpkin_seeds, 1, 4, 8 },
+    { I_melon_seeds, 1, 4, 8 },
+    { I_beetroot_seeds, 1, 4, 8 },
+    { I_bone_meal, 2, 5, 7 },
+    { I_hay_block, 1, 3, 6 },
+    { I_apple, 1, 3, 6 },
+    { I_cookie, 3, 7, 5 },
+  };
+
+  static const ChestLootEntry librarian[] = {
+    { I_book, 1, 4, 12 },
+    { I_paper, 3, 8, 12 },
+    { I_feather, 1, 3, 10 },
+    { I_ink_sac, 1, 3, 10 },
+    { I_writable_book, 1, 2, 8 },
+    { I_compass, 1, 1, 5 },
+    { I_clock, 1, 1, 4 },
+    { I_glass_pane, 2, 6, 8 },
+    { I_lantern, 1, 2, 6 },
+    { I_candle, 1, 3, 5 },
+  };
+
+  static const ChestLootEntry cleric[] = {
+    { I_rotten_flesh, 2, 6, 12 },
+    { I_gold_ingot, 1, 3, 8 },
+    { I_redstone, 2, 6, 10 },
+    { I_lapis_lazuli, 2, 6, 10 },
+    { I_glowstone_dust, 1, 4, 8 },
+    { I_gunpowder, 1, 4, 8 },
+    { I_nether_wart, 1, 3, 7 },
+    { I_glass_bottle, 1, 3, 7 },
+    { I_bone, 2, 5, 6 },
+    { I_amethyst_shard, 1, 2, 4 },
+  };
+
+  static const ChestLootEntry armorer[] = {
+    { I_iron_ingot, 1, 4, 12 },
+    { I_coal, 3, 8, 10 },
+    { I_iron_nugget, 4, 12, 10 },
+    { I_iron_boots, 1, 1, 6 },
+    { I_iron_helmet, 1, 1, 5 },
+    { I_chainmail_boots, 1, 1, 5 },
+    { I_chainmail_helmet, 1, 1, 4 },
+    { I_flint_and_steel, 1, 1, 6 },
+    { I_bell, 1, 1, 3 },
+    { I_iron_block, 1, 2, 5 },
+  };
+
+  static const ChestLootEntry butcher[] = {
+    { I_porkchop, 2, 6, 10 },
+    { I_beef, 2, 6, 10 },
+    { I_chicken, 2, 5, 10 },
+    { I_cooked_porkchop, 1, 3, 8 },
+    { I_cooked_beef, 1, 3, 8 },
+    { I_cooked_chicken, 1, 3, 8 },
+    { I_wheat, 2, 5, 8 },
+    { I_carrot, 1, 4, 6 },
+    { I_potato, 1, 4, 6 },
+    { I_mutton, 2, 5, 6 },
+  };
+
+  static const ChestLootEntry cartographer[] = {
+    { I_paper, 4, 12, 12 },
+    { I_compass, 1, 2, 8 },
+    { I_map, 1, 1, 8 },
+    { I_filled_map, 1, 1, 6 },
+    { I_glass_pane, 3, 8, 8 },
+    { I_book, 1, 3, 6 },
+    { I_ink_sac, 1, 2, 6 },
+    { I_feather, 1, 3, 6 },
+    { I_emerald, 1, 2, 5 },
+    { I_cyan_bed, 1, 1, 3 },
+  };
+
+  static const ChestLootEntry fisherman[] = {
+    { I_cod, 2, 6, 12 },
+    { I_salmon, 2, 5, 10 },
+    { I_cooked_cod, 1, 3, 8 },
+    { I_cooked_salmon, 1, 3, 8 },
+    { I_water_bucket, 1, 1, 5 },
+    { I_lily_pad, 1, 4, 8 },
+    { I_string, 1, 4, 7 },
+    { I_bone, 1, 3, 7 },
+    { I_tropical_fish, 1, 1, 4 },
+    { I_pufferfish, 1, 1, 3 },
+  };
+
+  static const ChestLootEntry fletcher[] = {
+    { I_stick, 4, 12, 12 },
+    { I_feather, 3, 8, 12 },
+    { I_flint, 2, 6, 10 },
+    { I_arrow, 4, 12, 12 },
+    { I_string, 2, 5, 8 },
+    { I_gravel, 3, 8, 8 },
+    { I_bow, 1, 1, 5 },
+    { I_crossbow, 1, 1, 3 },
+    { I_tripwire_hook, 1, 3, 6 },
+  };
+
+  static const ChestLootEntry leatherworker[] = {
+    { I_leather, 2, 6, 12 },
+    { I_leather_boots, 1, 1, 8 },
+    { I_leather_leggings, 1, 1, 6 },
+    { I_leather_chestplate, 1, 1, 5 },
+    { I_leather_helmet, 1, 1, 7 },
+    { I_rabbit_hide, 1, 4, 8 },
+    { I_saddle, 1, 1, 3 },
+    { I_rabbit_foot, 1, 1, 3 },
+    { I_leather_horse_armor, 1, 1, 2 },
+  };
+
+  static const ChestLootEntry mason[] = {
+    { I_clay_ball, 2, 6, 10 },
+    { I_brick, 2, 6, 10 },
+    { I_stone, 2, 6, 8 },
+    { I_stone_bricks, 2, 5, 8 },
+    { I_granite, 2, 5, 6 },
+    { I_diorite, 2, 5, 6 },
+    { I_andesite, 2, 5, 6 },
+    { I_dripstone_block, 1, 3, 5 },
+    { I_bricks, 1, 3, 6 },
+    { I_chiseled_stone_bricks, 1, 2, 4 },
+  };
+
+  static const ChestLootEntry shepherd[] = {
+    { I_white_wool, 2, 6, 12 },
+    { I_black_wool, 1, 3, 6 },
+    { I_gray_wool, 1, 3, 6 },
+    { I_light_gray_wool, 1, 3, 6 },
+    { I_brown_wool, 1, 3, 6 },
+    { I_shears, 1, 1, 8 },
+    { I_string, 2, 6, 8 },
+    { I_white_carpet, 2, 5, 6 },
+    { I_emerald, 1, 2, 4 },
+    { I_painting, 1, 1, 4 },
+  };
+
+  static const ChestLootEntry toolsmith[] = {
+    { I_iron_ingot, 1, 4, 12 },
+    { I_coal, 3, 8, 10 },
+    { I_stick, 4, 10, 8 },
+    { I_stone_pickaxe, 1, 1, 8 },
+    { I_stone_axe, 1, 1, 8 },
+    { I_stone_shovel, 1, 1, 8 },
+    { I_iron_pickaxe, 1, 1, 5 },
+    { I_iron_axe, 1, 1, 4 },
+    { I_iron_shovel, 1, 1, 5 },
+    { I_iron_hoe, 1, 1, 4 },
+  };
+
+  static const ChestLootEntry weaponsmith[] = {
+    { I_iron_ingot, 1, 4, 12 },
+    { I_coal, 3, 8, 10 },
+    { I_flint, 2, 5, 8 },
+    { I_obsidian, 1, 3, 5 },
+    { I_stone_sword, 1, 1, 8 },
+    { I_iron_sword, 1, 1, 6 },
+    { I_iron_axe, 1, 1, 5 },
+    { I_diamond, 1, 1, 3 },
+    { I_arrow, 4, 10, 6 },
+    { I_shield, 1, 1, 4 },
+  };
+
+  // Map profession to loot table
+  static const struct {
+    const ChestLootEntry *entries;
+    size_t count;
+  } loot_tables[] = {
+    { farmer,         sizeof(farmer) / sizeof(farmer[0]) },
+    { librarian,      sizeof(librarian) / sizeof(librarian[0]) },
+    { cleric,         sizeof(cleric) / sizeof(cleric[0]) },
+    { armorer,        sizeof(armorer) / sizeof(armorer[0]) },
+    { butcher,        sizeof(butcher) / sizeof(butcher[0]) },
+    { cartographer,   sizeof(cartographer) / sizeof(cartographer[0]) },
+    { fisherman,      sizeof(fisherman) / sizeof(fisherman[0]) },
+    { fletcher,       sizeof(fletcher) / sizeof(fletcher[0]) },
+    { leatherworker,  sizeof(leatherworker) / sizeof(leatherworker[0]) },
+    { mason,          sizeof(mason) / sizeof(mason[0]) },
+    { shepherd,       sizeof(shepherd) / sizeof(shepherd[0]) },
+    { toolsmith,      sizeof(toolsmith) / sizeof(toolsmith[0]) },
+    { weaponsmith,    sizeof(weaponsmith) / sizeof(weaponsmith[0]) },
+  };
+
+  if (profession >= 13) {
+    // Fallback: generic loot for unknown professions
+    static const ChestLootEntry fallback[] = {
+      { I_bread, 2, 5, 10 },
+      { I_iron_ingot, 1, 3, 8 },
+      { I_stick, 3, 8, 8 },
+      { I_emerald, 1, 2, 4 },
+    };
+    for (uint8_t i = 0; i < 3; i++) {
+      addChestLootStack(slots, pickChestLootEntry(fallback, sizeof(fallback) / sizeof(fallback[0]), &seed), &seed);
+      seed = splitmix64(seed);
+    }
+    return;
+  }
+
+  seed = splitmix64(seed);
+  uint8_t rolls = 3 + (uint8_t)(seed % 3); // 3..5 stacks
+  for (uint8_t i = 0; i < rolls; i++) {
+    addChestLootStack(slots, pickChestLootEntry(loot_tables[profession].entries, loot_tables[profession].count, &seed), &seed);
+    seed = splitmix64(seed);
+  }
+}
+
 static int projectileEntityId(int slot) {
   return -200 - slot;
 }
@@ -4024,6 +4373,7 @@ static uint8_t shootBowArrow(PlayerData *player) {
     syncPlayerInventorySlot(player, arrow_slot);
     if (arrow_slot == player->hotbar || arrow_slot == 40) broadcastPlayerEquipment(player);
   }
+  if (!creative) damageHeldItem(player, 1);
 
   int16_t nvx = (int16_t)(p->vx * 8000);
   int16_t nvy = (int16_t)(p->vy * 8000);
@@ -4300,24 +4650,30 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
             populateDungeonChestLoot(_slot, x, y, z, dungeon_variant);
             special_block_set_state(x, y, z, player->dimension, B_chest, oriented_encode_state(dungeon_direction));
           } else {
-            // Populate village/generated surface chests with 3 random common items.
-            uint32_t _loot_seed = (uint32_t)(x * 2743 ^ y * 7451 ^ z * 5659);
-            int _set = _loot_seed % 4;
-            static const uint16_t _items[4][3] = {
-              {134, 882, 912},   // oak_log, stone_pickaxe, bread
-              {36,  883, 857},   // oak_planks, stone_axe, apple
-              {35,  881, 939},   // cobblestone, stone_shovel, cooked_porkchop
-              {310, 905, 1066},  // torch, stick, cooked_beef
-            };
-            static const uint8_t _counts[4][3] = {
-              {4, 1, 3}, {6, 1, 2}, {5, 1, 2}, {3, 4, 3}
-            };
-            for (int _s = 0; _s < 3; _s++) {
-              uint16_t _id = _items[_set][_s];
-              uint8_t _cnt = _counts[_set][_s] + (_loot_seed >> (_s * 5)) % 3;
-              _slot[_s * 3 + 0] = _id & 0xFF;
-              _slot[_s * 3 + 1] = (_id >> 8) & 0xFF;
-              _slot[_s * 3 + 2] = _cnt;
+            // Populate village chests with building-specific loot
+            uint8_t prof = getVillageProfessionAt(x, z);
+            if (prof != 0xFF) {
+              populateVillageChestLoot(_slot, x, y, z, prof);
+            } else {
+              // Fallback for surface chests not in a village building
+              uint32_t _loot_seed = (uint32_t)(x * 2743 ^ y * 7451 ^ z * 5659);
+              int _set = _loot_seed % 4;
+              static const uint16_t _items[4][3] = {
+                {134, 882, 912},   // oak_log, stone_pickaxe, bread
+                {36,  883, 857},   // oak_planks, stone_axe, apple
+                {35,  881, 939},   // cobblestone, stone_shovel, cooked_porkchop
+                {310, 905, 1066},  // torch, stick, cooked_beef
+              };
+              static const uint8_t _counts[4][3] = {
+                {4, 1, 3}, {6, 1, 2}, {5, 1, 2}, {3, 4, 3}
+              };
+              for (int _s = 0; _s < 3; _s++) {
+                uint16_t _id = _items[_set][_s];
+                uint8_t _cnt = _counts[_set][_s] + (_loot_seed >> (_s * 5)) % 3;
+                _slot[_s * 3 + 0] = _id & 0xFF;
+                _slot[_s * 3 + 1] = (_id >> 8) & 0xFF;
+                _slot[_s * 3 + 2] = _cnt;
+              }
             }
           }
           if (i >= block_changes_count) block_changes_count = i + 1;
@@ -4638,23 +4994,13 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     int16_t fy = y;
     if (!getFaceOffsetBlock(x, y, z, face, &fx, &fy, &fz)) return;
     if (target == B_obsidian && tryCreatePortal(fx, fy, fz, player->dimension)) {
-      if (*count > 0) {
-        *count -= 1;
-        if (*count == 0) *item = 0;
-      }
-      sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
-      broadcastPlayerEquipment(player);
+      damageHeldItem(player, 1);
       return;
     }
     if (isReplaceableBlock(getBlockAt2(fx, fy, fz, player->dimension))) {
       makeBlockChange(fx, fy, fz, B_fire, player->dimension);
-      if (*count > 0) {
-        *count -= 1;
-        if (*count == 0) *item = 0;
-      }
+      damageHeldItem(player, 1);
     }
-    sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
-    broadcastPlayerEquipment(player);
     return;
   }
 
@@ -4662,7 +5008,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
   if (*item == I_wooden_hoe || *item == I_stone_hoe || *item == I_iron_hoe ||
       *item == I_golden_hoe || *item == I_diamond_hoe || *item == I_netherite_hoe) {
     if (target == B_dirt || target == B_grass_block) {
-      makeBlockChange(x, y, z, B_farmland, player->dimension);
+      if (!makeBlockChange(x, y, z, B_farmland, player->dimension)) damageHeldItem(player, 1);
     }
     return;
   }
@@ -6476,6 +6822,8 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
     // Don't continue if the player is already dead
     if (player->health == 0) return;
 
+    damageAttackerItem(attacker_id, damage_type);
+
     // Calculate damage reduction from player's armor
     uint8_t defense = getPlayerDefensePoints(player);
     // This uses the old (pre-1.9) protection calculation. Factors are
@@ -6583,6 +6931,8 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
 
     // Don't continue if the mob is already dead
     if (mob_health == 0) return;
+
+    damageAttackerItem(attacker_id, damage_type);
 
     // Set the mob's panic timer
     mob->data |= (3 << 6);

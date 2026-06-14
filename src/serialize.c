@@ -230,6 +230,18 @@ static cJSON *serializePlayerData(void) {
     }
     cJSON_AddItemToObject(obj, "craft_count", craft_cnt);
 
+    cJSON *inv_dmg = cJSON_CreateArray();
+    for (int i = 0; i < 41; i++) {
+      cJSON_AddItemToArray(inv_dmg, cJSON_CreateNumber(pd->inventory_damage[i]));
+    }
+    cJSON_AddItemToObject(obj, "inventory_damage", inv_dmg);
+
+    cJSON *craft_dmg = cJSON_CreateArray();
+    for (int i = 0; i < 9; i++) {
+      cJSON_AddItemToArray(craft_dmg, cJSON_CreateNumber(pd->craft_damage[i]));
+    }
+    cJSON_AddItemToObject(obj, "craft_damage", craft_dmg);
+
     cJSON *ec_arr = cJSON_CreateArray();
     for (int i = 0; i < 27; i++) {
       cJSON_AddItemToArray(ec_arr, cJSON_CreateNumber(pd->ender_chest_items[i]));
@@ -241,6 +253,12 @@ static cJSON *serializePlayerData(void) {
       cJSON_AddItemToArray(ec_cnt, cJSON_CreateNumber(pd->ender_chest_count[i]));
     }
     cJSON_AddItemToObject(obj, "ender_chest_count", ec_cnt);
+
+    cJSON *ec_dmg = cJSON_CreateArray();
+    for (int i = 0; i < 27; i++) {
+      cJSON_AddItemToArray(ec_dmg, cJSON_CreateNumber(pd->ender_chest_damage[i]));
+    }
+    cJSON_AddItemToObject(obj, "ender_chest_damage", ec_dmg);
 
     cJSON *vx_arr = cJSON_CreateArray();
     for (int i = 0; i < VISITED_HISTORY; i++) {
@@ -338,12 +356,31 @@ static int deserializePlayerData(cJSON *arr) {
 
     READ_ARRAY(inventory_items, "inventory", 41);
     READ_ARRAY(inventory_count, "inventory_count", 41);
+    READ_ARRAY(inventory_damage, "inventory_damage", 41);
     READ_ARRAY(craft_items, "craft_items", 9);
     READ_ARRAY(craft_count, "craft_count", 9);
+    READ_ARRAY(craft_damage, "craft_damage", 9);
     READ_ARRAY(ender_chest_items, "ender_chest_items", 27);
     READ_ARRAY(ender_chest_count, "ender_chest_count", 27);
+    READ_ARRAY(ender_chest_damage, "ender_chest_damage", 27);
     READ_ARRAY(visited_x, "visited_x", VISITED_HISTORY);
     READ_ARRAY(visited_z, "visited_z", VISITED_HISTORY);
+
+    for (int i = 0; i < 41; i++) {
+      uint16_t max_damage = getItemMaxDamage(pd->inventory_items[i]);
+      if (pd->inventory_count[i] == 0 || max_damage == 0) pd->inventory_damage[i] = 0;
+      else if (pd->inventory_damage[i] >= max_damage) pd->inventory_damage[i] = max_damage - 1;
+    }
+    for (int i = 0; i < 9; i++) {
+      uint16_t max_damage = getItemMaxDamage(pd->craft_items[i]);
+      if (pd->craft_count[i] == 0 || max_damage == 0) pd->craft_damage[i] = 0;
+      else if (pd->craft_damage[i] >= max_damage) pd->craft_damage[i] = max_damage - 1;
+    }
+    for (int i = 0; i < 27; i++) {
+      uint16_t max_damage = getItemMaxDamage(pd->ender_chest_items[i]);
+      if (pd->ender_chest_count[i] == 0 || max_damage == 0) pd->ender_chest_damage[i] = 0;
+      else if (pd->ender_chest_damage[i] >= max_damage) pd->ender_chest_damage[i] = max_damage - 1;
+    }
 
     #undef READ_NUMBER
     #undef READ_ARRAY

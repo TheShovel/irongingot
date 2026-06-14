@@ -56,6 +56,8 @@ uint8_t isPassableSpawnBlock (uint16_t block);
 uint8_t isReplaceableBlock (uint16_t block);
 uint32_t isCompostItem (uint16_t item);
 uint8_t getItemStackSize (uint16_t item);
+uint16_t getItemMaxDamage (uint16_t item);
+uint8_t isDamageableItem (uint16_t item);
 
 #ifdef ALLOW_DOORS
 uint8_t isDoorBlock (uint16_t block);
