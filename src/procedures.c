@@ -346,6 +346,11 @@ uint8_t getConfiguredGameMode(void) {
   return (uint8_t)config.gamemode;
 }
 
+uint8_t getConfiguredDifficulty(void) {
+  if (config.difficulty < 0 || config.difficulty > 3) return 2;
+  return (uint8_t)config.difficulty;
+}
+
 static uint8_t getAbilityFlagsForGameMode(uint8_t gamemode) {
   switch (gamemode) {
     case 1: return 0x0D; // invulnerable, may fly, instant build
@@ -1010,6 +1015,9 @@ void spawnPlayer (PlayerData *player) {
     sc_gameEvent(player->client_fd, 7, 0.0f);
     sc_gameEvent(player->client_fd, 8, 0.0f);
   }
+
+  // Sync client difficulty
+  sc_changeDifficulty(player->client_fd, (uint8_t)config.difficulty, 0);
 
   #ifdef ENABLE_PLAYER_FLIGHT
   uint8_t configured_gamemode = getConfiguredGameMode();
@@ -5891,6 +5899,7 @@ static void getRandomSpawnOffset(int min_dist, int spawn_range, int16_t *out_dx,
 
 static void spawnDungeonMobs(PlayerData *player) {
   if (player->dimension != DIMENSION_OVERWORLD) return;
+  if (config.difficulty == 0) return; // No hostile spawns on peaceful
 
   uint32_t interval = (uint32_t)(4.0f * TICKS_PER_SECOND);
   if (interval == 0) interval = 1;
@@ -6224,8 +6233,8 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
     spawnMob(type, spawn_x, surface_y + 1, spawn_z, health, player->dimension, 0);
   }
 
-  // Spawn hostile mobs (zombies) only at night
-  if (is_night && num_hostile_types > 0) {
+  // Spawn hostile mobs (zombies) only at night, and never on peaceful
+  if (is_night && num_hostile_types > 0 && config.difficulty != 0) {
     uint8_t hostile_to_spawn = (fast_rand() % slots_left) + 1;
     if (hostile_to_spawn > slots_left / 2) hostile_to_spawn = slots_left / 2;
     if (hostile_to_spawn < 1) hostile_to_spawn = 1;
@@ -6822,6 +6831,22 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
     // Don't continue if the player is already dead
     if (player->health == 0) return;
 
+    // Difficulty scaling for mob attacks (attacker_id < -1 means mob)
+    if (attacker_id < -1) {
+      uint8_t diff = getConfiguredDifficulty();
+      if (diff == 0) {
+        damage = 0; // Peaceful: no mob damage
+      } else if (diff == 1) {
+        // Easy: 0.5x, round down, min 1
+        damage = damage / 2;
+        if (damage < 1) damage = 1;
+      } else if (diff == 3) {
+        // Hard: 1.5x, round up
+        damage = (damage * 3 + 1) / 2;
+        if (damage < 1) damage = 1;
+      }
+    }
+
     damageAttackerItem(attacker_id, damage_type);
 
     // Calculate damage reduction from player's armor
@@ -7245,14 +7270,33 @@ void handleServerTick (int64_t time_since_last_tick) {
       if (player->air == 0) {
         hurtEntity(player->client_fd, -1, D_drown, 2);
       }
+      // Starvation damage when hunger is 0
+      if (player->hunger == 0 && player->health > 0) {
+        uint8_t diff = getConfiguredDifficulty();
+        if (diff == 1 && player->health > 10) {
+          hurtEntity(player->client_fd, -1, D_generic, 1); // Easy: stops at 5 hearts
+        } else if (diff == 2 && player->health > 1) {
+          hurtEntity(player->client_fd, -1, D_generic, 1); // Normal: stops at 0.5 heart
+        } else if (diff == 3) {
+          hurtEntity(player->client_fd, -1, D_generic, 1); // Hard: can kill
+        }
+        // Peaceful: no starvation damage
+      }
+      // Natural regeneration
       if (player->health >= 20 || player->health == 0) continue;
       if (player->hunger < 18) continue;
-      if (player->saturation >= 600) {
-        player->saturation -= 600;
-        player->health ++;
+      uint8_t diff = getConfiguredDifficulty();
+      if (diff == 0) {
+        // Peaceful: regen 1 HP per second for free
+        player->health++;
       } else {
-        player->hunger --;
-        player->health ++;
+        if (player->saturation >= 600) {
+          player->saturation -= 600;
+          player->health ++;
+        } else {
+          player->hunger --;
+          player->health ++;
+        }
       }
       sc_setHealth(player->client_fd, player->health, player->hunger, player->saturation);
     }
@@ -8724,14 +8768,31 @@ static void updatePlayerStateTask(void* arg) {
       else player->health = 0;
     }
 
-    // Heal from saturation (update state only, packet sent separately)
-    if (player->health < 20 && player->health != 0 && player->hunger >= 18) {
-      if (player->saturation >= 600) {
-        player->saturation -= 600;
-        player->health++;
-      } else {
-        player->hunger--;
-        player->health++;
+    // Starvation damage when hunger is 0 (update state only, packet sent separately)
+    if (player->hunger == 0 && player->health > 0) {
+      uint8_t diff = getConfiguredDifficulty();
+      if (diff == 1 && player->health > 10) {
+        player->health--;
+      } else if (diff == 2 && player->health > 1) {
+        player->health--;
+      } else if (diff == 3) {
+        player->health--;
+      }
+    }
+    // Natural regeneration (update state only, packet sent separately)
+  if (player->health < 20 && player->health != 0) {
+    uint8_t diff = getConfiguredDifficulty();
+    if (diff == 0) {
+      // Peaceful: regen 1 HP per second for free
+      player->health++;
+    } else if (player->hunger >= 18) {
+        if (player->saturation >= 600) {
+          player->saturation -= 600;
+          player->health++;
+        } else {
+          player->hunger--;
+          player->health++;
+        }
       }
     }
   }

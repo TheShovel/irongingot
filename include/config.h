@@ -14,6 +14,7 @@ typedef struct {
 
   // Game settings
   int gamemode;              // 0 - survival; 1 - creative; 2 - adventure; 3 - spectator
+  int difficulty;            // 0 - peaceful; 1 - easy; 2 - normal; 3 - hard
   int view_distance;
   int mob_despawn_distance;
   int mob_spawn_enabled;

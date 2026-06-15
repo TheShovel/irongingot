@@ -169,6 +169,47 @@ static uint8_t parseGameModeToken(const char *token, uint8_t *gamemode) {
   return false;
 }
 
+static const char *difficultyName(uint8_t difficulty) {
+  switch (difficulty) {
+    case 0: return "peaceful";
+    case 1: return "easy";
+    case 2: return "normal";
+    case 3: return "hard";
+    default: return "unknown";
+  }
+}
+
+static uint8_t parseDifficultyToken(const char *token, uint8_t *difficulty) {
+  if (!token || token[0] == '\0') return false;
+
+  if (!strcmp(token, "0") || !creative_strcasecmp(token, "peaceful") || !creative_strcasecmp(token, "p")) {
+    *difficulty = 0;
+    return true;
+  }
+  if (!strcmp(token, "1") || !creative_strcasecmp(token, "easy") || !creative_strcasecmp(token, "e")) {
+    *difficulty = 1;
+    return true;
+  }
+  if (!strcmp(token, "2") || !creative_strcasecmp(token, "normal") || !creative_strcasecmp(token, "n")) {
+    *difficulty = 2;
+    return true;
+  }
+  if (!strcmp(token, "3") || !creative_strcasecmp(token, "hard") || !creative_strcasecmp(token, "h")) {
+    *difficulty = 3;
+    return true;
+  }
+
+  return false;
+}
+
+static void broadcastDifficultyUpdate(void) {
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (player_data[i].client_fd == -1) continue;
+    if (player_data[i].flags & 0x20) continue;
+    sc_changeDifficulty(player_data[i].client_fd, (uint8_t)config.difficulty, 0);
+  }
+}
+
 static uint8_t parseTimeToken(const char *token, int *ticks) {
   if (!token || token[0] == '\0') return false;
 
@@ -571,6 +612,15 @@ int sc_gameEvent (int client_fd, uint8_t event, float value) {
 // S->C Game Event 13 (Start waiting for level chunks)
 int sc_startWaitingForChunks (int client_fd) {
   return sc_gameEvent(client_fd, 13, 0.0f);
+}
+
+// S->C Change Difficulty
+int sc_changeDifficulty (int client_fd, uint8_t difficulty, uint8_t locked) {
+  startPacket(client_fd, 0x0B);
+  writeByte(client_fd, difficulty);
+  writeByte(client_fd, locked);
+  endPacket(client_fd);
+  return 0;
 }
 
 // S->C Chunk Batch Start (1.21.5+)
@@ -2808,6 +2858,40 @@ int cs_chat (int client_fd) {
     goto cleanup;
   }
 
+  if (!strncmp((char *)recv_buffer, "!difficulty", 11) && isCommandBoundary(recv_buffer, 11)) {
+    int arg_offset = 12;
+    while (arg_offset < 224 && recv_buffer[arg_offset] == ' ') arg_offset++;
+
+    int arg_end = arg_offset;
+    while (arg_end < 224 && recv_buffer[arg_end] != '\0' && recv_buffer[arg_end] != ' ') arg_end++;
+    if (arg_end <= arg_offset) {
+      const char usage[] = "§7Usage: /difficulty <peaceful|easy|normal|hard>";
+      sc_systemChat(client_fd, (char *)usage, (uint16_t)sizeof(usage) - 1);
+      goto cleanup;
+    }
+
+    char diff_buf[16];
+    int diff_len = arg_end - arg_offset;
+    if (diff_len > 15) diff_len = 15;
+    memcpy(diff_buf, recv_buffer + arg_offset, diff_len);
+    diff_buf[diff_len] = '\0';
+
+    uint8_t difficulty = 2;
+    if (!parseDifficultyToken(diff_buf, &difficulty)) {
+      const char usage[] = "§7Usage: /difficulty <peaceful|easy|normal|hard>";
+      sc_systemChat(client_fd, (char *)usage, (uint16_t)sizeof(usage) - 1);
+      goto cleanup;
+    }
+
+    config.difficulty = difficulty;
+    broadcastDifficultyUpdate();
+
+    char response[96];
+    int resp_len = snprintf(response, sizeof(response), "§aServer difficulty set to §f%s", difficultyName(difficulty));
+    sc_systemChat(client_fd, response, (uint16_t)resp_len);
+    goto cleanup;
+  }
+
   if (!strncmp((char *)recv_buffer, "!give", 5) && isCommandBoundary(recv_buffer, 5)) {
     int arg_start = 6;
     while (arg_start < 224 && recv_buffer[arg_start] == ' ') arg_start++;
@@ -2986,6 +3070,7 @@ int cs_chat (int client_fd) {
     // Send command guide
     const char help_msg[] = "§7Commands (use / or !):\n"
     "  /gamemode <survival|creative|adventure|spectator> - Set server gamemode\n"
+    "  /difficulty <peaceful|easy|normal|hard> - Set server difficulty\n"
     "  /tp <x> <y> <z> - Teleport to coordinates\n"
     "  /give [player] <item_name> [count] - Give items\n"
     "  /time set <ticks|day|noon|night|midnight> - Set world time\n"

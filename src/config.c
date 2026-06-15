@@ -40,6 +40,7 @@ void init_config_defaults(void) {
 
   // Game settings
   config.gamemode = 0;  // survival
+  config.difficulty = 2;  // normal
   config.view_distance = 5;
   config.mob_despawn_distance = 256;
   config.mob_spawn_enabled = 1;
@@ -154,6 +155,10 @@ int load_config(const char *filename) {
       config.gamemode = atoi(value);
       if (config.gamemode < 0) config.gamemode = 0;
       if (config.gamemode > 3) config.gamemode = 3;
+    } else if (strcmp(key, "difficulty") == 0) {
+      config.difficulty = atoi(value);
+      if (config.difficulty < 0) config.difficulty = 0;
+      if (config.difficulty > 3) config.difficulty = 3;
     } else if (strcmp(key, "view_distance") == 0) {
       config.view_distance = atoi(value);
       if (config.view_distance < 2) config.view_distance = 2;
@@ -278,6 +283,8 @@ int save_config(const char *filename) {
   fprintf(f, "# ============================================\n");
   fprintf(f, "# Gamemode: 0 = survival, 1 = creative, 2 = adventure, 3 = spectator\n");
   fprintf(f, "gamemode = %d\n", config.gamemode);
+  fprintf(f, "# Difficulty: 0 = peaceful, 1 = easy, 2 = normal, 3 = hard\n");
+  fprintf(f, "difficulty = %d\n", config.difficulty);
   fprintf(f, "view_distance = %d\n", config.view_distance);
   fprintf(f, "mob_despawn_distance = %d\n", config.mob_despawn_distance);
   fprintf(f, "mob_spawn_enabled = %s\n", config.mob_spawn_enabled ? "true" : "false");

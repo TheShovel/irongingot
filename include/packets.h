@@ -36,6 +36,7 @@ int sc_synchronizePlayerPosition (int client_fd, double x, double y, double z, f
 int sc_setDefaultSpawnPosition (int client_fd, int64_t x, int64_t y, int64_t z);
 int sc_gameEvent (int client_fd, uint8_t event, float value);
 int sc_startWaitingForChunks (int client_fd);
+int sc_changeDifficulty (int client_fd, uint8_t difficulty, uint8_t locked);
 int sc_chunkBatchStart (int client_fd);
 int sc_chunkBatchFinished (int client_fd, int batchSize);
 int sc_playerAbilities (int client_fd, uint8_t flags);
