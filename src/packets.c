@@ -616,8 +616,8 @@ int sc_startWaitingForChunks (int client_fd) {
 
 // S->C Change Difficulty
 int sc_changeDifficulty (int client_fd, uint8_t difficulty, uint8_t locked) {
-  startPacket(client_fd, 0x0B);
-  writeByte(client_fd, difficulty);
+  startPacket(client_fd, 0x0A);
+  writeVarInt(client_fd, difficulty);
   writeByte(client_fd, locked);
   endPacket(client_fd);
   return 0;
@@ -2622,7 +2622,7 @@ int sc_respawn (int client_fd, uint8_t dimension) {
 // C->S Client Status
 int cs_clientStatus (int client_fd) {
 
-  uint8_t id = readByte(client_fd);
+  int id = readVarInt(client_fd);
 
   PlayerData *player;
   if (getPlayerData(client_fd, &player)) return 1;
