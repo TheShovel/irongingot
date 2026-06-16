@@ -767,6 +767,8 @@ void init_packet_sender_workers (void) {
   if (sender_workers_running) return;
   sender_workers_running = 1;
   for (intptr_t i = 0; i < MAX_PLAYERS; i++) {
+    // Small delay between thread creations to avoid overwhelming kernel.
+    usleep(1000);
     int ret = create_server_thread(&sender_threads[i], packet_sender_worker, (void *)i);
     if (ret != 0) {
       char message[192];

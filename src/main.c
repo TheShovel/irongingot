@@ -1090,16 +1090,26 @@ int main () {
     // Handle periodic events (server ticks)
     int64_t time_since_last_tick = get_program_time() - last_tick_time;
     if (time_since_last_tick > TIME_BETWEEN_TICKS) {
-      // Catch up on missed ticks, but cap to prevent death spiral
-      int ticks_behind = (int)(time_since_last_tick / TIME_BETWEEN_TICKS);
-      if (ticks_behind > 5) ticks_behind = 5;
-      for (int t = 0; t < ticks_behind; t++) {
-        handleServerTick(TIME_BETWEEN_TICKS);
-      }
+      // Process at most ONE tick per loop iteration.
+      // Running multiple ticks back-to-back without processing packets causes
+      // noticeable input lag (up to 250ms) — far worse than the simulation
+      // running slightly behind real-time.
+      handleServerTick(TIME_BETWEEN_TICKS);
       terminal_ui_record_tick(time_since_last_tick);
       // Periodically drain old packets to free memory
       drain_client_queues();
-      last_tick_time += (int64_t)ticks_behind * TIME_BETWEEN_TICKS;
+      // Advance time by one tick.  If the server fell further behind during
+      // the tick we skip the excess to avoid a runaway death spiral.
+      last_tick_time += TIME_BETWEEN_TICKS;
+      // If the server is still behind, skip extra time to keep the loop moving.
+      {
+        int64_t still_behind = get_program_time() - last_tick_time;
+        if (still_behind > TIME_BETWEEN_TICKS * 3) {
+          int64_t skip = still_behind - TIME_BETWEEN_TICKS;
+          if (skip > TIME_BETWEEN_TICKS * 4) skip = TIME_BETWEEN_TICKS * 4;
+          last_tick_time += skip;
+        }
+      }
       did_work = true;
     }
 

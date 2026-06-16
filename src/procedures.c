@@ -472,6 +472,17 @@ void setClientState (int client_fd, int new_state) {
   }
 }
 
+// Fast inline check: is this client_fd in play state?
+// Attempts a direct index match first, falls back to linear scan.
+static inline uint8_t isClientInPlay(int client_fd) {
+  for (int i = 0; i < MAX_PLAYERS; i++) {
+    if (client_states[i].client_fd == client_fd) {
+      return client_states[i].state == STATE_PLAY;
+    }
+  }
+  return 0;
+}
+
 int getClientState (int client_fd) {
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (client_states[i].client_fd != client_fd) continue;
@@ -748,15 +759,7 @@ void handlePlayerJoin (PlayerData* player) {
   // Inform other clients (and the joining client) of the player's name and entity
   for (int i = 0; i < MAX_PLAYERS; i ++) {
     if (player_data[i].client_fd == -1) continue;
-    // Find the client state for this player
-    uint8_t target_in_play = 0;
-    for (int k = 0; k < MAX_PLAYERS; k ++) {
-      if (client_states[k].client_fd == player_data[i].client_fd) {
-        target_in_play = (client_states[k].state == STATE_PLAY);
-        break;
-      }
-    }
-    if (!target_in_play) continue;  // Skip clients not yet in play state
+    if (!isClientInPlay(player_data[i].client_fd)) continue;  // Skip clients not yet in play state
     sc_systemChat(player_data[i].client_fd, (char *)recv_buffer, 16 + player_name_len);
     sc_playerInfoUpdateAddPlayer(player_data[i].client_fd, *player);
     sendPlayerMetadata(player_data[i].client_fd, player);
@@ -1145,15 +1148,7 @@ void broadcastPlayerMetadata (PlayerData *player) {
     if (client_fd == -1) continue;
     if (client_fd == player->client_fd) continue;
     if (other_player->flags & 0x20) continue;
-    // Check client state
-    uint8_t target_in_play = 0;
-    for (int k = 0; k < MAX_PLAYERS; k ++) {
-      if (client_states[k].client_fd == client_fd) {
-        target_in_play = (client_states[k].state == STATE_PLAY);
-        break;
-      }
-    }
-    if (!target_in_play) continue;
+    if (!isClientInPlay(client_fd)) continue;
 
     sendPlayerMetadata(client_fd, player);
   }
@@ -1168,15 +1163,7 @@ void broadcastPlayerEquipment (PlayerData *player) {
     if (client_fd == -1) continue;
     if (client_fd == player->client_fd) continue;
     if (other_player->flags & 0x20) continue;
-    // Check client state
-    uint8_t target_in_play = 0;
-    for (int k = 0; k < MAX_PLAYERS; k ++) {
-      if (client_states[k].client_fd == client_fd) {
-        target_in_play = (client_states[k].state == STATE_PLAY);
-        break;
-      }
-    }
-    if (!target_in_play) continue;
+    if (!isClientInPlay(client_fd)) continue;
 
     sendPlayerEquipment(client_fd, player);
   }
@@ -1195,15 +1182,7 @@ void broadcastMobSound (int entity_id, int sound_id, int category, float volume,
     int client_fd = player_data[i].client_fd;
     if (client_fd == -1) continue;
     if (player_data[i].dimension != mob->dimension) continue;
-
-    uint8_t target_in_play = 0;
-    for (int k = 0; k < MAX_PLAYERS; k ++) {
-      if (client_states[k].client_fd == client_fd) {
-        target_in_play = (client_states[k].state == STATE_PLAY);
-        break;
-      }
-    }
-    if (!target_in_play) continue;
+    if (!isClientInPlay(client_fd)) continue;
 
     sc_soundEntity(client_fd, sound_id, category, entity_id, volume, pitch);
   }
@@ -1341,14 +1320,7 @@ void broadcastMobMetadata (int client_fd, int entity_id) {
           if (target_fd == -1) continue;
           if (p->flags & 0x20) continue;
           if (p->dimension != mob->dimension) continue;
-          uint8_t in_play = 0;
-          for (int k = 0; k < MAX_PLAYERS; k++) {
-            if (client_states[k].client_fd == target_fd) {
-              in_play = (client_states[k].state == STATE_PLAY);
-              break;
-            }
-          }
-          if (!in_play) continue;
+          if (!isClientInPlay(target_fd)) continue;
         } else {
           target_fd = client_fd;
         }
@@ -1372,15 +1344,7 @@ void broadcastMobMetadata (int client_fd, int entity_id) {
       if (client_fd == -1) continue;
       if (player->flags & 0x20) continue;
       if (player->dimension != mob->dimension) continue;
-      // Check client state
-      uint8_t target_in_play = 0;
-      for (int k = 0; k < MAX_PLAYERS; k ++) {
-        if (client_states[k].client_fd == client_fd) {
-          target_in_play = (client_states[k].state == STATE_PLAY);
-          break;
-        }
-      }
-      if (!target_in_play) continue;
+      if (!isClientInPlay(client_fd)) continue;
 
       sc_setEntityMetadata(client_fd, entity_id, metadata, length);
     }
@@ -1392,6 +1356,7 @@ void broadcastMobMetadata (int client_fd, int entity_id) {
 }
 
 #define BLOCK_LOOKUP_CACHE_SIZE 4096
+
 typedef struct {
   short x;
   short z;
@@ -1403,6 +1368,21 @@ typedef struct {
 
 static THREAD_LOCAL BlockLookupCacheEntry block_lookup_cache[BLOCK_LOOKUP_CACHE_SIZE];
 static volatile uint32_t block_lookup_cache_epoch = 1;
+
+// Fast hash table for direct block change lookups (avoids O(n) scan).
+// Global (not thread-local) — races only cause occasional cache misses,
+// never corruption, because the linear scan fallback is the source of truth.
+// Epoch-based invalidation: every block mutation bumps the epoch, so stale
+// entries from other threads are automatically ignored.
+#define BLOCKCHANGE_HASH_SIZE 4096
+#define BLOCKCHANGE_HASH_MASK (BLOCKCHANGE_HASH_SIZE - 1)
+static int16_t blockchange_hash_x[BLOCKCHANGE_HASH_SIZE];
+static int16_t blockchange_hash_z[BLOCKCHANGE_HASH_SIZE];
+static int16_t blockchange_hash_y[BLOCKCHANGE_HASH_SIZE];
+static uint8_t blockchange_hash_dim[BLOCKCHANGE_HASH_SIZE];
+static uint16_t blockchange_hash_block[BLOCKCHANGE_HASH_SIZE];
+static volatile uint32_t blockchange_hash_epoch = 1;
+static uint32_t blockchange_hash_ages[BLOCKCHANGE_HASH_SIZE];
 
 #define MODIFIED_CHUNK_TABLE_SIZE 16384
 typedef struct {
@@ -1444,6 +1424,9 @@ static inline void invalidate_block_lookup_cache(void) {
   // Epoch bump invalidates all thread-local lookup entries lazily.
   block_lookup_cache_epoch++;
   if (block_lookup_cache_epoch == 0) block_lookup_cache_epoch = 1;
+  // Also bump the hash table epoch to force re-hash on next lookups.
+  blockchange_hash_epoch++;
+  if (blockchange_hash_epoch == 0) blockchange_hash_epoch = 1;
 }
 
 static void mark_modified_chunk(int chunk_x, int chunk_z) {
@@ -1530,6 +1513,41 @@ void freeBlockChangesSnapshot (BlockChange *snapshot) {
   free(snapshot);
 }
 
+// Insert or update an entry in the block change hash table.
+static void blockchange_hash_set(short x, int16_t y, short z, uint8_t dimension, uint16_t block) {
+  uint32_t h = block_lookup_hash(x, y, z, dimension);
+  uint32_t idx = h & BLOCKCHANGE_HASH_MASK;
+  blockchange_hash_x[idx] = x;
+  blockchange_hash_z[idx] = z;
+  blockchange_hash_y[idx] = y;
+  blockchange_hash_dim[idx] = dimension;
+  blockchange_hash_block[idx] = block;
+  blockchange_hash_ages[idx] = blockchange_hash_epoch;
+}
+
+// Remove an entry from the block change hash table.
+static void blockchange_hash_remove(short x, int16_t y, short z, uint8_t dimension) {
+  uint32_t h = block_lookup_hash(x, y, z, dimension);
+  uint32_t idx = h & BLOCKCHANGE_HASH_MASK;
+  if (blockchange_hash_x[idx] == x && blockchange_hash_z[idx] == z &&
+      blockchange_hash_y[idx] == y && blockchange_hash_dim[idx] == dimension &&
+      blockchange_hash_ages[idx] == blockchange_hash_epoch) {
+    blockchange_hash_block[idx] = 0xFF;
+  }
+}
+
+// Look up a block in the hash table. Returns 0xFF if not found.
+static inline uint16_t blockchange_hash_get(short x, int16_t y, short z, uint8_t dimension) {
+  uint32_t h = block_lookup_hash(x, y, z, dimension);
+  uint32_t idx = h & BLOCKCHANGE_HASH_MASK;
+  if (blockchange_hash_ages[idx] == blockchange_hash_epoch &&
+      blockchange_hash_x[idx] == x && blockchange_hash_z[idx] == z &&
+      blockchange_hash_y[idx] == y && blockchange_hash_dim[idx] == dimension) {
+    return blockchange_hash_block[idx];
+  }
+  return 0xFF;
+}
+
 static inline void notify_block_change_mutation(short x, short z, uint8_t dimension) {
   int chunk_x = div_floor(x, 16);
   int chunk_z = div_floor(z, 16);
@@ -1552,6 +1570,21 @@ uint16_t getBlockChange (short x, int16_t y, short z, uint8_t dimension) {
     return cached->block;
   }
 
+  // Fast path: thread-local hash table for O(1) block change lookup
+  {
+    uint16_t fast_block = blockchange_hash_get(x, y, z, dimension);
+    if (fast_block != 0xFF) {
+      cached->x = x;
+      cached->y = y;
+      cached->z = z;
+      cached->dimension = dimension;
+      cached->block = fast_block;
+      cached->epoch = epoch;
+      return fast_block;
+    }
+  }
+
+  // Fallback: linear scan (only when hash table misses)
   uint16_t block = 0xFF;
   for (int i = 0; i < block_changes_count; i ++) {
     if (block_changes[i].block == 0xFF) continue;
@@ -1587,6 +1620,11 @@ uint16_t getBlockChange (short x, int16_t y, short z, uint8_t dimension) {
       if (i + 14 >= block_changes_count) break;
       i += 14;
     }
+  }
+
+  // Cache the result in the hash table for future lookups
+  if (block != 0xFF) {
+    blockchange_hash_set(x, y, z, dimension, block);
   }
 
   cached->x = x;
@@ -5729,29 +5767,33 @@ static uint8_t xpOrbCountFromValue(uint8_t value) {
   return 3;
 }
 
+// Next-slot hint for XP orb allocation
+static int next_xp_orb_slot = 0;
+
 void spawnXpOrb (double x, double y, double z, uint8_t value, uint8_t dimension) {
   if (value == 0) return;
 
   for (int i = 0; i < MAX_XP_ORBS; i++) {
-    if (xp_orb_data[i].active) continue;
+    int idx = (next_xp_orb_slot + i) % MAX_XP_ORBS;
+    if (xp_orb_data[idx].active) continue;
 
-    xp_orb_data[i].active = 1;
-    xp_orb_data[i].x = x;
-    xp_orb_data[i].y = y;
-    xp_orb_data[i].z = z;
-    xp_orb_data[i].value = value;
-    xp_orb_data[i].count = xpOrbCountFromValue(value);
-    xp_orb_data[i].dimension = dimension;
-    xp_orb_data[i].age = 0;
+    xp_orb_data[idx].active = 1;
+    xp_orb_data[idx].x = x;
+    xp_orb_data[idx].y = y;
+    xp_orb_data[idx].z = z;
+    xp_orb_data[idx].value = value;
+    xp_orb_data[idx].count = xpOrbCountFromValue(value);
+    xp_orb_data[idx].dimension = dimension;
+    xp_orb_data[idx].age = 0;
 
     // Generate a UUID for this orb
     uint8_t uuid[16];
     uint32_t r = fast_rand();
     memcpy(uuid, &r, 4);
-    memcpy(uuid + 4, &i, 4);
+    memcpy(uuid + 4, &idx, 4);
     memset(uuid + 8, 0, 8);
 
-    int entity_id = XP_ORB_ENTITY_ID_BASE - i;
+    int entity_id = XP_ORB_ENTITY_ID_BASE - idx;
 
     // Broadcast the orb to all players in the same dimension
     for (int j = 0; j < MAX_PLAYERS; j++) {
@@ -5761,13 +5803,17 @@ void spawnXpOrb (double x, double y, double z, uint8_t value, uint8_t dimension)
         player_data[j].client_fd,
         entity_id, uuid, E_XP_ORB,
         x, y, z,
-        0, 0, xp_orb_data[i].count, 0, 0
+        0, 0, xp_orb_data[idx].count, 0, 0
       );
     }
 
+    next_xp_orb_slot = (idx + 1) % MAX_XP_ORBS;
     break;
   }
 }
+
+// Next-slot hint for item entity allocation (avoids scanning from 0 every time)
+static int next_item_entity_slot = 0;
 
 // Spawn an item entity on the ground
 void spawnItemEntity (double x, double y, double z, uint16_t item, uint8_t count, uint8_t dimension,
@@ -5779,27 +5825,29 @@ void spawnItemEntity (double x, double y, double z, uint16_t item, uint8_t count
   int16_t mvy = 0;
   int16_t mvz = 0;
 
+  // Scan for free slot starting from the last known free position
   for (int i = 0; i < MAX_ITEM_ENTITIES; i++) {
-    if (item_entity_data[i].active) continue;
+    int idx = (next_item_entity_slot + i) % MAX_ITEM_ENTITIES;
+    if (item_entity_data[idx].active) continue;
 
-    item_entity_data[i].active = 1;
-    item_entity_data[i].x = x;
-    item_entity_data[i].y = y;
-    item_entity_data[i].z = z;
-    item_entity_data[i].vx = vx;
-    item_entity_data[i].vy = vy;
-    item_entity_data[i].vz = vz;
-    item_entity_data[i].on_ground = 0;
-    item_entity_data[i].item = item;
-    item_entity_data[i].count = count;
-    item_entity_data[i].dimension = dimension;
-    item_entity_data[i].age = 0;
+    item_entity_data[idx].active = 1;
+    item_entity_data[idx].x = x;
+    item_entity_data[idx].y = y;
+    item_entity_data[idx].z = z;
+    item_entity_data[idx].vx = vx;
+    item_entity_data[idx].vy = vy;
+    item_entity_data[idx].vz = vz;
+    item_entity_data[idx].on_ground = 0;
+    item_entity_data[idx].item = item;
+    item_entity_data[idx].count = count;
+    item_entity_data[idx].dimension = dimension;
+    item_entity_data[idx].age = 0;
 
-    int entity_id = ITEM_ENTITY_ID_BASE - i;
+    int entity_id = ITEM_ENTITY_ID_BASE - idx;
     uint8_t uuid[16];
     uint32_t r = fast_rand();
     memcpy(uuid, &r, 4);
-    memcpy(uuid + 4, &i, 4);
+    memcpy(uuid + 4, &idx, 4);
     memset(uuid + 8, 0, 8);
 
     for (int j = 0; j < MAX_PLAYERS; j++) {
@@ -5816,6 +5864,8 @@ void spawnItemEntity (double x, double y, double z, uint16_t item, uint8_t count
       endPacket(player_data[j].client_fd);
     }
 
+    // Update next-slot hint to resume near where we found a free slot
+    next_item_entity_slot = (idx + 1) % MAX_ITEM_ENTITIES;
     break;
   }
 }
@@ -5854,13 +5904,28 @@ void tickItemEntities (void) {
     }
 
     // Teleport while flying — grounded items don't move
+    // Throttle: only broadcast every 3 ticks when near the ground or moving slowly.
     if (!item_entity_data[i].on_ground) {
-      for (int j = 0; j < MAX_PLAYERS; j++) {
-        if (player_data[j].client_fd == -1) continue;
-        if (player_data[j].flags & 0x20) continue;
-        if (player_data[j].dimension != item_entity_data[i].dimension) continue;
-        sc_teleportEntity(player_data[j].client_fd, entity_id,
-          item_entity_data[i].x, item_entity_data[i].y, item_entity_data[i].z, 0, 0);
+      uint8_t should_broadcast = 1;
+      double speed_sq = item_entity_data[i].vx * item_entity_data[i].vx +
+                        item_entity_data[i].vy * item_entity_data[i].vy +
+                        item_entity_data[i].vz * item_entity_data[i].vz;
+      if (speed_sq < 0.0001) {
+        // Almost stopped — throttle to every 3 ticks
+        should_broadcast = (item_entity_data[i].age % 3 == 0);
+      } else if (speed_sq < 0.01 && item_entity_data[i].age > 60) {
+        // Very slow and been around a while — throttle to every 2 ticks
+        should_broadcast = (item_entity_data[i].age % 2 == 0);
+      }
+
+      if (should_broadcast) {
+        for (int j = 0; j < MAX_PLAYERS; j++) {
+          if (player_data[j].client_fd == -1) continue;
+          if (player_data[j].flags & 0x20) continue;
+          if (player_data[j].dimension != item_entity_data[i].dimension) continue;
+          sc_teleportEntity(player_data[j].client_fd, entity_id,
+            item_entity_data[i].x, item_entity_data[i].y, item_entity_data[i].z, 0, 0);
+        }
       }
     }
 
@@ -8046,11 +8111,29 @@ void handleServerTick (int64_t time_since_last_tick) {
 
       double dist_to_player = sqrt(closest_dist_double);
       double y_diff = fabs(old_y - closest_player->y);
-      uint8_t has_los = dist_to_player <= 16.0 && hasLineOfSight(
-        old_x, old_y + 0.5, old_z,
-        closest_player->x, closest_player->y + 1.6, closest_player->z,
-        mob_data[i].dimension
-      );
+      uint8_t has_los = 0;
+      // Throttle line-of-sight checks: only every 8 ticks for mobs > 6 blocks,
+      // every 4 ticks otherwise — LOS is expensive and rarely changes per tick.
+      if (dist_to_player <= 16.0) {
+        uint8_t los_interval = (dist_to_player > 6.0) ? 8 : 4;
+        if ((server_ticks + (uint32_t)i) % los_interval == 0) {
+          has_los = hasLineOfSight(
+            old_x, old_y + 0.5, old_z,
+            closest_player->x, closest_player->y + 1.6, closest_player->z,
+            mob_data[i].dimension
+          );
+        } else {
+          // Reuse last known LOS state.  Mob and player rarely move fast
+          // enough to meaningfully change LOS in 4-8 ticks.
+          has_los = (mob_data[i].data >> 5) & 1;
+        }
+      }
+
+      // Store the LOS result in a data bit for reuse next tick
+      if (dist_to_player <= 16.0) {
+        if (has_los) mob_data[i].data |= (1 << 5);
+        else mob_data[i].data &= ~(1 << 5);
+      }
 
       // Skeleton AI: maintain distance and shoot arrows
       if (mob_data[i].type == E_SKELETON) {
@@ -8460,15 +8543,7 @@ void handleServerTick (int64_t time_since_last_tick) {
       for (int j = 0; j < MAX_PLAYERS; j ++) {
         if (player_data[j].client_fd == -1) continue;
         if (player_data[j].dimension != mob_data[i].dimension) continue;
-        // Find the client state for this player
-        uint8_t target_in_play = 0;
-        for (int k = 0; k < MAX_PLAYERS; k ++) {
-          if (client_states[k].client_fd == player_data[j].client_fd) {
-            target_in_play = (client_states[k].state == STATE_PLAY);
-            break;
-          }
-        }
-        if (!target_in_play) continue;
+        if (!isClientInPlay(player_data[j].client_fd)) continue;
         sc_teleportEntity (
           player_data[j].client_fd, entity_id,
           new_x, new_y, new_z,
