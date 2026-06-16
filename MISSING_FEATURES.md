@@ -23,47 +23,26 @@ These features are fundamental to a complete Minecraft experience and should be 
 - **Magma Cube** (High) - Common Nether mob
 - **Shulker** (High) - Required for End content
 
-### 2. Basic Missing Structures (Dimension completion)
-
-- ~~**Nether Fortresses** (High)~~ - ✅ Classic Nether structure with loot
-- ~~**Village Variants** (High)~~ - ✅ Full village generation with roads, wells, bells
-
-### 3. Villager Trading
-
-- ~~**Trading Menu** (High)~~ - ✅ Villager trades for emeralds
-- ~~**Job Sites** (Medium)~~ - ✅ Workstation-based villager professions
-
-### 4. Essential Containers
-
-- ~~**Ender Chest** (High)~~ - ✅ Cross-dimension storage
-- ~~**Barrel** (Medium)~~ - ✅ Simple storage alternative to chests
-
-### 5. Basic Commands
-
-- ~~`/gamemode` (High)~~ - ✅ Runtime game mode switching for admins
-- ~~`/tp` (High)~~ - ✅ Teleport command for server management
-- ~~`/give` (High)~~ - ✅ Essential admin command
-
 ---
 
 ## MEDIUM PRIORITY - Important Gameplay Enhancement
 
 These features significantly improve gameplay but are not strictly required.
 
-### 6. Brewing & Potions System
+### 2. Brewing & Potions System
 
 - **Brewing Stand** (Medium) - Core potion brewing block
 - **Potions System** (Medium) - All potion effects (speed, strength, healing, etc.)
 - **Tipped Arrows** (Low) - Advanced arrow variants
 
-### 7. Enchanting System
+### 3. Enchanting System
 
 - **Enchantment Tables** (Medium) - Core enchantment mechanics
 - **Anvil UI** (Medium) - Repair and combine items
 - **Smithing Table** (Low) - Trim armor (cosmetic)
 - **Recipe Book** (Low) - Needs correct packet IDs for protocol 772. `0x6C` is `set_titles_animation` in this version.
 
-### 8. Missing Mobs - Hostile
+### 4. Missing Mobs - Hostile
 
 - **Zombie Villager** (Medium) - Village defense, cure gameplay
 - **Husk** (Low) - Desert variant of zombie
@@ -73,33 +52,19 @@ These features significantly improve gameplay but are not strictly required.
 - **Warden** (Low) - Deep dark mob
 - **Breeze** (Low) - New 1.21 mob
 
-### 9. Missing Mobs - Passive
+### 5. Missing Mobs - Passive
 
 - **Cow/Pig/Sheep/Chicken** (Medium) - Full passive mob behavior (breeding, drops)
 - **Rabbit** (Low) - Small passive mob
 - **Fox** (Low) - Woodland passive mob
 - **Wolf** (Medium) - Taming mechanic
 
-### 10. Missing Structures
+### 6. Missing Structures
 
 - **Buried Treasure** (Medium) - Ocean explorer map content
 - **Ruins (Surface)** (Low) - World generation variety
 - **Igloo** (Low) - Small structure
 - **Pillager Outpost** (Medium) - Badlands structure with loot
-
-### 11. Missing Commands
-
-- ~~`/time` (Medium)~~ - ✅ Time control for admins
-- ~~`/weather` (Medium)~~ - ✅ Weather control
-- ~~`/kill` (Medium)~~ - ✅ Kill command
-- ~~`/heal` (Low)~~ - ✅ Heal command
-- ~~`/feed` (Low)~~ - ✅ Feed command
-
-### 12. Player Mechanics
-
-- ~~**Sleeping** (Medium)~~ - ✅ Skip night with beds
-- ~~**Spawn Point Setting** (Medium)~~ - ✅ Beds set respawn point
-- ~~**Armor Protection** (Medium)~~ - ✅ Armor damage reduction
 
 ---
 
@@ -107,7 +72,7 @@ These features significantly improve gameplay but are not strictly required.
 
 These are advanced features or aesthetic improvements.
 
-### 13. Redstone Components (Complex systems)
+### 7. Redstone Components (Complex systems)
 
 - **Redstone Dust** (Low) - Wiring (complex continuous updates)
 - **Lever/Button/Pressure Plate** (Low) - Basic activation
@@ -120,38 +85,17 @@ These are advanced features or aesthetic improvements.
 - **Jukebox/Note Block** (Low) - Music/sound
 - **Target Block** (Low) - New redstone component
 
-### 14. Utility Blocks
+### 8. Utility Blocks
 
 - **Sign** (Low) - Text signs
 - **Painting** (Low) - Decorative
 - **Item Frame** (Low) - Item display
 - **Flower Pot** (Low) - Plant decoration
 - **Cauldron** (Low) - Water/mud mechanics
-- ~~**Composter** (Low)~~ - ✅ Bone meal crafting
-- ~~**Bell** (Low)~~ - ✅ Village feature (available in creative)
-- ~~**Lantern** (Low)~~ - ✅ Hanging light source
-- ~~**Campfire** (Low)~~ - ✅ Light source with cooking and damage
-- ~~**Bookshelf** (Low)~~ - ✅ Decorative and functional
-- ~~**Hay Bale** (Low)~~ - ✅ Wheat storage block
-- ~~**Ladder** (Low)~~ - ✅ Climbable
-- ~~**Glass Pane** (Low)~~ - ✅ Decorative transparent barrier
-- ~~**Iron Bars** (Low)~~ - ✅ Decorative barrier
-- ~~**Cobblestone Wall** (Low)~~ - ✅ Decorative wall
-- ~~**Stone Bricks + variants** (Low)~~ - ✅ Craftable building blocks
-- ~~**Bricks + variants** (Low)~~ - ✅ Craftable building blocks
-- ~~**Fence Gates** (Low)~~ - ✅ All wood types, craftable
-- ~~**Buttons** (Low)~~ - ✅ All types, craftable
-- ~~**Pressure Plates** (Low)~~ - ✅ All types, craftable
-- ~~**Signs** (Low)~~ - ✅ Available in creative
-- ~~**Terracotta** (Low)~~ - ✅ All colors in creative
-- ~~**Carpets** (Low)~~ - ✅ All colors in creative
-- ~~**Stripped Logs/Wood** (Low)~~ - ✅ All types in creative
-- ~~**Crimson/Warped sets** (Low)~~ - ✅ Stems, hyphae, planks, nylium in creative
-- ~~**Pale Oak set** (Low)~~ - ✅ Log, wood, planks, leaves, sapling in creative
 
-### 15. Utility Entities
+### 9. Utility Entities
 
-- **Item Entity** (Low) - Items on ground (may impact performance)
+- ~~**Item Entity** (Low) - Items on ground (may impact performance)~~ - ✅ Items drop with physics, pickup, and despawn
 - **Minecart** (Low) - Minecart system
 - **Boat** (Low) - Water transport
 - **Armor Stand** (Low) - Decorative entity
@@ -160,14 +104,14 @@ These are advanced features or aesthetic improvements.
 - **Trident** (Low) - Complex projectile with mechanics
 - **Fishing Bobber** (Low) - Fishing mechanic
 
-### 16. Advanced Commands
+### 10. Advanced Commands
 
-- `/gamerule` (Low) - Game rule modification
-- `/difficulty` (Low) - Difficulty setting
+- ~~`/gamerule` (Low) - Game rule modification~~ - ✅ 6 rules: doMobSpawning, keepInventory, doImmediateRespawn, naturalRegeneration, doDaylightCycle, doWeatherCycle
+- ~~`/difficulty` (Low) - Difficulty setting~~ - ✅ peaceful|easy|normal|hard
 - `/ban`, `/kick`, `/whitelist` (Low) - Admin tools (requires auth system)
 - `/warp`, `/home`, `/spawn` (Low) - Teleportation commands
 
-### 17. World Generation Enhancements
+### 11. World Generation Enhancements
 
 - **Ocean Variants** (Low) - Full ocean biomes (requires rewrite)
 - **River Biomes** (Low) - River generation
@@ -175,23 +119,21 @@ These are advanced features or aesthetic improvements.
 - **Underground Lakes** (Low) - Cave decorations
 - **Deepslate Layer** (Low) - Post-1.18 terrain
 
-### 18. Combat Features
+### 12. Combat Features
 
-- ~~**Critical Hits** (Low)~~ - ✅ 1.5x damage when attacking while falling
 - **Shield Blocking** (Low) - Blocking mechanic
 
-### 19. Visual/Aesthetic
+### 13. Visual/Aesthetic
 
 - **Potion Particles** (Low) - Status effect particles
 - **Mob Effect Particles** (Low) - Damage/interaction particles
 - **Hurt Overlay** (Low) - Red screen on damage
 - **Portal Particles** (Low) - Nether portal effect
 
-### 20. Technical Features
+### 14. Technical Features
 
 - **Online Mode** (Low) - Mojang authentication (requires networking work)
 - **Resource Pack** (Low) - Custom textures
-- **Plugin Channel API** (Low) - Mod integration
 - **Data Packs** (Low) - Custom content loading
 
 ---
@@ -199,31 +141,29 @@ These are advanced features or aesthetic improvements.
 ## Implementation Order Summary
 
 **Phase 1 (High Priority):**
-1. Nether Fortresses + Blaze/Ghast mobs
-2. Villager Trading / Job Sites
-3. ~~End Chest + Barrel~~ ✅ Completed
-4. ~~Basic admin commands (`/gamemode`, `/tp`, `/give`)~~ ✅ Completed
-5. ~~Sleeping + Spawn Point mechanics~~ ✅ Completed
+1. Nether/End mobs (Blaze, Ghast, Magma Cube, Shulker)
 
 **Phase 2 (Medium Priority):**
-6. Brewing & Potions
-7. Enchanting + Anvil
-8. Missing mobs (Wither Skeleton, Drowned, Wolf, etc.)
-9. ~~Armor protection~~ ✅ Completed
+2. Brewing & Potions
+3. Enchanting + Anvil
+4. Missing hostile mobs (Wither Skeleton, Drowned, Zombie Villager, etc.)
+5. Missing passive mobs (Cow, Pig, Sheep, Chicken, Wolf, etc.)
+6. Missing structures (Buried Treasure, Pillager Outpost, etc.)
 
 **Phase 3 (Low Priority):**
-10. Redstone components
-11. Utility blocks and entities
-12. ~~Critical Hits~~ ✅ Completed
-13. Advanced commands
-14. Structure improvements (ocean monuments, mansions)
-15. Visual effects and particles
+7. Redstone components
+8. Utility blocks and entities
+9. Advanced commands
+10. World generation improvements
+11. Shield blocking
+12. Visual effects and particles
+13. Technical features
 
 ---
 
 ## Notes
 
 - Irongingot is designed as a minimalist server targeting low-spec hardware (~7MB RAM)
-- Some limitations (like Item Entities) may be intentionally omitted for performance
+- Item Entities are implemented with physics, pickup, and 5-minute despawn
 - Complex systems (Redstone, minecarts) require significant networking and continuous updates
 - Consider memory/performance impact when implementing cosmetic features
