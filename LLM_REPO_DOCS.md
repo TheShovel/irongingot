@@ -88,7 +88,7 @@ Compression enabled after login (threshold from config). Packet framing: VarInt 
 
 ## World Gen
 
-Perlin noise (Java-compatible) for terrain height, detail, mountains. Cubiomes for biome assignment. Ores by Y-level + biome. Caves: carve tunnels + pockets. Structures: villages (5 styles×13 professions from NBT templates), dungeons (mossy+cobble, chests, spawners), mineshafts, strongholds (silverfish, portal), nether fortresses, trees (8 species).
+Perlin noise (Java-compatible) for terrain height, detail, mountains. Cubiomes for biome assignment. Ores by Y-level + biome (grid-based: 4×4×4 precomputed density grid replaces per-block noise + 6-neighbor spread). Caves: 4×4×4 grid replaces per-block noise. Combined ~2× chunk gen speedup. Structures: villages (5 styles×13 professions from NBT templates), dungeons (mossy+cobble, chests, spawners), mineshafts, strongholds (silverfish, portal), nether fortresses, trees (8 species).
 
 ## Game Tick (procedures.c:handleServerTick)
 1. Weather → 2. Fluid queue → 3. Mob AI (move to nearest player, anger timers, sounds) → 4. Projectiles → 5. XP orbs → 6. Block tick (leaf decay, crops, cactus, fire) → 7. Player tick (fall dmg, suffocate, drown, hunger, regen, portal cooldown) → 8. Mob spawning → 9. Player list broadcast
