@@ -1925,7 +1925,7 @@ static void breakConnectedLeaves (short x, int16_t y, short z, uint16_t leaf_typ
       uint16_t held_item = player->inventory_items[player->hotbar];
       uint16_t drop = getMiningResult(held_item, leaf_type);
       if (drop) {
-        spawnItemEntity(nx + 0.5, ny + 0.5, nz + 0.5, drop, 1, player->dimension);
+        spawnItemEntity(nx + 0.5, ny + 0.5, nz + 0.5, drop, 1, player->dimension, 0, 0, 0);
       }
       // Recurse into this leaf's neighbors
       breakConnectedLeaves(nx, ny, nz, leaf_type, player, broken_count);
@@ -1987,7 +1987,7 @@ static void breakFloatingLeaves (short bx, int16_t by, short bz, uint16_t leaf_t
           uint16_t held_item = player->inventory_items[player->hotbar];
           uint16_t drop = getMiningResult(held_item, leaf_type);
           if (drop) {
-            spawnItemEntity(nx + 0.5, ny + 0.5, nz + 0.5, drop, 1, player->dimension);
+            spawnItemEntity(nx + 0.5, ny + 0.5, nz + 0.5, drop, 1, player->dimension, 0, 0, 0);
           }
         }
       }
@@ -3186,9 +3186,15 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
       uint16_t item = player->inventory_items[slot];
       player->inventory_count[slot] -= count;
       if (player->inventory_count[slot] == 0) player->inventory_items[slot] = 0;
+      double yaw_rad = player->yaw * M_PI / 127.0;
+      double pitch_rad = player->pitch * M_PI / 254.0;
+      double speed = 0.4;
       sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, slot),
         player->inventory_count[slot], player->inventory_items[slot]);
-      spawnItemEntity(player->x + 0.5, player->y + 0.5, player->z + 0.5, item, count, player->dimension);
+      spawnItemEntity(player->x + 0.5, player->y + 0.5, player->z + 0.5, item, count, player->dimension,
+        -sin(yaw_rad) * cos(pitch_rad) * speed,
+        -sin(pitch_rad) * speed + 0.3,
+        cos(yaw_rad) * cos(pitch_rad) * speed);
       broadcastPlayerEquipment(player);
     }
     return;
@@ -3288,7 +3294,7 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
     }
     special_block_clear(x, y, z, player->dimension);
     if (item) {
-      spawnItemEntity(x + 0.5, y + 0.5, z + 0.5, item, 1, player->dimension);
+      spawnItemEntity(x + 0.5, y + 0.5, z + 0.5, item, 1, player->dimension, 0, 0, 0);
     }
     damageHeldItem(player, durability_cost);
     return;
@@ -3325,7 +3331,7 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
     special_block_clear(door_x, door_y, door_z, player->dimension);
     // Give door item (only once for the whole door)
     if (item) {
-      spawnItemEntity(x + 0.5, y + 0.5, z + 0.5, item, 1, player->dimension);
+      spawnItemEntity(x + 0.5, y + 0.5, z + 0.5, item, 1, player->dimension, 0, 0, 0);
     }
     special_block_clear(x, y, z, player->dimension);
     damageHeldItem(player, durability_cost);
@@ -3334,16 +3340,16 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
   #endif
 
   if (item) {
-    spawnItemEntity(x + 0.5, y + 0.5, z + 0.5, item, 1, player->dimension);
+    spawnItemEntity(x + 0.5, y + 0.5, z + 0.5, item, 1, player->dimension, 0, 0, 0);
   }
 
   // Special handling for wheat drops based on maturity
   if (isWheatBlock(block)) {
     if (wheat_age >= 7) {
-      spawnItemEntity(x + 0.5, y + 0.5, z + 0.5, I_wheat, 1, player->dimension);
-      spawnItemEntity(x + 0.5, y + 0.5, z + 0.5, I_wheat_seeds, 1 + (fast_rand() % 3), player->dimension);
+      spawnItemEntity(x + 0.5, y + 0.5, z + 0.5, I_wheat, 1, player->dimension, 0, 0, 0);
+      spawnItemEntity(x + 0.5, y + 0.5, z + 0.5, I_wheat_seeds, 1 + (fast_rand() % 3), player->dimension, 0, 0, 0);
     } else {
-      spawnItemEntity(x + 0.5, y + 0.5, z + 0.5, I_wheat_seeds, 1, player->dimension);
+      spawnItemEntity(x + 0.5, y + 0.5, z + 0.5, I_wheat_seeds, 1, player->dimension, 0, 0, 0);
     }
     special_block_clear(x, y, z, player->dimension);
   }
@@ -3377,7 +3383,7 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
     makeBlockChange(x, y + y_offset, z, 0, player->dimension);
     // Check for item drops *without a tool*
     uint16_t item = getMiningResult(0, block_above);
-    if (item) spawnItemEntity(x + 0.5, y + y_offset + 0.5, z + 0.5, item, 1, player->dimension);
+    if (item) spawnItemEntity(x + 0.5, y + y_offset + 0.5, z + 0.5, item, 1, player->dimension, 0, 0, 0);
     // Select the next block in the column
     y_offset ++;
     block_above = getBlockAt2(x, y + y_offset, z, player->dimension);
@@ -5764,8 +5770,14 @@ void spawnXpOrb (double x, double y, double z, uint8_t value, uint8_t dimension)
 }
 
 // Spawn an item entity on the ground
-void spawnItemEntity (double x, double y, double z, uint16_t item, uint8_t count, uint8_t dimension) {
+void spawnItemEntity (double x, double y, double z, uint16_t item, uint8_t count, uint8_t dimension,
+    double vx, double vy, double vz) {
   if (item == 0 || count == 0) return;
+
+  // Convert to Minecraft velocity units (1 unit = 1/8000 block/tick)
+  int16_t mvx = (int16_t)(vx * 8000.0);
+  int16_t mvy = (int16_t)(vy * 8000.0);
+  int16_t mvz = (int16_t)(vz * 8000.0);
 
   for (int i = 0; i < MAX_ITEM_ENTITIES; i++) {
     if (item_entity_data[i].active) continue;
@@ -5774,6 +5786,10 @@ void spawnItemEntity (double x, double y, double z, uint16_t item, uint8_t count
     item_entity_data[i].x = x;
     item_entity_data[i].y = y;
     item_entity_data[i].z = z;
+    item_entity_data[i].vx = vx;
+    item_entity_data[i].vy = vy;
+    item_entity_data[i].vz = vz;
+    item_entity_data[i].on_ground = 0;
     item_entity_data[i].item = item;
     item_entity_data[i].count = count;
     item_entity_data[i].dimension = dimension;
@@ -5789,7 +5805,7 @@ void spawnItemEntity (double x, double y, double z, uint16_t item, uint8_t count
     for (int j = 0; j < MAX_PLAYERS; j++) {
       if (player_data[j].client_fd == -1) continue;
       if (player_data[j].dimension != dimension) continue;
-      sc_spawnEntity(player_data[j].client_fd, entity_id, uuid, 69, x, y, z, 0, 0, 0, 0, 0);
+      sc_spawnEntity(player_data[j].client_fd, entity_id, uuid, 69, x, y, z, 0, 0, mvx, mvy, mvz);
       // Send item slot metadata (index 8 = item, type 7 = slot)
       startPacket(player_data[j].client_fd, 0x5C);
       writeVarInt(player_data[j].client_fd, entity_id);
@@ -5812,6 +5828,41 @@ void tickItemEntities (void) {
     int entity_id = ITEM_ENTITY_ID_BASE - i;
     item_entity_data[i].age++;
 
+    // Simulate physics: gravity and drag
+    if (!item_entity_data[i].on_ground) {
+      item_entity_data[i].vy -= 0.04;
+      item_entity_data[i].vx *= 0.98;
+      item_entity_data[i].vy *= 0.98;
+      item_entity_data[i].vz *= 0.98;
+      item_entity_data[i].x += item_entity_data[i].vx;
+      item_entity_data[i].y += item_entity_data[i].vy;
+      item_entity_data[i].z += item_entity_data[i].vz;
+      // Check if item hit the ground
+      if (item_entity_data[i].vy < 0) {
+        int bx = (int)floor(item_entity_data[i].x);
+        int by = (int)floor(item_entity_data[i].y);
+        int bz = (int)floor(item_entity_data[i].z);
+        uint16_t block_below = getBlockAt2(bx, by - 1, bz, item_entity_data[i].dimension);
+        if (block_below != 0 || item_entity_data[i].y <= -64) {
+          item_entity_data[i].y = by;
+          item_entity_data[i].vx = 0;
+          item_entity_data[i].vy = 0;
+          item_entity_data[i].vz = 0;
+          item_entity_data[i].on_ground = 1;
+        }
+      }
+    }
+
+    // Force client to server position every 3 ticks
+    if (item_entity_data[i].age % 3 == 0) {
+      for (int j = 0; j < MAX_PLAYERS; j++) {
+        if (player_data[j].client_fd == -1) continue;
+        if (player_data[j].dimension != item_entity_data[i].dimension) continue;
+        sc_teleportEntity(player_data[j].client_fd, entity_id,
+          item_entity_data[i].x, item_entity_data[i].y, item_entity_data[i].z, 0, 0);
+      }
+    }
+
     // Despawn after 5 minutes (6000 ticks)
     if (item_entity_data[i].age > 6000) {
       item_entity_data[i].active = 0;
@@ -5823,8 +5874,8 @@ void tickItemEntities (void) {
       continue;
     }
 
-    // Don't allow pickup until item has been on ground for 20 ticks (1 second)
-    if (item_entity_data[i].age < 20) continue;
+    // Allow pickup immediately (use same logic as XP orbs)
+    if (item_entity_data[i].age < 10) continue;
 
     // Check for nearby players to pick up
     for (int j = 0; j < MAX_PLAYERS; j++) {
@@ -5835,7 +5886,7 @@ void tickItemEntities (void) {
       double dx = item_entity_data[i].x - player_data[j].x;
       double dy = item_entity_data[i].y - player_data[j].y;
       double dz = item_entity_data[i].z - player_data[j].z;
-      if (dx * dx + dy * dy + dz * dz <= 4.0) { // 2.0 block radius
+      if (dx * dx + dy * dy + dz * dz <= 2.5) { // ~1.6 block radius, matches vanilla pickup feel
         if (givePlayerItem(&player_data[j], item_entity_data[i].item, item_entity_data[i].count) == 0) {
           for (int k = 0; k < MAX_PLAYERS; k++) {
             if (player_data[k].client_fd == -1) continue;
@@ -7147,35 +7198,35 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
         PlayerData *player;
         if (getPlayerData(attacker_id, &player)) return;
         switch (mob->type) {
-          case 25: spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_chicken, 1, mob->dimension); break;
-          case 28: spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_beef, 1 + (fast_rand() % 3), mob->dimension); break;
-          case 95: spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_porkchop, 1 + (fast_rand() % 3), mob->dimension); break;
-          case 106: spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_mutton, 1 + (fast_rand() & 1), mob->dimension); break;
-          case E_COD: spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_cod, 1, mob->dimension); break;
-          case E_SALMON: spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_salmon, 1, mob->dimension); break;
-          case E_PUFFERFISH: spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_pufferfish, 1, mob->dimension); break;
-          case E_TROPICAL_FISH: spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_tropical_fish, 1, mob->dimension); break;
+          case 25: spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_chicken, 1, mob->dimension, 0, 0, 0); break;
+          case 28: spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_beef, 1 + (fast_rand() % 3), mob->dimension, 0, 0, 0); break;
+          case 95: spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_porkchop, 1 + (fast_rand() % 3), mob->dimension, 0, 0, 0); break;
+          case 106: spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_mutton, 1 + (fast_rand() & 1), mob->dimension, 0, 0, 0); break;
+          case E_COD: spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_cod, 1, mob->dimension, 0, 0, 0); break;
+          case E_SALMON: spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_salmon, 1, mob->dimension, 0, 0, 0); break;
+          case E_PUFFERFISH: spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_pufferfish, 1, mob->dimension, 0, 0, 0); break;
+          case E_TROPICAL_FISH: spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_tropical_fish, 1, mob->dimension, 0, 0, 0); break;
           case E_PIGLIN:
-            spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, getRandomCreativeItem(), 1, mob->dimension);
+            spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, getRandomCreativeItem(), 1, mob->dimension, 0, 0, 0);
             break;
           case E_CREEPER:
-            spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_gunpowder, 1 + (fast_rand() % 2), mob->dimension);
+            spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_gunpowder, 1 + (fast_rand() % 2), mob->dimension, 0, 0, 0);
             break;
           case E_ENDERMAN:
-            if ((fast_rand() & 3) == 0) spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_ender_pearl, 1, mob->dimension);
+            if ((fast_rand() & 3) == 0) spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_ender_pearl, 1, mob->dimension, 0, 0, 0);
             break;
           case E_SPIDER:
-            spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_string, fast_rand() % 3, mob->dimension);
-            if ((fast_rand() & 3) == 0) spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_spider_eye, 1, mob->dimension);
+            spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_string, fast_rand() % 3, mob->dimension, 0, 0, 0);
+            if ((fast_rand() & 3) == 0) spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_spider_eye, 1, mob->dimension, 0, 0, 0);
             break;
-          case 145: spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_rotten_flesh, (fast_rand() % 3), mob->dimension); break;
+          case 145: spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_rotten_flesh, (fast_rand() % 3), mob->dimension, 0, 0, 0); break;
           case E_SKELETON:
-            if ((fast_rand() & 1) == 0) spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_bone, 1, mob->dimension);
-            if ((fast_rand() % 3) == 0) spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_arrow, 1 + (fast_rand() % 2), mob->dimension);
+            if ((fast_rand() & 1) == 0) spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_bone, 1, mob->dimension, 0, 0, 0);
+            if ((fast_rand() % 3) == 0) spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_arrow, 1 + (fast_rand() % 2), mob->dimension, 0, 0, 0);
             break;
           case 148:
-            spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_rotten_flesh, fast_rand() % 3, mob->dimension);
-            if ((fast_rand() & 3) == 0) spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_gold_ingot, 1, mob->dimension);
+            spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_rotten_flesh, fast_rand() % 3, mob->dimension, 0, 0, 0);
+            if ((fast_rand() & 3) == 0) spawnItemEntity(mob->x, mob_death_y + 0.5, mob->z, I_gold_ingot, 1, mob->dimension, 0, 0, 0);
             break;
           default: break;
         }

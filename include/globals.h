@@ -542,6 +542,10 @@ typedef struct {
   double x;
   double y;
   double z;
+  double vx;
+  double vy;
+  double vz;
+  uint8_t on_ground;
   uint16_t item;
   uint8_t count;
   uint8_t dimension;

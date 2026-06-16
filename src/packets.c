@@ -29,6 +29,7 @@
 #include "special_block.h"
 #include "creative_mode.h"
 #include "config.h"
+#include <math.h>
 
 #ifdef B_end_portal
 #define HAVE_B_END_PORTAL 1
@@ -1826,12 +1827,21 @@ int cs_clickContainer (int client_fd) {
   } else if (mode == 0 && clicked_slot == -999) {
     // when clicking outside inventory, drop the cursor item on the ground
     if (player->flagval_16 != 0 && player->flagval_8 > 0) {
+      double yaw_rad = player->yaw * M_PI / 127.0;
+      double pitch_rad = player->pitch * M_PI / 254.0;
+      double speed = 0.4;
       if (button == 0) {
-        spawnItemEntity(player->x + 0.5, player->y + 0.5, player->z + 0.5, player->flagval_16, player->flagval_8, player->dimension);
+        spawnItemEntity(player->x + 0.5, player->y + 0.5, player->z + 0.5, player->flagval_16, player->flagval_8, player->dimension,
+          -sin(yaw_rad) * cos(pitch_rad) * speed,
+          -sin(pitch_rad) * speed + 0.3,
+          cos(yaw_rad) * cos(pitch_rad) * speed);
         player->flagval_16 = 0;
         player->flagval_8 = 0;
       } else {
-        spawnItemEntity(player->x + 0.5, player->y + 0.5, player->z + 0.5, player->flagval_16, 1, player->dimension);
+        spawnItemEntity(player->x + 0.5, player->y + 0.5, player->z + 0.5, player->flagval_16, 1, player->dimension,
+          -sin(yaw_rad) * cos(pitch_rad) * speed,
+          -sin(pitch_rad) * speed + 0.3,
+          cos(yaw_rad) * cos(pitch_rad) * speed);
         player->flagval_8 -= 1;
         if (player->flagval_8 == 0) player->flagval_16 = 0;
       }
@@ -1932,7 +1942,13 @@ int cs_clickContainer (int client_fd) {
 
   // If dropping an item from inventory, spawn it on the ground
   if (drop_slot != 255 && drop_item != 0 && drop_count > 0) {
-    spawnItemEntity(player->x + 0.5, player->y + 0.5, player->z + 0.5, drop_item, drop_count, player->dimension);
+    double yaw_rad = player->yaw * M_PI / 127.0;
+    double pitch_rad = player->pitch * M_PI / 254.0;
+    double speed = 0.4;
+    spawnItemEntity(player->x + 0.5, player->y + 0.5, player->z + 0.5, drop_item, drop_count, player->dimension,
+      -sin(yaw_rad) * cos(pitch_rad) * speed,
+      -sin(pitch_rad) * speed + 0.3,
+      cos(yaw_rad) * cos(pitch_rad) * speed);
   }
 
   // window 0 is player inventory, window 12 is crafting table
