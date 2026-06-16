@@ -55,8 +55,10 @@ static void uuidToHex(const uint8_t *uuid, char *out) {
 }
 
 static void clearTextureFields(PlayerAppearance *appearance) {
-  appearance->texture_value[0] = '\0';
-  appearance->texture_signature[0] = '\0';
+  free(appearance->texture_value);
+  appearance->texture_value = NULL;
+  free(appearance->texture_signature);
+  appearance->texture_signature = NULL;
   appearance->texture_value_len = 0;
   appearance->texture_signature_len = 0;
   appearance->has_texture = false;
@@ -269,17 +271,31 @@ static uint8_t fetchSessionProfileByUuidHex(const char *uuid_hex, PlayerAppearan
 
   const char *properties = strstr(response, "\"properties\"");
   if (!properties) return false;
-  if (!extractJsonStringField(properties, "value", appearance->texture_value, sizeof(appearance->texture_value))) {
+
+  // Extract texture value into temp buffer, then malloc and copy
+  char temp_value[PLAYER_TEXTURE_VALUE_MAX];
+  if (!extractJsonStringField(properties, "value", temp_value, sizeof(temp_value))) {
     return false;
   }
 
+  free(appearance->texture_value);
+  appearance->texture_value = (char *)malloc(strlen(temp_value) + 1);
+  if (!appearance->texture_value) return false;
+  strcpy(appearance->texture_value, temp_value);
   appearance->texture_value_len = (uint16_t)strlen(appearance->texture_value);
   appearance->has_texture = appearance->texture_value_len > 0;
   if (!appearance->has_texture) return false;
 
-  if (extractJsonStringField(properties, "signature", appearance->texture_signature, sizeof(appearance->texture_signature))) {
-    appearance->texture_signature_len = (uint16_t)strlen(appearance->texture_signature);
-    appearance->has_signature = appearance->texture_signature_len > 0;
+  // Extract signature into temp buffer, then malloc and copy
+  char temp_sig[PLAYER_TEXTURE_SIGNATURE_MAX];
+  if (extractJsonStringField(properties, "signature", temp_sig, sizeof(temp_sig))) {
+    free(appearance->texture_signature);
+    appearance->texture_signature = (char *)malloc(strlen(temp_sig) + 1);
+    if (appearance->texture_signature) {
+      strcpy(appearance->texture_signature, temp_sig);
+      appearance->texture_signature_len = (uint16_t)strlen(appearance->texture_signature);
+      appearance->has_signature = appearance->texture_signature_len > 0;
+    }
   }
 
   return true;

@@ -1317,20 +1317,26 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
           num_generated++;
         }
       } else if (isDoorBlock(block_type)) {
-        // Read existing state or init default
+        // Track whether this door was newly registered (never seen before)
+        uint8_t newly_registered = 0;
         if (!special_block_has_entry(wx, wy, wz, dimension)) {
           uint16_t vs = door_encode_state(0, 0, 1);
           special_block_set_state(wx, wy, wz, dimension, block_type, vs);
+          newly_registered = 1;
           if (!special_block_has_entry(wx, wy + 1, wz, dimension))
             special_block_set_state(wx, wy + 1, wz, dimension, block_type, vs);
         }
-        // Send correct state to client (chunk data may have stale default)
-        uint16_t st = special_block_get_state(wx, wy, wz, dimension);
-        uint8_t open = door_get_open(st);
-        uint8_t hinge = door_get_hinge(st);
-        uint8_t dir = door_get_direction(st);
-        sendDoorUpdate(client_fd, wx, wy, wz, block_type, 0, open, dir, hinge);
-        sendDoorUpdate(client_fd, wx, wy + 1, wz, block_type, 1, open, dir, hinge);
+        // Always send correct state for newly registered doors.
+        // For doors that already have entries, the block updater (main thread)
+        // already sent the correct state, so skip to avoid races.
+        if (newly_registered) {
+          uint16_t st = special_block_get_state(wx, wy, wz, dimension);
+          uint8_t open = door_get_open(st);
+          uint8_t hinge = door_get_hinge(st);
+          uint8_t dir = door_get_direction(st);
+          sendDoorUpdate(client_fd, wx, wy, wz, block_type, 0, open, dir, hinge);
+          sendDoorUpdate(client_fd, wx, wy + 1, wz, block_type, 1, open, dir, hinge);
+        }
 
         if (num_generated < 62) {
           processed_generated[num_generated][0] = wx;

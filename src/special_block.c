@@ -5,6 +5,11 @@
 
 SpecialBlockEntry special_blocks[MAX_SPECIAL_BLOCKS];
 int special_blocks_count = 0;
+
+/* Dedicated wheat tracking list - avoids scanning all 8192 special blocks for wheat growth */
+WheatCoord wheat_coords[MAX_WHEAT_ENTRIES];
+int wheat_count = 0;
+
 static pthread_mutex_t special_block_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* ── Hash table internals ─────────────────────────────────────────── */
@@ -77,6 +82,35 @@ static void reinsert_entry_locked(SpecialBlockEntry entry) {
     special_blocks[idx] = entry;
 }
 
+/* ── Wheat tracking list helpers ──────────────────────────────────── */
+
+/* Add a wheat coordinate to the tracking list (no-op if already present) */
+static void wheat_list_add(short x, uint8_t y, short z, uint8_t dimension) {
+    for (int i = 0; i < wheat_count; i++) {
+        if (wheat_coords[i].x == x && wheat_coords[i].y == y &&
+            wheat_coords[i].z == z && wheat_coords[i].dimension == dimension) {
+            return; /* Already in list */
+        }
+    }
+    if (wheat_count >= MAX_WHEAT_ENTRIES) return;
+    wheat_coords[wheat_count].x = x;
+    wheat_coords[wheat_count].y = y;
+    wheat_coords[wheat_count].z = z;
+    wheat_coords[wheat_count].dimension = dimension;
+    wheat_count++;
+}
+
+/* Remove a wheat coordinate from the tracking list */
+static void wheat_list_remove(short x, uint8_t y, short z, uint8_t dimension) {
+    for (int i = 0; i < wheat_count; i++) {
+        if (wheat_coords[i].x == x && wheat_coords[i].y == y &&
+            wheat_coords[i].z == z && wheat_coords[i].dimension == dimension) {
+            wheat_coords[i] = wheat_coords[--wheat_count];
+            return;
+        }
+    }
+}
+
 /* ── Public API ───────────────────────────────────────────────────── */
 
 void special_block_init(void) {
@@ -85,6 +119,7 @@ void special_block_init(void) {
         clear_entry(&special_blocks[i]);
     }
     special_blocks_count = 0;
+    wheat_count = 0;
     pthread_mutex_unlock(&special_block_mutex);
 }
 
@@ -110,6 +145,12 @@ void special_block_set_state(short x, uint8_t y, short z, uint8_t dimension, uin
     special_blocks[idx].state = state;
     special_blocks[idx].block = block;
     special_blocks[idx].dimension = dimension;
+
+    // Track wheat in dedicated list for fast growth iteration
+    if (block == B_wheat) {
+        wheat_list_add(x, y, z, dimension);
+    }
+
     pthread_mutex_unlock(&special_block_mutex);
 }
 
@@ -119,6 +160,12 @@ void special_block_clear(short x, uint8_t y, short z, uint8_t dimension) {
     if (idx < 0) {
         pthread_mutex_unlock(&special_block_mutex);
         return;
+    }
+
+    // Remove from wheat tracking list before clearing
+    if (special_blocks[idx].block == B_wheat) {
+        wheat_list_remove(special_blocks[idx].x, special_blocks[idx].y,
+                          special_blocks[idx].z, special_blocks[idx].dimension);
     }
 
     clear_entry(&special_blocks[idx]);

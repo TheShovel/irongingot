@@ -66,6 +66,17 @@
 /* Maximum number of special block state entries we track. */
 #define MAX_SPECIAL_BLOCKS 8192
 
+/* Wheat coordinate tracking for fast growth iteration without scanning all 8192 entries */
+#define MAX_WHEAT_ENTRIES 2048
+typedef struct {
+    short x;
+    uint8_t y;
+    short z;
+    uint8_t dimension;
+} WheatCoord;
+extern WheatCoord wheat_coords[MAX_WHEAT_ENTRIES];
+extern int wheat_count;
+
 typedef struct {
     int16_t x;
     int16_t z;

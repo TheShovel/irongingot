@@ -64,6 +64,7 @@ void init_config_defaults(void) {
   config.send_queue_limit = 6 * 1024 * 1024;
   config.chunk_queue_limit = 2 * 1024 * 1024;
   config.infinite_block_changes = 0;  // disabled by default
+  config.max_thread_pool = 4;
   config.tick_interval = 50000;  // 50ms = 20 TPS
   config.disk_sync_interval = 15000000;  // 15 seconds
 
@@ -206,6 +207,8 @@ int load_config(const char *filename) {
       config.max_block_changes = atoi(value);
     } else if (strcmp(key, "infinite_block_changes") == 0) {
       config.infinite_block_changes = parse_bool(value);
+    } else if (strcmp(key, "max_thread_pool") == 0) {
+      config.max_thread_pool = atoi(value);
     } else if (strcmp(key, "tick_interval") == 0) {
       config.tick_interval = atoi(value);
     } else if (strcmp(key, "disk_sync_interval") == 0) {

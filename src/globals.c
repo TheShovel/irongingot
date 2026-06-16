@@ -80,7 +80,7 @@ int block_changes_count = 0;
 
 PlayerData player_data[MAX_PLAYERS];
 int player_data_count = 0;
-PlayerAppearance player_appearance[MAX_PLAYERS];
+PlayerAppearance *player_appearance = NULL;
 
 FluidUpdateEntry fluid_queue[FLUID_QUEUE_SIZE];
 volatile int fluid_queue_head = 0;
@@ -104,8 +104,12 @@ void init_global_thread_pool(void) {
     // Reserve one core for the main/gameplay loop.
     int num_threads = cpu_count - 1;
     if (num_threads < 1) num_threads = 1;
-    // Player update tasks are lightweight; more threads usually just add scheduler pressure.
-    if (num_threads > 4) num_threads = 4;
+    // Cap thread pool to reasonable max. On small hosts (ESP32, etc.) use 1.
+    // On large hosts, more threads can help with parallel chunk generation.
+    // The hard cap prevents scheduler overload from hundreds of threads.
+    int max_threads = config.max_thread_pool;
+    if (max_threads < 1) max_threads = 4; // default for desktop
+    if (num_threads > max_threads) num_threads = max_threads;
     
     if (thread_pool_init(&global_thread_pool, num_threads) == 0) {
       thread_pool_initialized = 1;

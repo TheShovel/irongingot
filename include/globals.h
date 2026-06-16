@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <zlib.h>
 #include "thread_pool.h"
 
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
@@ -338,6 +339,11 @@ typedef struct {
   // Queued bytes in low-priority chunk queue only.
   size_t queued_chunk_bytes;
   uint32_t connection_generation;
+  // Reusable z_stream for compressed packet decompression
+  z_stream inflate_stream;
+  uint8_t inflate_initialized;
+  uint8_t *compressed_buf;
+  size_t compressed_buf_cap;
 } ClientState;
 
 extern ClientState client_states[MAX_PLAYERS];
@@ -486,8 +492,8 @@ typedef struct {
 #define PLAYER_TEXTURE_SIGNATURE_MAX 2048
 
 typedef struct {
-  char texture_value[PLAYER_TEXTURE_VALUE_MAX];
-  char texture_signature[PLAYER_TEXTURE_SIGNATURE_MAX];
+  char *texture_value;       // dynamically allocated (was char[4096])
+  char *texture_signature;   // dynamically allocated (was char[2048])
   uint16_t texture_value_len;
   uint16_t texture_signature_len;
   uint8_t has_texture;
@@ -591,7 +597,7 @@ extern int block_changes_count;
 
 extern PlayerData player_data[MAX_PLAYERS];
 extern int player_data_count;
-extern PlayerAppearance player_appearance[MAX_PLAYERS];
+extern PlayerAppearance *player_appearance;
 
 extern MobData mob_data[MAX_MOBS];
 extern uint8_t mob_trade_uses[MAX_MOBS][5];

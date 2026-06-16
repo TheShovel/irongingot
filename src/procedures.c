@@ -32,7 +32,52 @@
 #define B_wheat_7 B_wheat
 #endif
 
+// Precomputed angle conversion constants for mob AI
+// 256.0 / (2.0 * M_PI) - converts radians to mob yaw units (0-255)
+#define RAD_TO_MOBROT 40.743665431525205f
+// 128.0 / M_PI - converts radians to enderman stare angle units
+#define RAD_TO_ENDERNESS 40.743665431525205f
+
 static void addXpToPlayer(PlayerData *player, uint16_t amount);
+
+/* ── FD-to-index lookup tables ───────────────────────────────────────── */
+/* These replace linear MAX_PLAYERS scans in hot paths. */
+/* fd_to_player_index maps client_fd to player_data index (or -1 if none) */
+/* fd_to_client_index maps client_fd to client_states index (or -1 if none) */
+
+/* The maximum fd we track. Most FDs are small integers. */
+#define FD_LOOKUP_SIZE 4096
+static int fd_to_player_index[FD_LOOKUP_SIZE];
+static int fd_to_client_index[FD_LOOKUP_SIZE];
+static int fd_tables_initialized = 0;
+
+static void ensure_fd_tables_init(void) {
+    if (!fd_tables_initialized) {
+        for (int i = 0; i < FD_LOOKUP_SIZE; i++) {
+            fd_to_player_index[i] = -1;
+            fd_to_client_index[i] = -1;
+        }
+        fd_tables_initialized = 1;
+    }
+}
+
+static inline int fd_to_player(int client_fd) {
+    if (client_fd >= 0 && client_fd < FD_LOOKUP_SIZE) return fd_to_player_index[client_fd];
+    return -1;
+}
+
+static inline int fd_to_client(int client_fd) {
+    if (client_fd >= 0 && client_fd < FD_LOOKUP_SIZE) return fd_to_client_index[client_fd];
+    return -1;
+}
+
+static inline void fd_set_player(int client_fd, int player_index) {
+    if (client_fd >= 0 && client_fd < FD_LOOKUP_SIZE) fd_to_player_index[client_fd] = player_index;
+}
+
+static inline void fd_set_client(int client_fd, int client_index) {
+    if (client_fd >= 0 && client_fd < FD_LOOKUP_SIZE) fd_to_client_index[client_fd] = client_index;
+}
 
 static uint8_t isWheatBlock(uint16_t block) {
   return block >= B_wheat && block <= B_wheat_7;
@@ -83,6 +128,150 @@ static uint8_t wheatBlockAge(uint16_t block) {
 // World spawn chunk (chunk coordinates)
 #define SPAWN_CHUNK_X (SPAWN_BLOCK_X >> 4)
 #define SPAWN_CHUNK_Z (SPAWN_BLOCK_Z >> 4)
+
+/* Forward declaration for water block check used by water surface cache */
+static uint8_t isWaterBlock(uint16_t block);
+
+/* ── Water surface cache for fish ───────────────────────────────────── */
+/* Maps block column → water surface Y. Invalidated on block changes. */
+#define WATER_SURFACE_CACHE_SIZE 256
+#define WATER_SURFACE_CACHE_MASK (WATER_SURFACE_CACHE_SIZE - 1)
+typedef struct {
+    int x;
+    int z;
+    uint8_t dimension;
+    uint8_t surface_y;
+    uint8_t valid;
+} WaterSurfaceEntry;
+static WaterSurfaceEntry water_surface_cache[WATER_SURFACE_CACHE_SIZE];
+static volatile uint32_t water_surface_cache_epoch = 1;
+static uint32_t water_surface_cache_ages[WATER_SURFACE_CACHE_SIZE];
+
+static inline uint32_t water_surface_hash(int x, int z, uint8_t dim) {
+    uint32_t h = (uint32_t)x * 374761393u + (uint32_t)z * 668265263u + (uint32_t)dim * 1640531513u;
+    return h ^ (h >> 16);
+}
+
+/* Look up or compute the water surface Y at block column (x, z). Returns 0 if no water found. */
+static int get_water_surface_y(int block_x, int block_z, uint8_t dimension) {
+    uint32_t h = water_surface_hash(block_x, block_z, dimension);
+    uint32_t idx = h & WATER_SURFACE_CACHE_MASK;
+
+    // Check cache
+    if (water_surface_cache[idx].valid &&
+        water_surface_cache[idx].x == block_x &&
+        water_surface_cache[idx].z == block_z &&
+        water_surface_cache[idx].dimension == dimension &&
+        water_surface_cache_ages[idx] == water_surface_cache_epoch) {
+        return water_surface_cache[idx].surface_y ? (int)water_surface_cache[idx].surface_y : 0;
+    }
+
+    // Cache miss: scan from top down for water surface
+    int surface_y = 0;
+    for (int y = 319; y >= 0; y--) {
+        uint16_t block = getBlockAt2(block_x, y, block_z, dimension);
+        uint16_t block_above = getBlockAt2(block_x, y + 1, block_z, dimension);
+        if (isWaterBlock(block) && !isWaterBlock(block_above)) {
+            surface_y = y;
+            break;
+        }
+    }
+
+    // Store in cache
+    water_surface_cache[idx].x = block_x;
+    water_surface_cache[idx].z = block_z;
+    water_surface_cache[idx].dimension = dimension;
+    water_surface_cache[idx].surface_y = (uint8_t)surface_y;
+    water_surface_cache[idx].valid = 1;
+    water_surface_cache_ages[idx] = water_surface_cache_epoch;
+
+    return surface_y;
+}
+
+/* Invalidate the water surface cache (call when block changes occur) */
+static void invalidate_water_surface_cache(void) {
+    water_surface_cache_epoch++;
+    if (water_surface_cache_epoch == 0) water_surface_cache_epoch = 1;
+    for (int i = 0; i < WATER_SURFACE_CACHE_SIZE; i++) {
+        water_surface_cache[i].valid = 0;
+    }
+}
+
+/* ── Mob spatial hash for O(n) collision detection ─────────────────── */
+#define MOB_GRID_CELL_SIZE 2  // 2x2 block cells
+#define MOB_GRID_SIZE 32       // 32 cells wide = 64 blocks coverage
+#define MOB_GRID_MASK (MOB_GRID_SIZE - 1)
+
+// Each grid cell is a linked list of mob indices
+typedef struct MobGridCell {
+    int indices[16];  // Max 16 mobs per cell
+    int count;
+} MobGridCell;
+
+// Static grid for the current tick's collision checks
+static MobGridCell mob_grid[MOB_GRID_SIZE][MOB_GRID_SIZE];
+
+/* Convert world coordinate to grid cell coordinate */
+static inline int mob_world_to_grid(double coord) {
+    return (int)(floor(coord / MOB_GRID_CELL_SIZE)) & MOB_GRID_MASK;
+}
+
+/* Clear the spatial hash grid */
+static void mob_grid_clear(void) {
+    for (int gx = 0; gx < MOB_GRID_SIZE; gx++) {
+        for (int gz = 0; gz < MOB_GRID_SIZE; gz++) {
+            mob_grid[gx][gz].count = 0;
+        }
+    }
+}
+
+/* Populate the spatial hash grid with ALL live mobs across all dimensions.
+   Call once before processing a block of mobs to get O(1) collision lookups. */
+static void mob_grid_build_all(void) {
+    mob_grid_clear();
+    for (int j = 0; j < MAX_MOBS; j++) {
+        if (mob_data[j].type == 0) continue;
+        if ((mob_data[j].data & 31) == 0) continue;
+
+        int gx = mob_world_to_grid(mob_data[j].x);
+        int gz = mob_world_to_grid(mob_data[j].z);
+        MobGridCell *cell = &mob_grid[gx][gz];
+
+        if (cell->count < 16) {
+            cell->indices[cell->count++] = j;
+        }
+    }
+}
+
+/* Check if a position collides with any mob in the grid.
+   Also checks dimension to avoid cross-dimension false collisions. */
+static int mob_grid_check_collision(double x, double y, double z, int self_i, uint8_t dimension) {
+    int gx = mob_world_to_grid(x);
+    int gz = mob_world_to_grid(z);
+
+    // Check this cell and 8 adjacent cells
+    for (int dx = -1; dx <= 1; dx++) {
+        for (int dz = -1; dz <= 1; dz++) {
+            int cx = (gx + dx) & MOB_GRID_MASK;
+            int cz = (gz + dz) & MOB_GRID_MASK;
+            MobGridCell *cell = &mob_grid[cx][cz];
+
+            for (int k = 0; k < cell->count; k++) {
+                int j = cell->indices[k];
+                if (j == self_i) continue;
+                if (mob_data[j].dimension != dimension) continue;
+
+                double mx = mob_data[j].x - x;
+                double mz = mob_data[j].z - z;
+                double my = fabs(mob_data[j].y - y);
+                if (mx * mx + mz * mz < 1.0 && my < 2.0) {
+                    return 1;  // Collision!
+                }
+            }
+        }
+    }
+    return 0;
+}
 
 // Check if a block position is within the safe area (spawn protection)
 static int is_in_safe_area(short bx, short bz, uint8_t dimension) {
@@ -432,33 +621,62 @@ static uint8_t loadAppearanceFilesForBase(PlayerAppearance *appearance, const ch
   char path[128];
   int len;
 
-  snprintf(path, sizeof(path), "skins/%s.texture", base_name);
-  len = readTokenFile(path, appearance->texture_value, sizeof(appearance->texture_value));
-  if (len <= 0) {
-    if (len == -2) terminal_ui_log("Skin: %s is too large, ignoring", path);
-    return false;
-  }
+  // Free any previously allocated buffers
+  free(appearance->texture_value);
+  appearance->texture_value = NULL;
+  free(appearance->texture_signature);
+  appearance->texture_signature = NULL;
 
-  appearance->texture_value_len = (uint16_t)len;
+  snprintf(path, sizeof(path), "skins/%s.texture", base_name);
+  // Read file content into a temp buffer first
+  FILE *file = fopen(path, "rb");
+  if (!file) return false;
+
+  char temp_buf[PLAYER_TEXTURE_VALUE_MAX];
+  size_t read_len = fread(temp_buf, 1, sizeof(temp_buf) - 1, file);
+  fclose(file);
+  if (read_len <= 0) return false;
+  temp_buf[read_len] = '\0';
+
+  appearance->texture_value = (char *)malloc(read_len + 1);
+  if (!appearance->texture_value) return false;
+  memcpy(appearance->texture_value, temp_buf, read_len + 1);
+  appearance->texture_value_len = (uint16_t)read_len;
   appearance->has_texture = true;
 
   snprintf(path, sizeof(path), "skins/%s.signature", base_name);
-  len = readTokenFile(path, appearance->texture_signature, sizeof(appearance->texture_signature));
-  if (len > 0) {
-    appearance->texture_signature_len = (uint16_t)len;
-    appearance->has_signature = true;
-  } else if (len == -2) {
-    terminal_ui_log("Skin: %s is too large, ignoring signature", path);
+  file = fopen(path, "rb");
+  if (file) {
+    char sig_buf[PLAYER_TEXTURE_SIGNATURE_MAX];
+    read_len = fread(sig_buf, 1, sizeof(sig_buf) - 1, file);
+    fclose(file);
+    if (read_len > 0) {
+      sig_buf[read_len] = '\0';
+      appearance->texture_signature = (char *)malloc(read_len + 1);
+      if (appearance->texture_signature) {
+        memcpy(appearance->texture_signature, sig_buf, read_len + 1);
+        appearance->texture_signature_len = (uint16_t)read_len;
+        appearance->has_signature = true;
+      }
+    }
   }
 
   return true;
 }
 
 void setClientState (int client_fd, int new_state) {
+  ensure_fd_tables_init();
+  // Fast path: check lookup table
+  int ci = fd_to_client(client_fd);
+  if (ci >= 0 && client_states[ci].client_fd == client_fd) {
+    client_states[ci].state = new_state;
+    return;
+  }
   // Look for a client state with a matching file descriptor
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (client_states[i].client_fd != client_fd) continue;
     client_states[i].state = new_state;
+    fd_set_client(client_fd, i);
     return;
   }
   // If the above failed, look for an unused client state slot
@@ -468,15 +686,21 @@ void setClientState (int client_fd, int new_state) {
     client_states[i].state = new_state;
     client_states[i].compression_threshold = 0; // Disabled by default
     client_states[i].connection_generation++;
+    fd_set_client(client_fd, i);
     return;
   }
 }
 
 // Fast inline check: is this client_fd in play state?
-// Attempts a direct index match first, falls back to linear scan.
 static inline uint8_t isClientInPlay(int client_fd) {
+  int ci = fd_to_client(client_fd);
+  if (ci >= 0) {
+    return client_states[ci].state == STATE_PLAY;
+  }
+  // Fallback linear scan for unusual fd values
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (client_states[i].client_fd == client_fd) {
+      fd_set_client(client_fd, i);
       return client_states[i].state == STATE_PLAY;
     }
   }
@@ -484,32 +708,49 @@ static inline uint8_t isClientInPlay(int client_fd) {
 }
 
 int getClientState (int client_fd) {
+  int ci = fd_to_client(client_fd);
+  if (ci >= 0) {
+    return client_states[ci].state;
+  }
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (client_states[i].client_fd != client_fd) continue;
+    fd_set_client(client_fd, i);
     return client_states[i].state;
   }
   return STATE_NONE;
 }
 
 int getClientIndex (int client_fd) {
+  int ci = fd_to_client(client_fd);
+  if (ci >= 0) return ci;
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (client_states[i].client_fd != client_fd) continue;
+    fd_set_client(client_fd, i);
     return i;
   }
   return -1;
 }
 
 void setCompressionThreshold (int client_fd, int threshold) {
+  int ci = fd_to_client(client_fd);
+  if (ci >= 0) {
+    client_states[ci].compression_threshold = threshold;
+    return;
+  }
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (client_states[i].client_fd != client_fd) continue;
     client_states[i].compression_threshold = threshold;
+    fd_set_client(client_fd, i);
     return;
   }
 }
 
 int getCompressionThreshold (int client_fd) {
+  int ci = fd_to_client(client_fd);
+  if (ci >= 0) return client_states[ci].compression_threshold;
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (client_states[i].client_fd != client_fd) continue;
+    fd_set_client(client_fd, i);
     return client_states[i].compression_threshold;
   }
   return 0;
@@ -576,8 +817,11 @@ void resetPlayerAppearance (int player_index) {
   if (player_index < 0 || player_index >= MAX_PLAYERS) return;
 
   PlayerAppearance *appearance = &player_appearance[player_index];
-  appearance->texture_value[0] = '\0';
-  appearance->texture_signature[0] = '\0';
+  // Free dynamically allocated texture buffers
+  free(appearance->texture_value);
+  appearance->texture_value = NULL;
+  free(appearance->texture_signature);
+  appearance->texture_signature = NULL;
   appearance->texture_value_len = 0;
   appearance->texture_signature_len = 0;
   appearance->has_texture = false;
@@ -612,22 +856,31 @@ void loadPlayerAppearance (int player_index, const uint8_t *uuid, const char *na
 }
 
 void updatePlayerAppearanceClientSettings (int client_fd, uint8_t skin_parts, uint8_t main_hand) {
+  int pi = fd_to_player(client_fd);
+  if (pi >= 0) {
+    player_appearance[pi].skin_parts = skin_parts;
+    player_appearance[pi].main_hand = main_hand ? 1 : 0;
+    return;
+  }
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (player_data[i].client_fd != client_fd) continue;
     player_appearance[i].skin_parts = skin_parts;
     player_appearance[i].main_hand = main_hand ? 1 : 0;
+    fd_set_player(client_fd, i);
     return;
   }
 }
 
 // Assigns the given data to a player_data entry
 int reservePlayerData (int client_fd, uint8_t *uuid, char *name) {
+  ensure_fd_tables_init();
 
   for (int i = 0; i < MAX_PLAYERS; i ++) {
     // Found existing player entry (UUID match)
     if (memcmp(player_data[i].uuid, uuid, 16) == 0) {
       // Set network file descriptor and username
       player_data[i].client_fd = client_fd;
+      fd_set_player(client_fd, i);
       memcpy(player_data[i].name, name, 16);
       // Flag player as loading
       player_data[i].flags |= 0x20;
@@ -656,6 +909,7 @@ int reservePlayerData (int client_fd, uint8_t *uuid, char *name) {
     if (empty) {
       if (player_data_count >= MAX_PLAYERS) return 1;
       player_data[i].client_fd = client_fd;
+      fd_set_player(client_fd, i);
       player_data[i].flags |= 0x20;
       player_data[i].flagval_16 = 0;
       memcpy(player_data[i].uuid, uuid, 16);
@@ -676,9 +930,15 @@ int reservePlayerData (int client_fd, uint8_t *uuid, char *name) {
 }
 
 int getPlayerData (int client_fd, PlayerData **output) {
+  int pi = fd_to_player(client_fd);
+  if (pi >= 0) {
+    *output = &player_data[pi];
+    return 0;
+  }
   for (int i = 0; i < MAX_PLAYERS; i ++) {
     if (player_data[i].client_fd == client_fd) {
       *output = &player_data[i];
+      fd_set_player(client_fd, i);
       return 0;
     }
   }
@@ -709,6 +969,7 @@ void handlePlayerDisconnect (int client_fd) {
     PlayerData leaving_player = player_data[i];
     // Mark the player as being offline
     player_data[i].client_fd = -1;
+    fd_set_player(client_fd, -1);
     player_bow_draw_start[i] = 0;
     player_bow_last_use_tick[i] = 0;
     player_noclip[i] = 0;
@@ -736,9 +997,18 @@ void handlePlayerDisconnect (int client_fd) {
     if (client_states[i].client_fd == client_fd) {
       clear_client_send_queue(client_fd);
       client_states[i].client_fd = -1;
+      fd_set_client(client_fd, -1);
       client_states[i].state = STATE_NONE;
       client_states[i].compression_threshold = 0;
       client_states[i].connection_generation++;
+      // Clean up per-client inflate state and compressed buffer
+      if (client_states[i].inflate_initialized) {
+        inflateEnd(&client_states[i].inflate_stream);
+        client_states[i].inflate_initialized = 0;
+      }
+      free(client_states[i].compressed_buf);
+      client_states[i].compressed_buf = NULL;
+      client_states[i].compressed_buf_cap = 0;
       return;
     }
   }
@@ -962,7 +1232,7 @@ void spawnPlayer (PlayerData *player) {
     spawn_y = player->y;
     spawn_z = (float)player->z + 0.5;
     // If Y is 0 or impossibly low, lift above surface
-    if (spawn_y <= 0 || spawn_y > 319) {
+    if (spawn_y <= 0 || spawn_y > 319 || spawn_y < 5) {
       if (player->dimension == DIMENSION_OVERWORLD) {
         spawn_y = getHeightAt(player->x, player->z) + 1;
       } else {
@@ -979,6 +1249,11 @@ void spawnPlayer (PlayerData *player) {
     spawn_yaw = player->yaw * 180 / 127;
     spawn_pitch = player->pitch * 90 / 127;
   }
+
+  // Final safety clamp: ensure player never spawns below Y=5 or above build limit
+  if (spawn_y < 5.0f) spawn_y = getHeightAt(8, 8) + 1;
+  if (spawn_y > 319.0f) spawn_y = 319.0f;
+  if (spawn_y < 5.0f) spawn_y = 80.0f; // Absolute fallback if getHeightAt also fails
 
   // Teleport player to spawn coordinates (first pass)
   sc_synchronizePlayerPosition(player->client_fd, spawn_x, spawn_y, spawn_z, spawn_yaw, spawn_pitch);
@@ -1554,6 +1829,7 @@ static inline void notify_block_change_mutation(short x, short z, uint8_t dimens
   mark_modified_chunk(chunk_x, chunk_z);
   invalidate_cached_chunk(chunk_x, chunk_z, dimension);
   invalidate_block_lookup_cache();
+  invalidate_water_surface_cache();
 }
 
 uint16_t getBlockChange (short x, int16_t y, short z, uint8_t dimension) {
@@ -7631,24 +7907,25 @@ void handleServerTick (int64_t time_since_last_tick) {
   if (server_ticks % 40 == 0) {
     uint32_t seed = fast_rand();
 
-    // First pass: process all registered wheat (both player-planted and
-    // generated wheat that was registered during chunk generation).
-    for (int i = 0; i < MAX_SPECIAL_BLOCKS; i++) {
-      if (special_blocks[i].block != B_wheat) continue;
-      uint16_t age = special_blocks[i].state & 7;
+    // Process wheat using dedicated tracking list, avoiding a full scan of all
+    // 8192 special block entries.
+    for (int wi = 0; wi < wheat_count; wi++) {
+      WheatCoord *wc = &wheat_coords[wi];
+      uint16_t state = special_block_get_state(wc->x, wc->y, wc->z, wc->dimension);
+      uint16_t age = state & 7;
       if (age >= 7) continue;
-      uint16_t current = getBlockAt2(
-        special_blocks[i].x, special_blocks[i].y, special_blocks[i].z,
-        special_blocks[i].dimension);
+      uint16_t current = getBlockAt2(wc->x, wc->y, wc->z, wc->dimension);
       // Accept both player-planted wheat (B_wheat) and generated wheat (B_wheat_1..B_wheat_6)
       if (current != B_wheat && (current <= B_wheat || current >= B_wheat_7)) continue;
-      if ((seed >> (i & 31)) & 1) {
+      if ((seed >> (wi & 31)) & 1) {
         age++;
-        special_blocks[i].state = age;
+        // Update state through the hash table API - will re-add to wheat list
+        // but wheat_list_add checks for duplicates, so this is harmless.
+        special_block_set_state(wc->x, wc->y, wc->z, wc->dimension, B_wheat, age);
         // For generated wheat (current > B_wheat), convert to planted form so
         // the chunk section's default palette state doesn't override our updates.
         if (current > B_wheat) {
-          makeBlockChange(special_blocks[i].x, special_blocks[i].y, special_blocks[i].z, B_wheat, special_blocks[i].dimension);
+          makeBlockChange(wc->x, wc->y, wc->z, B_wheat, wc->dimension);
         }
         // Broadcast the new visual state to all players
         uint16_t state_id = block_palette[B_wheat] + age;
@@ -7656,14 +7933,10 @@ void handleServerTick (int64_t time_since_last_tick) {
           if (player_data[j].client_fd == -1) continue;
           if (player_data[j].flags & 0x20) continue;
           sc_blockUpdateState(player_data[j].client_fd,
-            special_blocks[i].x,
-            special_blocks[i].y,
-            special_blocks[i].z,
-            state_id);
+            wc->x, wc->y, wc->z, state_id);
         }
       }
     }
-
   }
 
   /**
@@ -7676,6 +7949,9 @@ void handleServerTick (int64_t time_since_last_tick) {
   if (rng_seed == 0) rng_seed = world_seed;
 
   // Tick mob behavior
+  // Build spatial hash ONCE before the mob loop for O(n) collision detection
+  // (mobs move < 0.1 blocks/tick, so the grid is stable for a full tick)
+  mob_grid_build_all();
   for (int i = 0; i < MAX_MOBS; i ++) {
     if (mob_data[i].type == 0) continue;
     int entity_id = -2 - i;
@@ -7743,8 +8019,27 @@ void handleServerTick (int64_t time_since_last_tick) {
       mob_data[i].data = (mob_data[i].data & ~(3 << 6)) | ((panic - 1) << 6);
     }
 
+    // Find the player closest to this mob
+    PlayerData* closest_player = NULL;
+    double closest_dist_double = 2147483647.0;
+    for (int j = 0; j < MAX_PLAYERS; j ++) {
+      if (player_data[j].client_fd == -1) continue;
+      if (player_data[j].dimension != mob_data[i].dimension) continue;
+      double dx = mob_data[i].x - player_data[j].x;
+      double dz = mob_data[i].z - player_data[j].z;
+      double curr_dist = dx * dx + dz * dz; // Squared distance
+      if (curr_dist < closest_dist_double) {
+        closest_dist_double = curr_dist;
+        closest_player = &player_data[j];
+      }
+    }
+
+    // Proximity gating: skip expensive AI for mobs far from players
+    uint8_t is_close_to_player = (closest_player != NULL && closest_dist_double < 2500.0); // 50 blocks squared
+
     // Random ambient sounds - passive mobs vocalize more often
-    {
+    // Only process every 4 ticks and for mobs reasonably close to players
+    if (is_close_to_player && server_ticks % 4 == 0) {
       int ambient_chance = (passive || is_fish) ? 500 : 1500;
       if (r % ambient_chance == 0) {
         int ambient_sound = -1;
@@ -7781,21 +8076,6 @@ void handleServerTick (int64_t time_since_last_tick) {
       }
     }
 
-    // Find the player closest to this mob
-    PlayerData* closest_player = NULL;
-    double closest_dist_double = 2147483647.0;
-    for (int j = 0; j < MAX_PLAYERS; j ++) {
-      if (player_data[j].client_fd == -1) continue;
-      if (player_data[j].dimension != mob_data[i].dimension) continue;
-      double dx = mob_data[i].x - player_data[j].x;
-      double dz = mob_data[i].z - player_data[j].z;
-      double curr_dist = dx * dx + dz * dz; // Squared distance
-      if (curr_dist < closest_dist_double) {
-        closest_dist_double = curr_dist;
-        closest_player = &player_data[j];
-      }
-    }
-
     // Enderman stare mechanic: they agro when you look at them
     if (mob_data[i].type == E_ENDERMAN && closest_player != NULL) {
       double dx = mob_data[i].x - closest_player->x;
@@ -7803,7 +8083,7 @@ void handleServerTick (int64_t time_since_last_tick) {
       double dist_sq = dx * dx + dz * dz;
       if (dist_sq < 256.0) {
         double angle_rad = atan2(dz, dx);
-        int16_t target_yaw = (int16_t)(angle_rad * 128.0 / 3.14159265358979);
+        int16_t target_yaw = (int16_t)(angle_rad * RAD_TO_MOBROT);
         target_yaw = (uint8_t)((target_yaw - 64) & 255);
         uint8_t player_yaw = (uint8_t)(int8_t)closest_player->yaw;
         int16_t diff = (int16_t)((int16_t)player_yaw - target_yaw);
@@ -7815,7 +8095,7 @@ void handleServerTick (int64_t time_since_last_tick) {
           double horiz_dist = sqrt(dist_sq);
           if (horiz_dist > 0.5) {
             double pitch_rad = atan2(dy, horiz_dist);
-            int8_t target_pitch = (int8_t)(pitch_rad * 128.0 / 3.14159265358979);
+            int8_t target_pitch = (int8_t)(pitch_rad * RAD_TO_MOBROT);
             int16_t pitch_diff = (int16_t)((int16_t)(int8_t)closest_player->pitch - (int16_t)target_pitch);
             if (abs((int)pitch_diff) <= 20) staring = 1;
           }
@@ -7968,30 +8248,14 @@ void handleServerTick (int64_t time_since_last_tick) {
       // Decrement movement timer
       if (mob_data[i].move_timer > 0) mob_data[i].move_timer--;
 
-      // Find nearby water surface level. Scanning from world top every tick is
-      // expensive; fish only need local surface avoidance around their current
-      // swim depth.
+      // Use cached water surface height (avoids scanning up to 23 blocks per tick per fish)
       int ws_fish_block_x = mobBlockCoord(new_x);
       int ws_fish_block_z = mobBlockCoord(new_z);
-      int fish_scan_y = mobBlockCoord(new_y);
-      int water_surface = 0;
-      int scan_top = fish_scan_y + 12;
-      int scan_bottom = fish_scan_y - 10;
-      if (scan_top > 319) scan_top = 319;
-      if (scan_bottom < 0) scan_bottom = 0;
-      for (int y = scan_top; y >= scan_bottom; y--) {
-        uint16_t block = getBlockAt2(ws_fish_block_x, y, ws_fish_block_z, mob_data[i].dimension);
-        uint16_t block_above = getBlockAt2(ws_fish_block_x, y + 1, ws_fish_block_z, mob_data[i].dimension);
-        // Water surface is a water block with non-water (or air) above it
-        if (isWaterBlock(block) && !isWaterBlock(block_above)) {
-          water_surface = y;
-          break;
-        }
-      }
+      int fish_surface = get_water_surface_y(ws_fish_block_x, ws_fish_block_z, mob_data[i].dimension);
 
       // Fish must stay at least 1 block below the water surface
-      if (water_surface > 0) {
-        double max_y = (double)water_surface - 1.0; // At least 1 block under surface
+      if (fish_surface > 0) {
+        double max_y = (double)fish_surface - 1.0; // At least 1 block under surface
         if (new_y > max_y) new_y = max_y;
       }
       // Also clamp to prevent swimming too far from spawn depth
@@ -8021,7 +8285,7 @@ void handleServerTick (int64_t time_since_last_tick) {
               mob_data[i].move_dx = (dx / len) * 0.2;
               mob_data[i].move_dz = (dz / len) * 0.2;
               // Calculate yaw from flee direction
-              double angle = atan2(dz, dx) * 256.0 / (2.0 * 3.14159265358979);
+              double angle = atan2(dz, dx) * RAD_TO_MOBROT;
               mob_data[i].yaw_store = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
             } else {
               // Player is very close, pick random direction to RUN
@@ -8178,14 +8442,14 @@ void handleServerTick (int64_t time_since_last_tick) {
               double perp_z = dx / len;
               new_x += perp_x * move_amount * 2.0;
               new_z += perp_z * move_amount * 2.0;
-              double angle = atan2(dz, dx) * 256.0 / (2.0 * 3.14159265358979);
+              double angle = atan2(dz, dx) * RAD_TO_MOBROT;
               yaw = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
             } else {
               double move_x = (dx / len) * move_amount * 2.0 * move_dir;
               double move_z = (dz / len) * move_amount * 2.0 * move_dir;
               new_x += move_x;
               new_z += move_z;
-              double angle = atan2(dz, dx) * 256.0 / (2.0 * 3.14159265358979);
+              double angle = atan2(dz, dx) * RAD_TO_MOBROT;
               yaw = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
             }
           }
@@ -8283,7 +8547,7 @@ void handleServerTick (int64_t time_since_last_tick) {
                 double move_z = (dz / len) * move_amount * 2.0;
                 new_x += move_x;
                 new_z += move_z;
-                double angle = atan2(dz, dx) * 256.0 / (2.0 * 3.14159265358979);
+                double angle = atan2(dz, dx) * RAD_TO_MOBROT;
                 yaw = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
               }
             }
@@ -8318,7 +8582,7 @@ void handleServerTick (int64_t time_since_last_tick) {
             double move_z = (dz / len) * enderman_speed;
             new_x += move_x;
             new_z += move_z;
-            double angle = atan2(dz, dx) * 256.0 / (2.0 * 3.14159265358979);
+            double angle = atan2(dz, dx) * RAD_TO_MOBROT;
             yaw = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
           }
         }
@@ -8353,7 +8617,7 @@ void handleServerTick (int64_t time_since_last_tick) {
 
             new_x += move_x;
             new_z += move_z;
-            double angle = atan2(dz, dx) * 256.0 / (2.0 * 3.14159265358979);
+            double angle = atan2(dz, dx) * RAD_TO_MOBROT;
             yaw = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
           }
         }
@@ -8384,7 +8648,7 @@ void handleServerTick (int64_t time_since_last_tick) {
             double move_z = (dz / len) * move_speed;
             new_x += move_x;
             new_z += move_z;
-            double angle = atan2(dz, dx) * 256.0 / (2.0 * 3.14159265358979);
+            double angle = atan2(dz, dx) * RAD_TO_MOBROT;
             yaw = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
           }
         }
@@ -8483,20 +8747,10 @@ void handleServerTick (int64_t time_since_last_tick) {
         fabs(new_z - mob_data[i].z) < 0.001 &&
         fabs(new_y - mob_data[i].y) < 0.001) continue;
 
-    // Prevent collisions with other mobs
+    // Prevent collisions with other mobs (using spatial hash)
     uint8_t colliding = false;
-    for (int j = 0; j < MAX_MOBS; j ++) {
-      if (j == i) continue;
-      if (mob_data[j].type == 0) continue;
-      if ((mob_data[j].data & 31) == 0) continue; // Skip dead mobs
-      if (mob_data[j].dimension != mob_data[i].dimension) continue;
-      double dx = mob_data[j].x - new_x;
-      double dz = mob_data[j].z - new_z;
-      double dy = fabs(mob_data[j].y - new_y);
-      if (dx * dx + dz * dz < 1.0 && dy < 2.0) {
-        colliding = true;
-        break;
-      }
+    if (is_close_to_player) {
+      colliding = mob_grid_check_collision(new_x, new_y, new_z, i, mob_data[i].dimension);
     }
     if (colliding) continue;
 
@@ -8506,7 +8760,7 @@ void handleServerTick (int64_t time_since_last_tick) {
     ) hurtEntity(entity_id, -1, D_lava, 8);
 
     // Footstep sounds when actually moving horizontally
-    if (!is_fish &&
+    if (is_close_to_player && !is_fish &&
         mob_data[i].type != E_CREEPER &&
         mob_data[i].type != E_ENDERMAN &&
         (fabs(new_x - old_x) > 0.0001 || fabs(new_z - old_z) > 0.0001) &&

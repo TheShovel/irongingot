@@ -38,6 +38,7 @@ typedef struct {
   int send_queue_limit;
   int chunk_queue_limit;
   int infinite_block_changes;  // 0 = fixed size, 1 = dynamic allocation
+  int max_thread_pool;           // Max thread pool workers (0 = auto/4)
   int tick_interval;           // microseconds between server ticks
   int disk_sync_interval;      // microseconds between disk syncs
 

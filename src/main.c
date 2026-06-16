@@ -938,6 +938,12 @@ int main () {
   rebuildBlockChangeIndexes();
   terminal_ui_log("Loaded block changes: %d", block_changes_count);
 
+  // Allocate player appearance data (dynamically to save RAM when MAX_PLAYERS is large)
+  player_appearance = (PlayerAppearance *)calloc(MAX_PLAYERS, sizeof(PlayerAppearance));
+  if (!player_appearance) {
+    fatal_errno_exit("Failed to allocate player appearance data");
+  }
+
   // Initialize all file descriptor references to -1 (unallocated)
   int clients[MAX_PLAYERS], client_index = 0;
   for (int i = 0; i < MAX_PLAYERS; i ++) {
@@ -954,6 +960,10 @@ int main () {
     client_states[i].queued_bytes = 0;
     client_states[i].queued_chunk_bytes = 0;
     client_states[i].connection_generation = 1;
+    memset(&client_states[i].inflate_stream, 0, sizeof(z_stream));
+    client_states[i].inflate_initialized = 0;
+    client_states[i].compressed_buf = NULL;
+    client_states[i].compressed_buf_cap = 0;
     player_data[i].client_fd = -1;
     resetPlayerAppearance(i);
   }
@@ -1248,44 +1258,54 @@ int main () {
             break;
           }
 
-          uint8_t *compressed_buf = malloc(compressed_len);
-          if (!compressed_buf) {
-            perror("Failed to allocate compressed buffer");
-            disconnectClient(&clients[client_index], 8);
-            break;
+          // Use reusable per-client compressed buffer and z_stream
+          ClientState *cs = &client_states[client_index];
+
+          // Initialize inflate stream on first compressed packet
+          if (!cs->inflate_initialized) {
+            memset(&cs->inflate_stream, 0, sizeof(z_stream));
+            cs->inflate_stream.zalloc = Z_NULL;
+            cs->inflate_stream.zfree = Z_NULL;
+            cs->inflate_stream.opaque = Z_NULL;
+            int ret = inflateInit(&cs->inflate_stream);
+            if (ret != Z_OK) {
+              fprintf(stderr, "inflateInit failed: %d\n", ret);
+              disconnectClient(&clients[client_index], 8);
+              break;
+            }
+            cs->inflate_initialized = 1;
           }
 
-          recv_all(client_fd, compressed_buf, compressed_len, false);
-
-          z_stream strm;
-          strm.zalloc = Z_NULL;
-          strm.zfree = Z_NULL;
-          strm.opaque = Z_NULL;
-          strm.avail_in = compressed_len;
-          strm.next_in = compressed_buf;
-          strm.avail_out = MAX_PACKET_LEN;
-          strm.next_out = in_packet_buffer;
-
-          int ret = inflateInit(&strm);
-          if (ret != Z_OK) {
-            fprintf(stderr, "inflateInit failed: %d\n", ret);
-            free(compressed_buf);
-            disconnectClient(&clients[client_index], 8);
-            break;
+          // Ensure compressed buffer is large enough
+          if (cs->compressed_buf_cap < (size_t)compressed_len) {
+            uint8_t *new_buf = (uint8_t *)realloc(cs->compressed_buf, compressed_len);
+            if (!new_buf) {
+              perror("Failed to reallocate compressed buffer");
+              disconnectClient(&clients[client_index], 8);
+              break;
+            }
+            cs->compressed_buf = new_buf;
+            cs->compressed_buf_cap = compressed_len;
           }
 
-          ret = inflate(&strm, Z_FINISH);
+          recv_all(client_fd, cs->compressed_buf, compressed_len, false);
+
+          // Reuse existing inflate stream
+          z_stream *strm = &cs->inflate_stream;
+          inflateReset(strm);
+          strm->avail_in = compressed_len;
+          strm->next_in = cs->compressed_buf;
+          strm->avail_out = MAX_PACKET_LEN;
+          strm->next_out = in_packet_buffer;
+
+          int ret = inflate(strm, Z_FINISH);
           if (ret != Z_STREAM_END) {
             fprintf(stderr, "inflate failed: %d\n", ret);
-            inflateEnd(&strm);
-            free(compressed_buf);
             disconnectClient(&clients[client_index], 8);
             break;
           }
 
-          in_packet_buffer_len = strm.total_out;
-          inflateEnd(&strm);
-          free(compressed_buf);
+          in_packet_buffer_len = strm->total_out;
 
           in_packet_buffer_offset = 0;
           packet_id = readVarInt(client_fd);
@@ -1347,6 +1367,10 @@ int main () {
   terminal_ui_render();
   writePlayerDataToDisk();
   #endif
+
+  // Free player appearance data
+  free(player_appearance);
+  player_appearance = NULL;
 
   // Shutdown chunk streaming thread
   shutdown_chunk_streamer();

@@ -218,9 +218,15 @@ void generate_chunk_data(int x, int z, uint8_t dimension) {
   int world_x = x * 16;
   int world_z = z * 16;
 
-  // Temporary buffer to build complete chunk data
-  uint16_t temp_sections[20][4096];
-  uint8_t temp_biomes[20];
+  // Temporary buffer to build complete chunk data (heap allocated to avoid 160KB stack usage)
+  uint16_t (*temp_sections)[4096] = (uint16_t (*)[4096])malloc(20 * 4096 * sizeof(uint16_t));
+  uint8_t *temp_biomes = (uint8_t *)malloc(20);
+  if (!temp_sections || !temp_biomes) {
+    free(temp_sections);
+    free(temp_biomes);
+    pthread_mutex_unlock(chunk_lock);
+    return;
+  }
 
   // Generate all 20 middle sections into temporary buffer
   for (int i = 0; i < 20; i++) {
@@ -249,13 +255,16 @@ void generate_chunk_data(int x, int z, uint8_t dimension) {
 
   // Copy complete data to cache atomically
   pthread_mutex_lock(&cache_mutex);
-  memcpy(cache->sections, temp_sections, sizeof(temp_sections));
-  memcpy(cache->biomes, temp_biomes, sizeof(temp_biomes));
+  memcpy(cache->sections, temp_sections, 20 * 4096 * sizeof(uint16_t));
+  memcpy(cache->biomes, temp_biomes, 20);
   cache->valid = 1;
   cache->generating = 0;  // Mark as complete
   pthread_mutex_unlock(&cache_mutex);
 
   pthread_mutex_unlock(chunk_lock);
+
+  free(temp_sections);
+  free(temp_biomes);
 }
 
 // Queue background generation for a chunk if needed.
