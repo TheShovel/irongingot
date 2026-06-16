@@ -113,7 +113,6 @@ These are advanced features or aesthetic improvements.
 
 ### 11. World Generation Enhancements
 
-- **Ocean Variants** (Low) - Full ocean biomes (requires rewrite)
 - **River Biomes** (Low) - River generation
 - **Biome-specific Vegetation** (Low) - More tree/flower variety
 - **Underground Lakes** (Low) - Cave decorations

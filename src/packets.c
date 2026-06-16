@@ -5634,6 +5634,9 @@ int cs_playerLoaded (int client_fd) {
   PlayerData *player;
   if (getPlayerData(client_fd, &player)) return 1;
 
+  // Only join if the player hasn't already been joined by the fallback timer
+  if (!(player->flags & 0x20)) return 0;
+
   // Redirect handling to player join procedure
   handlePlayerJoin(player);
 
