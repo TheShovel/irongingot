@@ -694,7 +694,7 @@ void setClientState (int client_fd, int new_state) {
 // Fast inline check: is this client_fd in play state?
 static inline uint8_t isClientInPlay(int client_fd) {
   int ci = fd_to_client(client_fd);
-  if (ci >= 0) {
+  if (ci >= 0 && client_states[ci].client_fd == client_fd) {
     return client_states[ci].state == STATE_PLAY;
   }
   // Fallback linear scan for unusual fd values
@@ -709,7 +709,7 @@ static inline uint8_t isClientInPlay(int client_fd) {
 
 int getClientState (int client_fd) {
   int ci = fd_to_client(client_fd);
-  if (ci >= 0) {
+  if (ci >= 0 && client_states[ci].client_fd == client_fd) {
     return client_states[ci].state;
   }
   for (int i = 0; i < MAX_PLAYERS; i++) {
@@ -722,7 +722,7 @@ int getClientState (int client_fd) {
 
 int getClientIndex (int client_fd) {
   int ci = fd_to_client(client_fd);
-  if (ci >= 0) return ci;
+  if (ci >= 0 && client_states[ci].client_fd == client_fd) return ci;
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (client_states[i].client_fd != client_fd) continue;
     fd_set_client(client_fd, i);
@@ -733,7 +733,7 @@ int getClientIndex (int client_fd) {
 
 void setCompressionThreshold (int client_fd, int threshold) {
   int ci = fd_to_client(client_fd);
-  if (ci >= 0) {
+  if (ci >= 0 && client_states[ci].client_fd == client_fd) {
     client_states[ci].compression_threshold = threshold;
     return;
   }
@@ -747,7 +747,7 @@ void setCompressionThreshold (int client_fd, int threshold) {
 
 int getCompressionThreshold (int client_fd) {
   int ci = fd_to_client(client_fd);
-  if (ci >= 0) return client_states[ci].compression_threshold;
+  if (ci >= 0 && client_states[ci].client_fd == client_fd) return client_states[ci].compression_threshold;
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (client_states[i].client_fd != client_fd) continue;
     fd_set_client(client_fd, i);
@@ -857,7 +857,7 @@ void loadPlayerAppearance (int player_index, const uint8_t *uuid, const char *na
 
 void updatePlayerAppearanceClientSettings (int client_fd, uint8_t skin_parts, uint8_t main_hand) {
   int pi = fd_to_player(client_fd);
-  if (pi >= 0) {
+  if (pi >= 0 && player_data[pi].client_fd == client_fd) {
     player_appearance[pi].skin_parts = skin_parts;
     player_appearance[pi].main_hand = main_hand ? 1 : 0;
     return;
@@ -931,7 +931,7 @@ int reservePlayerData (int client_fd, uint8_t *uuid, char *name) {
 
 int getPlayerData (int client_fd, PlayerData **output) {
   int pi = fd_to_player(client_fd);
-  if (pi >= 0) {
+  if (pi >= 0 && player_data[pi].client_fd == client_fd) {
     *output = &player_data[pi];
     return 0;
   }
@@ -6339,15 +6339,27 @@ static uint8_t getNetherSpawnSurfaceY (short x, short z) {
 static uint8_t getWaterSpawnY(short x, short z, uint8_t dimension) {
   for (int y = TERRAIN_BASE_HEIGHT + 10; y >= 30; y--) {
     uint16_t block = getBlockAt2(x, y, z, dimension);
-    uint16_t block_above = getBlockAt2(x, y + 1, z, dimension);
 
-    // We want the fish to spawn in water with at least 1 water block above
-    if (isWaterBlock(block) && isWaterBlock(block_above)) {
-      // Make sure there's at least one more water or air block above for swimming room
+    // We want the fish to spawn in water with headroom above
+    if (isWaterBlock(block)) {
+      uint16_t block_above = getBlockAt2(x, y + 1, z, dimension);
       uint16_t block_above2 = getBlockAt2(x, y + 2, z, dimension);
-      if (isWaterBlock(block_above2) || block_above2 == B_air) {
+      // The block above must be passable (water or air) for swim room
+      if ((isWaterBlock(block_above) || block_above == B_air) &&
+          (isWaterBlock(block_above2) || block_above2 == B_air)) {
         return (uint8_t)y;
       }
+    }
+  }
+  // DEBUG: check a few specific y-levels to see what blocks exist
+  if (verbose_mode) {
+    static short _dbg_x = -9999, _dbg_z = -9999;
+    if (_dbg_x != x || _dbg_z != z) {
+      _dbg_x = x; _dbg_z = z;
+      uint16_t b62 = getBlockAt2(x, 62, z, dimension);
+      uint16_t b63 = getBlockAt2(x, 63, z, dimension);
+      uint16_t b64 = getBlockAt2(x, 64, z, dimension);
+      terminal_ui_log("[DEBUG] getWaterSpawnY(%d,%d): y=62 block=%d y=63 block=%d y=64 block=%d", x, z, b62, b63, b64);
     }
   }
   return 0;
@@ -6534,7 +6546,12 @@ static void spawnFishInWater(PlayerData *player) {
 
   // Limit fish count (use up to half of mob slots for fish)
   uint8_t max_fish = max_mobs / 2;
-  if (existing_fish >= max_fish) return;
+  if (verbose_mode)
+    terminal_ui_log("[DEBUG] spawnFishInWater: existing_fish=%d max_fish=%d spawn_range=%d min_dist=%d", existing_fish, max_fish, spawn_range, min_dist);
+  if (existing_fish >= max_fish) {
+    if (verbose_mode) terminal_ui_log("[DEBUG]  -> Fish cap reached");
+    return;
+  }
 
   // Fish types
   static const uint8_t fish_types[] = { E_COD, E_SALMON, E_TROPICAL_FISH };
@@ -6544,31 +6561,93 @@ static void spawnFishInWater(PlayerData *player) {
   if (fish_to_spawn > max_fish - existing_fish)
     fish_to_spawn = max_fish - existing_fish;
 
-  for (uint8_t s = 0; s < fish_to_spawn; s++) {
+  // Since the world is fully terrestrial (oceans/rivers map to plains),
+  // water only appears in small noise-driven depressions. Random offsets
+  // often miss these, so we try multiple positions and do a small spiral
+  // search around each one to find nearby water patches.
+  #define MAX_WATER_SPOTS 16
+  short water_spots_x[MAX_WATER_SPOTS];
+  short water_spots_z[MAX_WATER_SPOTS];
+  uint8_t water_spots_y[MAX_WATER_SPOTS];
+  uint8_t water_spot_count = 0;
+
+  // Try up to 10 random offsets and search a 7x7 diamond area around each
+  if (verbose_mode) terminal_ui_log("[DEBUG]  -> Scanning for water positions...");
+  for (int attempt = 0; attempt < 10 && water_spot_count < MAX_WATER_SPOTS; attempt++) {
     int16_t offset_x, offset_z;
     getRandomSpawnOffset(min_dist, spawn_range, &offset_x, &offset_z);
-    short spawn_x = player->x + offset_x;
-    short spawn_z = player->z + offset_z;
+    short base_x = (short)(player->x + offset_x);
+    short base_z = (short)(player->z + offset_z);
 
-    uint8_t spawn_y = getWaterSpawnY(spawn_x, spawn_z, player->dimension);
-    if (spawn_y == 0) continue; // No valid water position found
+    // Spiral search around the base position (up to 3 blocks out)
+    for (int r = 0; r <= 3 && water_spot_count < MAX_WATER_SPOTS; r++) {
+      for (int dx = -r; dx <= r && water_spot_count < MAX_WATER_SPOTS; dx++) {
+        for (int dz_sign = -1; dz_sign <= 1 && water_spot_count < MAX_WATER_SPOTS; dz_sign += 2) {
+          int adz = r - (dx < 0 ? -dx : dx);  // Manhattan ring offset
+          if (adz == 0 && dz_sign == -1) continue; // Skip duplicate center
+          int dz = adz * dz_sign;
+
+          short wx = (short)(base_x + dx);
+          short wz = (short)(base_z + dz);
+
+          uint8_t sy = getWaterSpawnY(wx, wz, player->dimension);
+          if (sy != 0) {
+            water_spots_x[water_spot_count] = wx;
+            water_spots_z[water_spot_count] = wz;
+            water_spots_y[water_spot_count] = sy;
+            water_spot_count++;
+          }
+        }
+      }
+    }
+  }
+
+  if (verbose_mode) terminal_ui_log("[DEBUG]  -> Found %d water spots", water_spot_count);
+  if (water_spot_count == 0) return; // No water found anywhere near this player
+
+  for (uint8_t s = 0; s < fish_to_spawn; s++) {
+    // Pick a random water spot
+    uint8_t idx = fast_rand() % water_spot_count;
+    short spawn_x = water_spots_x[idx];
+    short spawn_z = water_spots_z[idx];
+    uint8_t spawn_y = water_spots_y[idx];
 
     uint8_t type = fish_types[fast_rand() % num_fish_types];
+    if (verbose_mode)
+      terminal_ui_log("[DEBUG]  -> Spawning fish type=%d at (%d, %d, %d)", type, spawn_x, spawn_y, spawn_z);
     // Fish spawn with 3 HP (they're small)
-    // Fish need to be higher in water, so spawn at spawn_y + 1
-    spawnMob(type, spawn_x, spawn_y + 1, spawn_z, 3, player->dimension, 0);
+    // spawn_y is already a water block, so spawn the fish directly in it
+    spawnMob(type, spawn_x, spawn_y, spawn_z, 3, player->dimension, 0);
 
     // Find the fish we just spawned and adjust its Y to float in water
+    uint8_t found_adjust = 0;
     for (int j = 0; j < MAX_MOBS; j++) {
       if (mob_data[j].type == type &&
           mob_data[j].x == (double)spawn_x + 0.5 &&
           mob_data[j].z == (double)spawn_z + 0.5 &&
-          mob_data[j].y == (double)(spawn_y + 1)) {
-        mob_data[j].y = (double)(spawn_y + 1) + 0.5; // Float at center of water block
+          mob_data[j].y == (double)(spawn_y)) {
+        mob_data[j].y = (double)(spawn_y) + 0.5; // Float at center of water block
+        if (verbose_mode)
+          terminal_ui_log("[DEBUG]  -> Adjusted fish[%d] y from %d to %.1f", j, spawn_y, (double)(spawn_y) + 0.5);
+        found_adjust = 1;
         break;
       }
     }
+    if (!found_adjust) {
+      if (verbose_mode) {
+        terminal_ui_log("[DEBUG]  -> WARNING: Could not find spawned fish to adjust Y!");
+        // Check what mobs exist at this position
+        for (int j = 0; j < MAX_MOBS; j++) {
+          if (mob_data[j].type == type &&
+              mob_data[j].x == (double)spawn_x + 0.5 &&
+              mob_data[j].z == (double)spawn_z + 0.5) {
+            terminal_ui_log("[DEBUG]     -> Found fish[%d] at y=%.1f (expected %d)", j, mob_data[j].y, spawn_y);
+          }
+        }
+      }
+    }
   }
+  #undef MAX_WATER_SPOTS
 }
 
 static uint8_t getEndSpawnSurfaceY (short x, short z) {
@@ -6591,14 +6670,27 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
   // normal ambient mob cap/range has already been reached.
   spawnDungeonMobs(player);
 
+  // Fish have their own independent cap, so they're not blocked by the
+  // general mob cap. This is important because the world may have many
+  // pre-existing mobs loaded from disk.
+  if (player->dimension == DIMENSION_OVERWORLD) {
+    spawnFishInWater(player);
+  }
+
   // Count existing mobs near this player
   uint8_t existing = countMobsNearPlayer(player);
-  if ((int)existing >= max_mobs) return;
+  if (verbose_mode)
+    terminal_ui_log("[DEBUG] spawnMobsAroundPlayer: dim=%d existing=%d max_mobs=%d", player->dimension, existing, max_mobs);
+  if ((int)existing >= max_mobs) {
+    if (verbose_mode) terminal_ui_log("[DEBUG]  -> Mob cap full, skipping");
+    return;
+  }
 
   uint8_t slots_left = (uint8_t)(max_mobs - existing);
 
   // Endermen spawn in the End
   if (player->dimension == DIMENSION_END) {
+    if (verbose_mode) terminal_ui_log("[DEBUG]  -> In End dimension");
     uint8_t endermen_to_spawn = (fast_rand() % slots_left) + 1;
     if (endermen_to_spawn > slots_left / 2) endermen_to_spawn = slots_left / 2;
     if (endermen_to_spawn < 1) endermen_to_spawn = 1;
@@ -6620,7 +6712,6 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
   }
 
   spawnVillageVillagers(player);
-  spawnFishInWater(player);
 
   // Passive mob types: Chicken(25), Cow(28), Pig(95), Sheep(106)
   static const uint8_t passive_types[] = { 25, 28, 95, 106 };
@@ -6637,6 +6728,7 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
 
 
   if (player->dimension == DIMENSION_NETHER) {
+    if (verbose_mode) terminal_ui_log("[DEBUG]  -> In Nether dimension");
     // Spawn piglins
     uint8_t piglins_to_spawn = (fast_rand() % slots_left) + 1;
     if (piglins_to_spawn > slots_left / 2) piglins_to_spawn = slots_left / 2;
@@ -8999,10 +9091,15 @@ void handleServerTick (int64_t time_since_last_tick) {
   // Spawn friendly mobs around players at configurable interval
   if (config.mob_spawn_enabled && config.mob_spawn_interval > 0 &&
       server_ticks % (uint32_t)config.mob_spawn_interval == 0) {
+    if (verbose_mode)
+      terminal_ui_log("[DEBUG] Mob spawn tick at server_ticks=%u, dim=%d", server_ticks, player_data[0].dimension);
     for (int i = 0; i < MAX_PLAYERS; i ++) {
       PlayerData *player = &player_data[i];
       if (player->client_fd == -1) continue;
-      if (player->flags & 0x20) continue; // Skip players still loading
+      if (player->flags & 0x20) { if (verbose_mode) terminal_ui_log("[DEBUG]  Player[%d] still loading (flags=0x%04X)", i, player->flags); continue; }
+      if (verbose_mode)
+        terminal_ui_log("[DEBUG]  Calling spawnMobsAroundPlayer for player[%d] at (%.0f, %.0f, %.0f) dim=%d existing=%d",
+          i, (double)player->x, (double)player->y, (double)player->z, player->dimension, countMobsNearPlayer(player));
       spawnMobsAroundPlayer(player);
     }
   }
@@ -9291,7 +9388,10 @@ static void sendPlayerUpdatePackets(int64_t time_since_last_tick) {
       sc_updateTime(player->client_fd, world_time);
       sc_setHealth(player->client_fd, player->health, player->hunger, player->saturation);
       // Sync air value to client for oxygen bar display
-      sendPlayerMetadata(player->client_fd, player);
+      // Only send the air metadata entry (index 1) to avoid re-sending pose/sneak
+      // state to the player themselves, which can cause a flicker on the client.
+      EntityData air_data = { 1, 1, { .varint = player->air } };
+      sc_setEntityMetadata(player->client_fd, player->client_fd, &air_data, 1);
     }
 
     // Send eating completion packets if flag is set

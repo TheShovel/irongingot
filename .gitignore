@@ -12,3 +12,4 @@ bareiron_test
 *.o
 CHANGELOG.md
 world.json
+debug.log

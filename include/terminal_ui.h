@@ -19,6 +19,7 @@ void terminal_ui_set_server_info(
 );
 
 void terminal_ui_log(const char *fmt, ...);
+void terminal_ui_set_log_file(const char *path);
 void terminal_ui_record_client_connect(void);
 void terminal_ui_record_client_disconnect(int cause);
 void terminal_ui_record_packet_in(size_t bytes);

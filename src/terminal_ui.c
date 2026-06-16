@@ -86,6 +86,9 @@ static TerminalUiState ui;
 static pthread_mutex_t ui_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int ui_atexit_registered = 0;
 
+static FILE *log_file = NULL;
+static pthread_mutex_t log_file_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 static int64_t ui_now_us(void) {
   #ifdef ESP_PLATFORM
   return get_program_time();
@@ -397,6 +400,29 @@ void terminal_ui_log(const char *fmt, ...) {
     store_log_unlocked(line);
   }
   pthread_mutex_unlock(&ui_mutex);
+
+  // Write to log file if configured
+  if (log_file != NULL) {
+    pthread_mutex_lock(&log_file_mutex);
+    fprintf(log_file, "%s\n", line);
+    fflush(log_file);
+    pthread_mutex_unlock(&log_file_mutex);
+  }
+}
+
+void terminal_ui_set_log_file(const char *path) {
+  pthread_mutex_lock(&log_file_mutex);
+  if (log_file != NULL) {
+    fclose(log_file);
+    log_file = NULL;
+  }
+  FILE *f = fopen(path, "a");
+  if (f) {
+    log_file = f;
+    fprintf(log_file, "--- irongingot log started ---\n");
+    fflush(log_file);
+  }
+  pthread_mutex_unlock(&log_file_mutex);
 }
 
 void terminal_ui_record_client_connect(void) {

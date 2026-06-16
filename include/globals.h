@@ -630,4 +630,7 @@ void init_global_thread_pool(void);
 ThreadPool* get_global_thread_pool(void);
 void shutdown_global_thread_pool(void);
 
+// Verbose debug logging (set via --verbose / -v command-line flag)
+extern int verbose_mode;
+
 #endif

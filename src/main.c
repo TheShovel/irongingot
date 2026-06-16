@@ -802,13 +802,31 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
 
 }
 
-int main () {
+int main (int argc, char **argv) {
   #if defined(__linux__)
     prctl(PR_SET_NAME, "irongingot", 0, 0, 0);
   #endif
 
+  // Extract command-line flags before initializing UI
+  const char *log_file_path = NULL;
+  for (int i = 1; i < argc; i++) {
+    if ((strcmp(argv[i], "--log-file") == 0 || strcmp(argv[i], "-L") == 0) && i + 1 < argc) {
+      log_file_path = argv[++i];
+    }
+    if (strcmp(argv[i], "--verbose") == 0 || strcmp(argv[i], "-v") == 0) {
+      verbose_mode = 1;
+    }
+  }
+
   printTransRightsBanner();
   terminal_ui_init();
+
+  // Set up log file if requested
+  if (log_file_path) {
+    terminal_ui_set_log_file(log_file_path);
+    terminal_ui_log("Logging to file: %s", log_file_path);
+  }
+
   terminal_ui_log("Starting irongingot server");
 
   #ifdef _WIN32 //initialize windows socket
