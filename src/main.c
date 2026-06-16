@@ -491,13 +491,10 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
           memcpy(item_uuid + 4, &i, 4);
           memset(item_uuid + 8, 0, 8);
           int entity_id = ITEM_ENTITY_ID_BASE - i;
-          int16_t mvx = (int16_t)(item_entity_data[i].vx * 8000.0);
-          int16_t mvy = (int16_t)(item_entity_data[i].vy * 8000.0);
-          int16_t mvz = (int16_t)(item_entity_data[i].vz * 8000.0);
           sc_spawnEntity(
             client_fd, entity_id, item_uuid, 69,
             item_entity_data[i].x, item_entity_data[i].y, item_entity_data[i].z,
-            0, 0, mvx, mvy, mvz
+            0, 0, 0, 0, 0
           );
           // Send item slot metadata
           startPacket(client_fd, 0x5C);

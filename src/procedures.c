@@ -5774,10 +5774,10 @@ void spawnItemEntity (double x, double y, double z, uint16_t item, uint8_t count
     double vx, double vy, double vz) {
   if (item == 0 || count == 0) return;
 
-  // Convert to Minecraft velocity units (1 unit = 1/8000 block/tick)
-  int16_t mvx = (int16_t)(vx * 8000.0);
-  int16_t mvy = (int16_t)(vy * 8000.0);
-  int16_t mvz = (int16_t)(vz * 8000.0);
+  // Server simulates physics — client just renders where we tell it
+  int16_t mvx = 0;
+  int16_t mvy = 0;
+  int16_t mvz = 0;
 
   for (int i = 0; i < MAX_ITEM_ENTITIES; i++) {
     if (item_entity_data[i].active) continue;
@@ -5843,7 +5843,7 @@ void tickItemEntities (void) {
         int by = (int)floor(item_entity_data[i].y);
         int bz = (int)floor(item_entity_data[i].z);
         uint16_t block_below = getBlockAt2(bx, by - 1, bz, item_entity_data[i].dimension);
-        if (block_below != 0 || item_entity_data[i].y <= -64) {
+        if (!isPassableBlock(block_below) || item_entity_data[i].y <= -64) {
           item_entity_data[i].y = by;
           item_entity_data[i].vx = 0;
           item_entity_data[i].vy = 0;
@@ -5853,10 +5853,11 @@ void tickItemEntities (void) {
       }
     }
 
-    // Force client to server position every 3 ticks
-    if (item_entity_data[i].age % 3 == 0) {
+    // Teleport while flying — grounded items don't move
+    if (!item_entity_data[i].on_ground) {
       for (int j = 0; j < MAX_PLAYERS; j++) {
         if (player_data[j].client_fd == -1) continue;
+        if (player_data[j].flags & 0x20) continue;
         if (player_data[j].dimension != item_entity_data[i].dimension) continue;
         sc_teleportEntity(player_data[j].client_fd, entity_id,
           item_entity_data[i].x, item_entity_data[i].y, item_entity_data[i].z, 0, 0);
