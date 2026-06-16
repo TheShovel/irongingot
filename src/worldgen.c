@@ -155,6 +155,33 @@ static TLS_STORAGE int g_cx = 0x7FFFFFFF, g_cy = 0x7FFFFFFF, g_cz = 0x7FFFFFFF;
 static TLS_STORAGE double g_cave_density[GRID_CELLS][GRID_CELLS][GRID_CELLS];
 static TLS_STORAGE double g_ore_density[GRID_CELLS][GRID_CELLS][GRID_CELLS];
 
+// Trilinear interpolation into a 4×4×4 density grid. Replaces nearest-neighbor
+// to avoid perfectly square cave/ore blobs.
+static inline double grid_lookup(double grid[GRID_CELLS][GRID_CELLS][GRID_CELLS],
+                                  int wx, int wy, int wz,
+                                  int ox, int oy, int oz) {
+    int rx = wx - ox, ry = wy - oy, rz = wz - oz;
+    int gx = rx / 4; if (gx > 3) gx = 3;
+    int gy = ry / 4; if (gy > 3) gy = 3;
+    int gz = rz / 4; if (gz > 3) gz = 3;
+    double fx = (rx - gx * 4) / 4.0;
+    double fy = (ry - gy * 4) / 4.0;
+    double fz = (rz - gz * 4) / 4.0;
+    int gx1 = gx + 1; if (gx1 > 3) gx1 = 3;
+    int gy1 = gy + 1; if (gy1 > 3) gy1 = 3;
+    int gz1 = gz + 1; if (gz1 > 3) gz1 = 3;
+    // lerp along x for 4 edges
+    double c00 = grid[gx][gy][gz]   + fx * (grid[gx1][gy][gz]   - grid[gx][gy][gz]);
+    double c10 = grid[gx][gy1][gz]  + fx * (grid[gx1][gy1][gz]  - grid[gx][gy1][gz]);
+    double c01 = grid[gx][gy][gz1]  + fx * (grid[gx1][gy][gz1]  - grid[gx][gy][gz1]);
+    double c11 = grid[gx][gy1][gz1] + fx * (grid[gx1][gy1][gz1] - grid[gx][gy1][gz1]);
+    // lerp along y
+    double c0 = c00 + fy * (c10 - c00);
+    double c1 = c01 + fy * (c11 - c01);
+    // lerp along z
+    return c0 + fz * (c1 - c0);
+}
+
 // Per-section structure cell caches. A 16x16 section falls into exactly
 // one cell for each structure, so we cache after the first lookup.
 static TLS_STORAGE uint64_t d_cell_key_cache;
@@ -706,10 +733,7 @@ static inline double getOreDensity(int x, int y, int z) {
         y >= g_cy && y < g_cy + 16 &&
         z >= g_cz && z < g_cz + 16)
     {
-        int gx = (x - g_cx) / 4; if (gx > 3) gx = 3;
-        int gy = (y - g_cy) / 4; if (gy > 3) gy = 3;
-        int gz = (z - g_cz) / 4; if (gz > 3) gz = 3;
-        return g_ore_density[gx][gy][gz];
+        return grid_lookup(g_ore_density, x, y, z, g_cx, g_cy, g_cz);
     }
     double on = octave_sample(&ore_clump_noise, x * 0.12, y * 0.12, z * 0.12);
     return (on + 1.0) / 2.0;
@@ -773,17 +797,14 @@ static inline uint8_t isCaveSimple(int x, int y, int z, uint8_t height, uint8_t 
   // Don't generate caves below bedrock level
   if (y < 5) return 0;
 
-  // Look up from precomputed grid when available
+  // Look up from precomputed grid when available (trilinear interpolation)
   double cave_density;
   if (g_cy != 0x7FFFFFFF &&
       x >= g_cx && x < g_cx + 16 &&
       y >= g_cy && y < g_cy + 16 &&
       z >= g_cz && z < g_cz + 16)
   {
-    int gx = (x - g_cx) / 4; if (gx > 3) gx = 3;
-    int gy = (y - g_cy) / 4; if (gy > 3) gy = 3;
-    int gz = (z - g_cz) / 4; if (gz > 3) gz = 3;
-    cave_density = g_cave_density[gx][gy][gz];
+    cave_density = grid_lookup(g_cave_density, x, y, z, g_cx, g_cy, g_cz);
   } else {
     double noise = octave_sample(&cave_noise, x * 0.04, y * 0.04 * 0.5, z * 0.04);
     cave_density = (noise + 1.0) / 2.0;
