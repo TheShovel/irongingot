@@ -212,7 +212,7 @@ static void streamChunksForPlayer(PlayerData *player) {
       chunk_stream_last_center_x[player_index] != center_x ||
       chunk_stream_last_center_z[player_index] != center_z ||
       chunk_stream_last_dimension[player_index] != player->dimension) {
-    clearDistantVisitedChunks(player, center_x, center_z, VIEW_DISTANCE);
+    clearDistantVisitedChunks(player, center_x, center_z, config.view_distance);
     if (player_index >= 0 && player_index < MAX_PLAYERS) {
       chunk_stream_last_center_x[player_index] = (short)center_x;
       chunk_stream_last_center_z[player_index] = (short)center_z;
@@ -226,11 +226,11 @@ static void streamChunksForPlayer(PlayerData *player) {
     return;
   }
 
-  int chunks_per_cycle = chunk_backlog > (512 * 1024) ? 1 : 2;
-  int chunk_attempt_budget = chunks_per_cycle * 3;
+  int chunks_per_cycle = chunk_backlog > (512 * 1024) ? 4 : 10;
+  int chunk_attempt_budget = chunks_per_cycle * 2;
   int64_t now_us = get_program_time();
 
-  for (int radius = 0; radius <= VIEW_DISTANCE &&
+  for (int radius = 0; radius <= config.view_distance &&
        chunks_per_cycle > 0 &&
        chunk_attempt_budget > 0; radius++) {
     for (int dz = -radius; dz <= radius &&

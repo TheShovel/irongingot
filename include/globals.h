@@ -44,7 +44,9 @@
 #define GAMEMODE 0
 
 // Max render distance, determines how many chunks to send
-#define VIEW_DISTANCE 5
+// Overridden by config.view_distance at runtime; this default is used only
+// before config is loaded (e.g. during early init).
+#define VIEW_DISTANCE_DEFAULT 5
 
 // Dimension identifiers (avoid conflict with cubiomes DIM_NETHER/DIM_OVERWORLD)
 #define DIMENSION_OVERWORLD 0

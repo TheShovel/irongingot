@@ -171,9 +171,11 @@ static int maybe_pregen_one_chunk(void) {
     int px = div_floor(player_data[i].x, 16);
     int pz = div_floor(player_data[i].z, 16);
 
-    // Keep a very small warm cache around each active player.
-    for (int dz = -2; dz <= 2; dz++) {
-      for (int dx = -2; dx <= 2; dx++) {
+    // Tiny warm cache around each active player.
+    // With cache_size=4 and fast gen (~1.7ms/chunk), pregen only needs
+    // to keep a few chunks ready for the next streamer cycle.
+    for (int dz = -1; dz <= 1; dz++) {
+      for (int dx = -1; dx <= 1; dx++) {
         int cx = px + dx;
         int cz = pz + dz;
 
@@ -349,7 +351,7 @@ void invalidate_cached_chunk(int x, int z, uint8_t dimension) {
 }
 
 // Worker threads - continuously generate queued chunks
-#define MAX_CHUNK_GENERATOR_WORKERS 4
+#define MAX_CHUNK_GENERATOR_WORKERS 8
 static pthread_t worker_threads[MAX_CHUNK_GENERATOR_WORKERS];
 static int worker_thread_count = 1;
 static uint8_t running = 0;
@@ -405,10 +407,11 @@ void init_chunk_generator() {
 
   int cpu_count = get_cpu_count();
   if (cpu_count < 1) cpu_count = 1;
-  // Keep chunk generation conservative so it cannot starve gameplay.
-  // One worker for up to 4 cores, two workers for larger hosts.
-  if (cpu_count <= 4) worker_thread_count = 1;
-  else worker_thread_count = 2;
+  // More workers for faster chunk generation, scaled to CPU count.
+  if (cpu_count <= 2) worker_thread_count = 1;
+  else if (cpu_count <= 4) worker_thread_count = 2;
+  else if (cpu_count <= 8) worker_thread_count = 4;
+  else worker_thread_count = 6;
   if (worker_thread_count > MAX_CHUNK_GENERATOR_WORKERS) worker_thread_count = MAX_CHUNK_GENERATOR_WORKERS;
 
   for (intptr_t i = 0; i < worker_thread_count; i++) {

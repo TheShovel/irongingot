@@ -58,7 +58,7 @@ void init_config_defaults(void) {
   config.biome_size = 64;  // chunk_size * 8
 
   // Performance settings
-  config.chunk_cache_size = 64;
+  config.chunk_cache_size = 24;
   config.max_packet_len = 262144;
   config.max_block_changes = 20000;
   config.send_queue_limit = 6 * 1024 * 1024;

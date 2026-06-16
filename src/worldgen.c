@@ -147,6 +147,28 @@ typedef struct {
 } BiomeCacheEntry;
 static TLS_STORAGE BiomeCacheEntry biome_cache[BIOME_CACHE_SIZE];
 
+// Precomputed per-section grids to avoid per-block octave_sample calls.
+// Set by buildChunkSection, consumed by isCaveSimple / getOreAt.
+// Each grid cell covers 4x4x4 blocks (4 cells per 16-block dimension).
+#define GRID_CELLS 4
+static TLS_STORAGE int g_cx = 0x7FFFFFFF, g_cy = 0x7FFFFFFF, g_cz = 0x7FFFFFFF;
+static TLS_STORAGE double g_cave_density[GRID_CELLS][GRID_CELLS][GRID_CELLS];
+static TLS_STORAGE double g_ore_density[GRID_CELLS][GRID_CELLS][GRID_CELLS];
+
+// Per-section structure cell caches. A 16x16 section falls into exactly
+// one cell for each structure, so we cache after the first lookup.
+static TLS_STORAGE uint64_t d_cell_key_cache;
+static TLS_STORAGE int d_cell_x_cache = 0x7FFFFFFF;
+static TLS_STORAGE int d_cell_z_cache = 0x7FFFFFFF;
+static TLS_STORAGE int d_has_cell_cache;
+static TLS_STORAGE int d_cx_cache, d_cz_cache, d_floor_y_cache;
+
+static TLS_STORAGE int sh_cell_x_cache = 0x7FFFFFFF;
+static TLS_STORAGE int sh_cell_z_cache = 0x7FFFFFFF;
+static TLS_STORAGE uint64_t sh_key_cache;
+static TLS_STORAGE int sh_has_cell_cache;
+static TLS_STORAGE int sh_cx_cache, sh_cz_cache, sh_base_y_cache;
+
 uint8_t getChunkBiomeRaw(short x, short z);
 void init_worldgen(void);
 
@@ -475,41 +497,24 @@ static uint8_t getHeightAtRaw (int x, int z) {
   uint8_t b01 = getChunkBiome(gx, gz + 1);
   uint8_t b11 = getChunkBiome(gx + 1, gz + 1);
 
-  // Get base height and scale for each biome
-  double base00 = 64.0, scale00 = 12.0;
-  double base10 = 64.0, scale10 = 12.0;
-  double base01 = 64.0, scale01 = 12.0;
-  double base11 = 64.0, scale11 = 12.0;
+  // Get base height and scale for each biome via lookup table.
+  static const double biome_base[64] = {
+    64.0,68.0,64.0,95.0,70.0,72.0,61.0,64.0,64.0,64.0,
+    70.0,65.0,64.0,75.0,70.0,70.0,70.0,80.0,80.0,64.0,
+    64.0,115.0,120.0,110.0,90.0,85.0,72.0,75.0,95.0,85.0,
+    105.0,90.0,68.0,75.0,65.0,80.0,64.0,64.0,64.0,64.0,64.0
+  };
+  static const double biome_scale[64] = {
+    12.0,12.0,4.0,70.0,25.0,22.0,4.0,12.0,12.0,12.0,
+    20.0,10.0,12.0,20.0,25.0,25.0,20.0,40.0,40.0,12.0,
+    12.0,100.0,110.0,95.0,45.0,35.0,22.0,20.0,70.0,50.0,
+    90.0,60.0,12.0,30.0,15.0,40.0,12.0,12.0,12.0,12.0,12.0
+  };
 
-  #define SET_BIOME_HEIGHT(biome, base, scale) \
-    if (biome == W_desert) { base = 64.0; scale = 4.0; } \
-    else if (biome == W_snowy_plains || biome == W_snowy_taiga) { base = 70.0; scale = 20.0; } \
-    else if (biome == W_savanna) { base = 80.0; scale = 40.0; } \
-    else if (biome == W_windswept_savanna) { base = 85.0; scale = 50.0; } \
-    else if (biome == W_windswept_hills || biome == W_windswept_forest) { base = 95.0; scale = 70.0; } \
-    else if (biome == W_jagged_peaks) { base = 120.0; scale = 110.0; } \
-    else if (biome == W_frozen_peaks) { base = 110.0; scale = 95.0; } \
-    else if (biome == W_stony_peaks) { base = 115.0; scale = 100.0; } \
-    else if (biome == W_snowy_slopes) { base = 105.0; scale = 90.0; } \
-    else if (biome == W_grove) { base = 90.0; scale = 60.0; } \
-    else if (biome == W_cherry_grove) { base = 85.0; scale = 35.0; } \
-    else if (biome == W_swamp) { base = 61.0; scale = 4.0; } \
-    else if (biome == W_meadow) { base = 90.0; scale = 45.0; } \
-    else if (biome == W_forest || biome == W_birch_forest || biome == W_dark_forest) { base = 70.0; scale = 25.0; } \
-    else if (biome == W_flower_forest) { base = 75.0; scale = 30.0; } \
-    else if (biome == W_taiga || biome == W_snowy_taiga || biome == W_old_growth_pine_taiga) { base = 72.0; scale = 22.0; } \
-    else if (biome == W_jungle || biome == W_bamboo_jungle) { base = 75.0; scale = 20.0; } \
-    else if (biome == W_plains || biome == W_sunflower_plains) { base = 68.0; scale = 12.0; } \
-    else if (biome == W_badlands || biome == W_eroded_badlands) { base = 80.0; scale = 40.0; } \
-    else if (biome == W_ice_spikes) { base = 65.0; scale = 15.0; } \
-    else if (biome == W_mushroom_fields) { base = 65.0; scale = 10.0; }
-
-  SET_BIOME_HEIGHT(b00, base00, scale00);
-  SET_BIOME_HEIGHT(b10, base10, scale10);
-  SET_BIOME_HEIGHT(b01, base01, scale01);
-  SET_BIOME_HEIGHT(b11, base11, scale11);
-
-  #undef SET_BIOME_HEIGHT
+  double base00 = biome_base[b00], scale00 = biome_scale[b00];
+  double base10 = biome_base[b10], scale10 = biome_scale[b10];
+  double base01 = biome_base[b01], scale01 = biome_scale[b01];
+  double base11 = biome_base[b11], scale11 = biome_scale[b11];
 
   // Bilinear interpolation of base height and scale
   double base_height = base00 * (1-wx) * (1-wz) + base10 * wx * (1-wz) +
@@ -660,90 +665,107 @@ uint8_t getHeightAtFromHash (int rx, int rz, int _x, int _z, uint32_t chunk_hash
 
 // Check if this position is an ore "seed" (starting point of a vein)
 // Returns the ore type or 0 if not a seed
-static uint16_t getOreSeedAt(int x, int y, int z, uint8_t biome) {
-  // Sample ore clump noise to find vein centers
-  double ore_noise = octave_sample(&ore_clump_noise, x * 0.12, y * 0.12, z * 0.12);
-  double ore_density = (ore_noise + 1.0) / 2.0;
-  
-  // Use position-based hash for additional randomness
-  uint8_t ore_hash = (uint8_t)(x * 31 + y * 37 + z * 41);
-  
-  // Diamond: deep underground (Y < 16), rare
+static inline uint8_t ore_hash(int x, int y, int z) { return (uint8_t)(x * 31 + y * 37 + z * 41); }
+
+static uint16_t getOreSeedAt(int x, int y, int z, uint8_t biome, double ore_density) {
+  uint8_t h = ore_hash(x, y, z);
+
   if (y < 16) {
-    if (ore_density > 0.75 && (ore_hash & 0x1F) == 0) return B_diamond_ore;
-    if (ore_density > 0.70 && (ore_hash & 0x3F) == 0) return B_gold_ore;
+    if (ore_density > 0.75 && (h & 0x1F) == 0) return B_diamond_ore;
+    if (ore_density > 0.70 && (h & 0x3F) == 0) return B_gold_ore;
   }
 
-  // Emerald: rare cave-level ore, more common in mountain-like biomes.
   if (y >= 8 && y < 48) {
+    // Emerald: rare cave-level ore, more common in mountain-like biomes.
     uint8_t mountain_biome = (
-      biome == W_windswept_hills ||
-      biome == W_windswept_forest ||
-      biome == W_stony_peaks ||
-      biome == W_jagged_peaks ||
-      biome == W_frozen_peaks ||
-      biome == W_snowy_slopes ||
-      biome == W_grove
+      biome == W_windswept_hills || biome == W_windswept_forest ||
+      biome == W_stony_peaks || biome == W_jagged_peaks ||
+      biome == W_frozen_peaks || biome == W_snowy_slopes || biome == W_grove
     );
     if (mountain_biome) {
-      if (ore_density > 0.60 && (ore_hash & 0x0F) == 0) return B_emerald_ore;
-    } else if (ore_density > 0.74 && (ore_hash & 0x3F) == 0) return B_emerald_ore;
+      if (ore_density > 0.60 && (h & 0x0F) == 0) return B_emerald_ore;
+    } else if (ore_density > 0.74 && (h & 0x3F) == 0) return B_emerald_ore;
   }
-  
-  // Iron: mid-level (Y 16-48), very common
+
   if (y >= 16 && y < 48) {
-    if (ore_density > 0.55 && (ore_hash & 0x07) == 0) return B_iron_ore;
-    if (ore_density > 0.50 && (ore_hash & 0x0F) == 0) return B_copper_ore;
+    if (ore_density > 0.55 && (h & 0x07) == 0) return B_iron_ore;
+    if (ore_density > 0.50 && (h & 0x0F) == 0) return B_copper_ore;
   }
-  
-  // Coal: widespread (Y < 64), very common
+
   if (y < 64) {
-    if (ore_density > 0.55 && (ore_hash & 0x07) == 0) return B_coal_ore;
+    if (ore_density > 0.55 && (h & 0x07) == 0) return B_coal_ore;
   }
-  
+
+  return 0;
+}
+
+// Return precomputed ore density from grid, or compute on the fly.
+static inline double getOreDensity(int x, int y, int z) {
+    if (g_cy != 0x7FFFFFFF &&
+        x >= g_cx && x < g_cx + 16 &&
+        y >= g_cy && y < g_cy + 16 &&
+        z >= g_cz && z < g_cz + 16)
+    {
+        int gx = (x - g_cx) / 4; if (gx > 3) gx = 3;
+        int gy = (y - g_cy) / 4; if (gy > 3) gy = 3;
+        int gz = (z - g_cz) / 4; if (gz > 3) gz = 3;
+        return g_ore_density[gx][gy][gz];
+    }
+    double on = octave_sample(&ore_clump_noise, x * 0.12, y * 0.12, z * 0.12);
+    return (on + 1.0) / 2.0;
+}
+
+// Single-ore-seed check that includes spread from all 6 neighbours.
+// Returns ore type or 0 if no ore at the center position.
+static uint16_t getOreAt(int x, int y, int z, uint8_t biome) {
+  double ore_density = getOreDensity(x, y, z);
+
+  uint16_t ore = getOreSeedAt(x, y, z, biome, ore_density);
+  if (ore != 0) return ore;
+
+  // Try to spread from adjacent blocks.  One octave_sample call to
+  // match the seed check, then a cheap hash test for each direction.
+  int dir = ((x * 13) ^ (y * 37) ^ (z * 53)) & 7;
+  switch (dir) {
+    case 0:
+      ore = getOreSeedAt(x + 1, y, z, biome, ore_density);
+      if (ore != 0 && ((x * 13 + y * 37 + z * 53) & 0x03) == 0) return ore;
+      break;
+    case 1:
+      ore = getOreSeedAt(x - 1, y, z, biome, ore_density);
+      if (ore != 0 && ((x * 17 + y * 41 + z * 59) & 0x03) == 0) return ore;
+      break;
+    case 2:
+      ore = getOreSeedAt(x, y + 1, z, biome, ore_density);
+      if (ore != 0 && ((x * 19 + y * 43 + z * 61) & 0x03) == 0) return ore;
+      break;
+    case 3:
+      ore = getOreSeedAt(x, y - 1, z, biome, ore_density);
+      if (ore != 0 && ((x * 23 + y * 47 + z * 67) & 0x03) == 0) return ore;
+      break;
+    case 4:
+      ore = getOreSeedAt(x, y, z + 1, biome, ore_density);
+      if (ore != 0 && ((x * 29 + y * 51 + z * 71) & 0x03) == 0) return ore;
+      break;
+    case 5:
+      ore = getOreSeedAt(x, y, z - 1, biome, ore_density);
+      if (ore != 0 && ((x * 31 + y * 53 + z * 73) & 0x03) == 0) return ore;
+      break;
+    default:
+      break;
+  }
   return 0;
 }
 
 // Generate ore at position, including spreading from nearby seeds
 // Returns the ore block type or 0 if no ore
-static uint16_t getOreClumpAt(int x, int y, int z, uint8_t biome) {
-  // First, check if this block is an ore seed
-  uint16_t seed_ore = getOreSeedAt(x, y, z, biome);
-  if (seed_ore != 0) return seed_ore;
-  
-  // Not a seed - check if adjacent to a seed and spread with 1/4 chance
-  // Each direction has its own hash for independent spread chance
-  uint16_t adjacent_ore = 0;
-  
-  // Check +X neighbor (25% chance to spread)
-  adjacent_ore = getOreSeedAt(x + 1, y, z, biome);
-  if (adjacent_ore != 0 && ((x * 13 + y * 37 + z * 53) & 0x03) == 0) return adjacent_ore;
-  
-  // Check -X neighbor
-  adjacent_ore = getOreSeedAt(x - 1, y, z, biome);
-  if (adjacent_ore != 0 && ((x * 17 + y * 41 + z * 59) & 0x03) == 0) return adjacent_ore;
-  
-  // Check +Y neighbor
-  adjacent_ore = getOreSeedAt(x, y + 1, z, biome);
-  if (adjacent_ore != 0 && ((x * 19 + y * 43 + z * 61) & 0x03) == 0) return adjacent_ore;
-  
-  // Check -Y neighbor
-  adjacent_ore = getOreSeedAt(x, y - 1, z, biome);
-  if (adjacent_ore != 0 && ((x * 23 + y * 47 + z * 67) & 0x03) == 0) return adjacent_ore;
-  
-  // Check +Z neighbor
-  adjacent_ore = getOreSeedAt(x, y, z + 1, biome);
-  if (adjacent_ore != 0 && ((x * 29 + y * 51 + z * 71) & 0x03) == 0) return adjacent_ore;
-  
-  // Check -Z neighbor
-  adjacent_ore = getOreSeedAt(x, y, z - 1, biome);
-  if (adjacent_ore != 0 && ((x * 31 + y * 53 + z * 73) & 0x03) == 0) return adjacent_ore;
-  
-  return 0;
+static inline uint16_t getOreClumpAt(int x, int y, int z, uint8_t biome) {
+  return getOreAt(x, y, z, biome);
 }
 
 // Simple cave check using surface-like noise
 // Reuses the same noise type as terrain but with different scaling
+// Uses precomputed grid (set by buildChunkSection) when available.
 static inline uint8_t isCaveSimple(int x, int y, int z, uint8_t height, uint8_t biome) {
   // Don't generate caves too close to the surface
   if (y > height - 4) return 0;
@@ -751,12 +773,21 @@ static inline uint8_t isCaveSimple(int x, int y, int z, uint8_t height, uint8_t 
   // Don't generate caves below bedrock level
   if (y < 5) return 0;
 
-  // Use 3D noise with surface-like parameters for natural cave shapes
-  double cave_scale = 0.04;  // Larger scale = bigger, smoother caves
-  double noise = octave_sample(&cave_noise, x * cave_scale, y * cave_scale * 0.5, z * cave_scale);
-
-  // Normalize from [-1, 1] to [0, 1]
-  double cave_density = (noise + 1.0) / 2.0;
+  // Look up from precomputed grid when available
+  double cave_density;
+  if (g_cy != 0x7FFFFFFF &&
+      x >= g_cx && x < g_cx + 16 &&
+      y >= g_cy && y < g_cy + 16 &&
+      z >= g_cz && z < g_cz + 16)
+  {
+    int gx = (x - g_cx) / 4; if (gx > 3) gx = 3;
+    int gy = (y - g_cy) / 4; if (gy > 3) gy = 3;
+    int gz = (z - g_cz) / 4; if (gz > 3) gz = 3;
+    cave_density = g_cave_density[gx][gy][gz];
+  } else {
+    double noise = octave_sample(&cave_noise, x * 0.04, y * 0.04 * 0.5, z * 0.04);
+    cave_density = (noise + 1.0) / 2.0;
+  }
 
   // Cave threshold - higher = fewer caves
   double threshold = 0.65;
@@ -901,9 +932,22 @@ static uint16_t getDungeonBlockAt(int x, int y, int z) {
 
   int cell_x = div_floor(x, DUNGEON_SPACING);
   int cell_z = div_floor(z, DUNGEON_SPACING);
+
+  // Use cached cell lookup — all blocks in a 16x16 section share the same cell.
   int cx, cz, floor_y;
   uint64_t key;
-  if (!getDungeonCell(cell_x, cell_z, &cx, &cz, &floor_y, &key)) return DUNGEON_NONE;
+  if (cell_x == d_cell_x_cache && cell_z == d_cell_z_cache) {
+    if (!d_has_cell_cache) return DUNGEON_NONE;
+    cx = d_cx_cache; cz = d_cz_cache; floor_y = d_floor_y_cache; key = d_cell_key_cache;
+  } else {
+    d_cell_x_cache = cell_x; d_cell_z_cache = cell_z;
+    if (!getDungeonCell(cell_x, cell_z, &cx, &cz, &floor_y, &key)) {
+      d_has_cell_cache = 0;
+      return DUNGEON_NONE;
+    }
+    d_has_cell_cache = 1;
+    d_cx_cache = cx; d_cz_cache = cz; d_floor_y_cache = floor_y; d_cell_key_cache = key;
+  }
 
   int half_x = 4 + (int)((key >> 3) & 1ULL);
   int half_z = 4 + (int)((key >> 4) & 1ULL);
@@ -1141,9 +1185,22 @@ static uint16_t getStrongholdBlockAt(int x, int y, int z) {
 
   int cell_x = div_floor(x, STRONGHOLD_SPACING);
   int cell_z = div_floor(z, STRONGHOLD_SPACING);
+
+  // Use cached cell lookup.
   int cx, cz, base_y;
   uint64_t key;
-  if (!getStrongholdCell(cell_x, cell_z, &cx, &cz, &base_y, &key)) return STRONGHOLD_NONE;
+  if (cell_x == sh_cell_x_cache && cell_z == sh_cell_z_cache) {
+    if (!sh_has_cell_cache) return STRONGHOLD_NONE;
+    cx = sh_cx_cache; cz = sh_cz_cache; base_y = sh_base_y_cache; key = sh_key_cache;
+  } else {
+    sh_cell_x_cache = cell_x; sh_cell_z_cache = cell_z;
+    if (!getStrongholdCell(cell_x, cell_z, &cx, &cz, &base_y, &key)) {
+      sh_has_cell_cache = 0;
+      return STRONGHOLD_NONE;
+    }
+    sh_has_cell_cache = 1;
+    sh_cx_cache = cx; sh_cz_cache = cz; sh_base_y_cache = base_y; sh_key_cache = key;
+  }
 
   int rx = x - cx;
   int ry = y - base_y;
@@ -1657,11 +1714,16 @@ uint16_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor
     if (vb != 0xFFFF) return vb;
   }
 
-  uint16_t stronghold_block = getStrongholdBlockAt(x, y, z);
-  if (stronghold_block != STRONGHOLD_NONE) return stronghold_block;
+  // Fast-path: skip structure function calls when y is outside their ranges.
+  if (y >= 16 && y <= 48) {
+    uint16_t stronghold_block = getStrongholdBlockAt(x, y, z);
+    if (stronghold_block != STRONGHOLD_NONE) return stronghold_block;
+  }
 
-  uint16_t dungeon_block = getDungeonBlockAt(x, y, z);
-  if (dungeon_block != DUNGEON_NONE) return dungeon_block;
+  if (y >= 8 && y <= 58) {
+    uint16_t dungeon_block = getDungeonBlockAt(x, y, z);
+    if (dungeon_block != DUNGEON_NONE) return dungeon_block;
+  }
 
   if (y >= 64 && y >= height) switch (anchor.biome) {
     case W_plains: { // Generate oak trees and grass in plains
@@ -2673,12 +2735,14 @@ uint16_t getTerrainAtFromCache (int x, int y, int z, int rx, int rz, ChunkAnchor
     }
 
     // Generate ore clumps using 3D noise for clustered veins
-    uint16_t ore = getOreClumpAt(x, y, z, anchor.biome);
+    uint16_t ore = getOreAt(x, y, z, anchor.biome);
     if (ore != 0) return ore;
 
-    // Check for mineshaft blocks
-    uint16_t ms_block = getMineshaftBlockAt(x, y, z);
-    if (ms_block != 0xFFFF) return ms_block;
+    // Check for mineshaft blocks (y range: 16-63)
+    if (y >= 16 && y < 64) {
+      uint16_t ms_block = getMineshaftBlockAt(x, y, z);
+      if (ms_block != 0xFFFF) return ms_block;
+    }
 
     // For everything else, fall back to stone
     return B_stone;
@@ -3897,6 +3961,28 @@ uint16_t buildChunkSection (int cx, int cy, int cz, uint8_t dimension) {
       ChunkAnchor *anchor_ptr = chunk_anchors + anchor_index;
       chunk_section_height[j][i] = getHeightAtFromAnchors(j % CHUNK_SIZE, i % CHUNK_SIZE, anchor_ptr);
     }
+  }
+
+  // Precompute cave and ore density grids for the per-block loop below.
+  // Each grid cell covers 4x4x4 blocks, replacing 4096 octave_sample calls
+  // with 128. Only relevant for underground sections (y < 72).
+  if (cy < 72) {
+    for (int gz = 0; gz < GRID_CELLS; gz++) {
+      for (int gy = 0; gy < GRID_CELLS; gy++) {
+        for (int gx = 0; gx < GRID_CELLS; gx++) {
+          double wx = (double)(cx + gx * 4 + 2);
+          double wy = (double)(cy + gy * 4 + 2);
+          double wz = (double)(cz + gz * 4 + 2);
+          double cn = octave_sample(&cave_noise, wx * 0.04, wy * 0.04 * 0.5, wz * 0.04);
+          g_cave_density[gx][gy][gz] = (cn + 1.0) / 2.0;
+          double on = octave_sample(&ore_clump_noise, wx * 0.12, wy * 0.12, wz * 0.12);
+          g_ore_density[gx][gy][gz] = (on + 1.0) / 2.0;
+        }
+      }
+    }
+    g_cx = cx; g_cy = cy; g_cz = cz;
+  } else {
+    g_cy = 0x7FFFFFFF; // invalidate grid for surface-only sections
   }
 
   // Generate 4096 blocks using tri-nested loop for better performance

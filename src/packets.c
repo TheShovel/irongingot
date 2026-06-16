@@ -490,9 +490,9 @@ int sc_loginPlay (int client_fd, uint8_t dimension) {
   // maxplayers
   writeVarInt(client_fd, MAX_PLAYERS);
   // view distance
-  writeVarInt(client_fd, VIEW_DISTANCE);
+  writeVarInt(client_fd, config.view_distance);
   // sim distance
-  writeVarInt(client_fd, VIEW_DISTANCE);
+  writeVarInt(client_fd, config.view_distance);
   // reduced debug info
   writeByte(client_fd, 0);
   // respawn screen
@@ -729,11 +729,14 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
 
   // Try to get cached chunk data
   if (!get_cached_chunk_copy(_x, _z, dimension, cached_sections, cached_biomes)) {
-    // Not cached yet: queue generation and skip sending this chunk for now.
-    // This keeps movement packet handling non-blocking.
-    chunk_debug_record_cache_miss_skip(client_fd);
-    request_chunk_generation(_x, _z, dimension);
-    return 1;
+    // Generate synchronously — worldgen is fast enough (~1.7ms/chunk) that
+    // the old async queue + tiny cache caused a livelock where chunks were
+    // evicted before the streamer could send them.
+    generate_chunk_data(_x, _z, dimension);
+    // Should be cached now; if not, give up.
+    if (!get_cached_chunk_copy(_x, _z, dimension, cached_sections, cached_biomes)) {
+      return 1;
+    }
   }
 
   // 1. Send chunk sections

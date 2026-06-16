@@ -59,12 +59,11 @@ recv → readVarInt(pid) → handlePacket() switch
   → cs_*() (modify state) → sc_*() (queue response) → async sender → send_all()
 ```
 
-### Chunk flow
-```
-Player move → streamChunksForPlayer()
-  → cache lookup → miss → thread pool → buildChunkSection() → worldgen.c terrain
-  → serialize → sc_chunkDataAndUpdateLight() → send queue
-```
+## Chunk Pipeline
+
+Chunks are generated **synchronously on demand** by the chunk streamer thread (~1.7ms/chunk, 7× faster than original). A tiny LRU cache (24 entries, ~4MB) serves as scratch buffer between generation and network serialization — no async queue needed. Background worker threads opportunistically pre-generate chunks in a 3×3 area around each player.
+
+Chunk flow: `streamChunksForPlayer()` → cache miss → `generate_chunk_data()` (sync, ~1.7ms) → serialize → `sc_chunkDataAndUpdateLight()` → send queue. View distance from `config.view_distance` (server.conf, clamped 2-32). Streamer sends up to 10 chunks per 20ms cycle.
 
 ## Key Datatypes
 
@@ -88,7 +87,14 @@ Compression enabled after login (threshold from config). Packet framing: VarInt 
 
 ## World Gen
 
-Perlin noise (Java-compatible) for terrain height, detail, mountains. Cubiomes for biome assignment. Ores by Y-level + biome (grid-based: 4×4×4 precomputed density grid replaces per-block noise + 6-neighbor spread). Caves: 4×4×4 grid replaces per-block noise. Combined ~2× chunk gen speedup. Structures: villages (5 styles×13 professions from NBT templates), dungeons (mossy+cobble, chests, spawners), mineshafts, strongholds (silverfish, portal), nether fortresses, trees (8 species).
+Perlin noise (Java-compatible) for terrain height, detail, mountains. Cubiomes for biome assignment. Ores by Y-level + biome (grid-based: 4×4×4 precomputed density grid replaces per-block noise + 6-neighbor spread). Caves: 4×4×4 grid replaces per-block noise. Combined ~7× chunk gen speedup vs original. Structures: villages (5 styles×13 professions from NBT templates), dungeons (mossy+cobble, chests, spawners), mineshafts, strongholds (silverfish, portal), nether fortresses, trees (8 species).
+
+### Perf optimizations
+- **Cave/ore density grids**: 4×4×4 precomputed in `buildChunkSection` → 128 `octave_sample()` calls instead of 8192 per section
+- **Structure cell caches**: Per-section TLS caches for dungeon/stronghold cells → 1 `splitmix64` instead of 4096
+- **y-range guards**: Skip function calls in `getTerrainAtFromCache` when y outside structure range
+- **Lookup tables**: Biome height/scale via `biome_base[]`/`biome_scale[]` arrays replacing if-else chain
+- **Minimal ore noise**: Single `octave_sample()` per block + switch-based neighbor check instead of 7 calls
 
 ## Game Tick (procedures.c:handleServerTick)
 1. Weather → 2. Fluid queue → 3. Mob AI (move to nearest player, anger timers, sounds) → 4. Projectiles → 5. XP orbs → 6. Block tick (leaf decay, crops, cactus, fire) → 7. Player tick (fall dmg, suffocate, drown, hunger, regen, portal cooldown) → 8. Mob spawning → 9. Player list broadcast
