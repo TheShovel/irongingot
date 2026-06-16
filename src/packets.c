@@ -96,7 +96,7 @@ static void writePlayerProfileProperties(int client_fd, PlayerAppearance *appear
 
 #define DATA_COMPONENT_DAMAGE 3
 
-static void writeItemSlotWithDamage(int client_fd, uint8_t count, uint16_t item, uint16_t damage) {
+void writeItemSlotWithDamage(int client_fd, uint8_t count, uint16_t item, uint16_t damage) {
   if (count == 0 || item == 0) {
     writeVarInt(client_fd, 0);
     return;
@@ -114,7 +114,7 @@ static void writeItemSlotWithDamage(int client_fd, uint8_t count, uint16_t item,
   }
 }
 
-static void writeItemSlot(int client_fd, uint8_t count, uint16_t item) {
+void writeItemSlot(int client_fd, uint8_t count, uint16_t item) {
   writeItemSlotWithDamage(client_fd, count, item, 0);
 }
 
@@ -495,7 +495,7 @@ int sc_loginPlay (int client_fd, uint8_t dimension) {
   // reduced debug info
   writeByte(client_fd, 0);
   // respawn screen
-  writeByte(client_fd, true);
+  writeByte(client_fd, config.do_immediate_respawn ? false : true);
   // limited crafting
   writeByte(client_fd, false);
   // dimension id (from server-sent registries)
@@ -1805,24 +1805,36 @@ int cs_clickContainer (int client_fd) {
 
   uint8_t apply_changes = true;
   uint8_t equipment_dirty = false;
-  // prevent dropping items
+  uint8_t drop_slot = 255;
+  uint8_t drop_count = 0;
+  uint16_t drop_item = 0;
+
   if (mode == 4 && clicked_slot != -999) {
-    // when using drop button, re-sync the respective slot
+    // when using drop button, manually remove item from inventory and spawn entity
     uint8_t slot = clientSlotToServerSlot(window_id, clicked_slot);
-    if (slot <= 40) {
+    if (slot <= 40 && player->inventory_items[slot] != 0 && player->inventory_count[slot] > 0) {
+      uint8_t count = (button == 0) ? 1 : player->inventory_count[slot];
+      drop_slot = slot;
+      drop_item = player->inventory_items[slot];
+      drop_count = count;
+      player->inventory_count[slot] -= count;
+      if (player->inventory_count[slot] == 0) player->inventory_items[slot] = 0;
       sc_setContainerSlot(client_fd, window_id, clicked_slot, player->inventory_count[slot], player->inventory_items[slot]);
+      equipment_dirty = (slot == player->hotbar || slot == 40 || (slot >= 36 && slot <= 39));
     }
     apply_changes = false;
   } else if (mode == 0 && clicked_slot == -999) {
-    // when clicking outside inventory, return the dropped item to the player
-    if (button == 0) {
-      givePlayerItem(player, player->flagval_16, player->flagval_8);
-      player->flagval_16 = 0;
-      player->flagval_8 = 0;
-    } else {
-      givePlayerItem(player, player->flagval_16, 1);
-      player->flagval_8 -= 1;
-      if (player->flagval_8 == 0) player->flagval_16 = 0;
+    // when clicking outside inventory, drop the cursor item on the ground
+    if (player->flagval_16 != 0 && player->flagval_8 > 0) {
+      if (button == 0) {
+        spawnItemEntity(player->x + 0.5, player->y + 0.5, player->z + 0.5, player->flagval_16, player->flagval_8, player->dimension);
+        player->flagval_16 = 0;
+        player->flagval_8 = 0;
+      } else {
+        spawnItemEntity(player->x + 0.5, player->y + 0.5, player->z + 0.5, player->flagval_16, 1, player->dimension);
+        player->flagval_8 -= 1;
+        if (player->flagval_8 == 0) player->flagval_16 = 0;
+      }
     }
     apply_changes = false;
   }
@@ -1916,6 +1928,11 @@ int cs_clickContainer (int client_fd) {
       before_inventory_items, before_inventory_count, before_inventory_damage);
     reconcileSlotDamages(player->craft_items, player->craft_count, player->craft_damage, 9,
       before_craft_items, before_craft_count, before_craft_damage);
+  }
+
+  // If dropping an item from inventory, spawn it on the ground
+  if (drop_slot != 255 && drop_item != 0 && drop_count > 0) {
+    spawnItemEntity(player->x + 0.5, player->y + 0.5, player->z + 0.5, drop_item, drop_count, player->dimension);
   }
 
   // window 0 is player inventory, window 12 is crafting table
@@ -3066,6 +3083,89 @@ int cs_chat (int client_fd) {
     goto cleanup;
   }
 
+  if (!strncmp((char *)recv_buffer, "!gamerule", 9) && isCommandBoundary(recv_buffer, 9)) {
+    int arg_offset = 10;
+    while (arg_offset < 224 && recv_buffer[arg_offset] == ' ') arg_offset++;
+
+    int arg_end = arg_offset;
+    while (arg_end < 224 && recv_buffer[arg_end] != '\0' && recv_buffer[arg_end] != ' ') arg_end++;
+    if (arg_end <= arg_offset) {
+      const char usage[] = "§7Usage: /gamerule <rule> <true|false>\n"
+      "§7Rules: doMobSpawning, keepInventory, doImmediateRespawn,\n"
+      "§7        naturalRegeneration, doDaylightCycle, doWeatherCycle";
+      sc_systemChat(client_fd, (char *)usage, (uint16_t)sizeof(usage) - 1);
+      goto cleanup;
+    }
+
+    char rule_buf[32];
+    int rule_len = arg_end - arg_offset;
+    if (rule_len > 31) rule_len = 31;
+    memcpy(rule_buf, recv_buffer + arg_offset, rule_len);
+    rule_buf[rule_len] = '\0';
+
+    int val_offset = arg_end;
+    while (val_offset < 224 && recv_buffer[val_offset] == ' ') val_offset++;
+    int val_end = val_offset;
+    while (val_end < 224 && recv_buffer[val_end] != '\0' && recv_buffer[val_end] != ' ') val_end++;
+    if (val_end <= val_offset) {
+      const char usage[] = "§7Usage: /gamerule <rule> <true|false>";
+      sc_systemChat(client_fd, (char *)usage, (uint16_t)sizeof(usage) - 1);
+      goto cleanup;
+    }
+
+    char val_buf[8];
+    int val_len = val_end - val_offset;
+    if (val_len > 7) val_len = 7;
+    memcpy(val_buf, recv_buffer + val_offset, val_len);
+    val_buf[val_len] = '\0';
+
+    uint8_t new_val = 0;
+    if (!strcmp(val_buf, "true")) {
+      new_val = 1;
+    } else if (!strcmp(val_buf, "false")) {
+      new_val = 0;
+    } else {
+      const char usage[] = "§7Usage: /gamerule <rule> <true|false>";
+      sc_systemChat(client_fd, (char *)usage, (uint16_t)sizeof(usage) - 1);
+      goto cleanup;
+    }
+
+    char response[96];
+    int resp_len = 0;
+    if (!strcmp(rule_buf, "doMobSpawning")) {
+      config.mob_spawn_enabled = new_val;
+      resp_len = snprintf(response, sizeof(response), "§aGame rule §fdoMobSpawning§a set to §f%s", new_val ? "true" : "false");
+    } else if (!strcmp(rule_buf, "keepInventory")) {
+      config.keep_inventory = new_val;
+      resp_len = snprintf(response, sizeof(response), "§aGame rule §fkeepInventory§a set to §f%s", new_val ? "true" : "false");
+    } else if (!strcmp(rule_buf, "doImmediateRespawn")) {
+      config.do_immediate_respawn = new_val;
+      resp_len = snprintf(response, sizeof(response), "§aGame rule §fdoImmediateRespawn§a set to §f%s", new_val ? "true" : "false");
+      // Sync respawn screen state to all connected players
+      for (int i = 0; i < MAX_PLAYERS; i++) {
+        if (player_data[i].client_fd == -1) continue;
+        if (player_data[i].flags & 0x20) continue;
+        sc_gameEvent(player_data[i].client_fd, 11, new_val ? 0.0f : 1.0f);
+      }
+    } else if (!strcmp(rule_buf, "naturalRegeneration")) {
+      config.natural_regeneration = new_val;
+      resp_len = snprintf(response, sizeof(response), "§aGame rule §fnaturalRegeneration§a set to §f%s", new_val ? "true" : "false");
+    } else if (!strcmp(rule_buf, "doDaylightCycle")) {
+      config.do_daylight_cycle = new_val;
+      resp_len = snprintf(response, sizeof(response), "§aGame rule §fdoDaylightCycle§a set to §f%s", new_val ? "true" : "false");
+    } else if (!strcmp(rule_buf, "doWeatherCycle")) {
+      config.do_weather_cycle = new_val;
+      resp_len = snprintf(response, sizeof(response), "§aGame rule §fdoWeatherCycle§a set to §f%s", new_val ? "true" : "false");
+    } else {
+      const char usage[] = "§cUnknown game rule. Available: doMobSpawning, keepInventory, doImmediateRespawn, naturalRegeneration, doDaylightCycle, doWeatherCycle";
+      sc_systemChat(client_fd, (char *)usage, (uint16_t)sizeof(usage) - 1);
+      goto cleanup;
+    }
+
+    sc_systemChat(client_fd, response, (uint16_t)resp_len);
+    goto cleanup;
+  }
+
   if (!strncmp((char *)recv_buffer, "!help", 5)) {
     // Send command guide
     const char help_msg[] = "§7Commands (use / or !):\n"
@@ -3078,6 +3178,7 @@ int cs_chat (int client_fd) {
     "  /kill [player] - Kill a player\n"
     "  /heal [player] - Restore health\n"
     "  /feed [player] - Restore hunger\n"
+    "  /gamerule <rule> <true|false> - Toggle game rules\n"
     "  !msg <player> <message> - Send a private message\n"
     "  !portal - Build a Nether portal at your position\n"
     "  !biome [x z] - Show biome at current or given coordinates\n"

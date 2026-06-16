@@ -90,6 +90,7 @@ MobData mob_data[MAX_MOBS];
 // Per-mob trade usage tracking [mob_index][trade_index]
 uint8_t mob_trade_uses[MAX_MOBS][5];
 XpOrbData xp_orb_data[MAX_XP_ORBS];
+ItemEntityData item_entity_data[MAX_ITEM_ENTITIES];
 ProjectileData projectile_data[MAX_PROJECTILES];
 
 // Global thread pool for parallel operations

@@ -83,6 +83,13 @@ void init_config_defaults(void) {
   config.fetch_skins_from_mojang = 1;
   config.safe_area_radius = 0;  // 0 = disabled by default
 
+  // Game rules (default to vanilla behavior)
+  config.keep_inventory = 0;
+  config.do_immediate_respawn = 0;
+  config.natural_regeneration = 1;
+  config.do_daylight_cycle = 1;
+  config.do_weather_cycle = 1;
+
   // Debug flags
   config.log_unknown_packets = 0;
   config.log_length_discrepancy = 1;
@@ -240,6 +247,16 @@ int load_config(const char *filename) {
       config.log_chunk_generation = parse_bool(value);
     } else if (strcmp(key, "enable_beef_dumps") == 0) {
       config.enable_beef_dumps = parse_bool(value);
+    } else if (strcmp(key, "keep_inventory") == 0) {
+      config.keep_inventory = parse_bool(value);
+    } else if (strcmp(key, "do_immediate_respawn") == 0) {
+      config.do_immediate_respawn = parse_bool(value);
+    } else if (strcmp(key, "natural_regeneration") == 0) {
+      config.natural_regeneration = parse_bool(value);
+    } else if (strcmp(key, "do_daylight_cycle") == 0) {
+      config.do_daylight_cycle = parse_bool(value);
+    } else if (strcmp(key, "do_weather_cycle") == 0) {
+      config.do_weather_cycle = parse_bool(value);
     } else if (strcmp(key, "motd") == 0) {
       strncpy(config.motd, value, sizeof(config.motd) - 1);
       config.motd[sizeof(config.motd) - 1] = '\0';
@@ -346,7 +363,15 @@ int save_config(const char *filename) {
   fprintf(f, "enable_beef_dumps = %s\n", config.enable_beef_dumps ? "true" : "false");
   fprintf(f, "\n");
 
+  fprintf(f, "# Game Rules (true/false)\n");
   fprintf(f, "# ============================================\n");
+  fprintf(f, "keep_inventory = %s\n", config.keep_inventory ? "true" : "false");
+  fprintf(f, "do_immediate_respawn = %s\n", config.do_immediate_respawn ? "true" : "false");
+  fprintf(f, "natural_regeneration = %s\n", config.natural_regeneration ? "true" : "false");
+  fprintf(f, "do_daylight_cycle = %s\n", config.do_daylight_cycle ? "true" : "false");
+  fprintf(f, "do_weather_cycle = %s\n", config.do_weather_cycle ? "true" : "false");
+  fprintf(f, "\n");
+
   fprintf(f, "# Server Information\n");
   fprintf(f, "# ============================================\n");
   fprintf(f, "motd = %s\n", config.motd);

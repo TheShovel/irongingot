@@ -63,6 +63,13 @@ typedef struct {
   int log_chunk_generation;
   int enable_beef_dumps;
 
+  // Game rules
+  int keep_inventory;
+  int do_immediate_respawn;
+  int natural_regeneration;
+  int do_daylight_cycle;
+  int do_weather_cycle;
+
   // Strings
   char motd[256];
   char brand[64];

@@ -481,6 +481,31 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
           );
         }
 
+        // Send existing item entities in the same dimension
+        for (int i = 0; i < MAX_ITEM_ENTITIES; i++) {
+          if (!item_entity_data[i].active) continue;
+          if (item_entity_data[i].dimension != player->dimension) continue;
+          uint8_t item_uuid[16];
+          uint32_t r = fast_rand();
+          memcpy(item_uuid, &r, 4);
+          memcpy(item_uuid + 4, &i, 4);
+          memset(item_uuid + 8, 0, 8);
+          int entity_id = ITEM_ENTITY_ID_BASE - i;
+          sc_spawnEntity(
+            client_fd, entity_id, item_uuid, 69,
+            item_entity_data[i].x, item_entity_data[i].y, item_entity_data[i].z,
+            0, 0, 0, 0, 0
+          );
+          // Send item slot metadata
+          startPacket(client_fd, 0x5C);
+          writeVarInt(client_fd, entity_id);
+          writeByte(client_fd, 8);
+          writeVarInt(client_fd, 7);
+          writeItemSlot(client_fd, item_entity_data[i].count, item_entity_data[i].item);
+          writeByte(client_fd, 0xFF);
+          endPacket(client_fd);
+        }
+
         // Sync player XP
         sc_setExperience(client_fd, player->xp_total, player->xp_level, player->xp_progress);
 

@@ -533,6 +533,21 @@ typedef struct {
   uint32_t age;    // Ticks since spawn
 } XpOrbData;
 
+// Item entity data structure
+#define MAX_ITEM_ENTITIES 256
+#define ITEM_ENTITY_ID_BASE -500
+
+typedef struct {
+  uint8_t active;
+  double x;
+  double y;
+  double z;
+  uint16_t item;
+  uint8_t count;
+  uint8_t dimension;
+  uint32_t age;
+} ItemEntityData;
+
 #ifdef ALLOW_DOORS
 typedef struct {
   // Door state flags:
@@ -577,6 +592,7 @@ extern PlayerAppearance player_appearance[MAX_PLAYERS];
 extern MobData mob_data[MAX_MOBS];
 extern uint8_t mob_trade_uses[MAX_MOBS][5];
 extern XpOrbData xp_orb_data[MAX_XP_ORBS];
+extern ItemEntityData item_entity_data[MAX_ITEM_ENTITIES];
 
 // Projectile entity type identifiers for protocol 772 (1.21.8)
 #define E_ARROW 6

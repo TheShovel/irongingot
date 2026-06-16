@@ -87,4 +87,6 @@ int sc_setTradeOffers(int client_fd, int window_id, uint8_t profession, int mob_
 int cs_containerButtonClick(int client_fd);
 int cs_craftRecipeRequest(int client_fd);
 
+void writeItemSlot(int client_fd, uint8_t count, uint16_t item);
+
 #endif

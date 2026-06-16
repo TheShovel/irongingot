@@ -87,6 +87,8 @@ void processFluidQueue (void);
 void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health, uint8_t dimension, uint8_t profession);
 void spawnXpOrb (double x, double y, double z, uint8_t value, uint8_t dimension);
 void tickXpOrbs (void);
+void spawnItemEntity (double x, double y, double z, uint16_t item, uint8_t count, uint8_t dimension);
+void tickItemEntities (void);
 void interactEntity (int entity_id, int interactor_id);
 void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t damage);
 void doExplosion (double x, double y, double z, float power, uint8_t dimension);
