@@ -89,12 +89,27 @@ Compression enabled after login (threshold from config). Packet framing: VarInt 
 
 Perlin noise (Java-compatible) for terrain height, detail, mountains. Cubiomes for biome assignment. Ores by Y-level + biome (grid-based: 4×4×4 precomputed density grid replaces per-block noise + 6-neighbor spread). Caves: 4×4×4 grid replaces per-block noise. Combined ~7× chunk gen speedup vs original. Structures: villages (5 styles×13 professions from NBT templates), dungeons (mossy+cobble, chests, spawners), mineshafts, strongholds (silverfish, portal), nether fortresses, trees (8 species).
 
+Worldgen benchmark (bench_worldgen):
+
+=== Before ===
+y=[0,64):  ~2800-3000 us/section  (caves + ores + structures)
+y=[64,80):  ~1059 us/section
+y=80+:     ~310 us/section
+Full chunk: 11.93 ms, 596 us/section
+
+=== After (all optimizations) ===
+y=[0,64):  ~900-980 us/section  (3.1× faster)
+y=[64,80):  ~365 us/section  (2.9× faster)
+y=80+:     ~280 us/section  (1.1× faster)
+Full chunk: 1.80 ms, 90 us/section  (6.6× faster)
+
 ### Perf optimizations
-- **Cave/ore density grids**: 4×4×4 precomputed in `buildChunkSection` → 128 `octave_sample()` calls instead of 8192 per section
+- **Cave/ore density grids**: 4×4×4 precomputed in `buildChunkSection` → 128 `octave_sample()` calls instead of 8192 per section. Trilinear interpolation removes square artifacts.
 - **Structure cell caches**: Per-section TLS caches for dungeon/stronghold cells → 1 `splitmix64` instead of 4096
 - **y-range guards**: Skip function calls in `getTerrainAtFromCache` when y outside structure range
 - **Lookup tables**: Biome height/scale via `biome_base[]`/`biome_scale[]` arrays replacing if-else chain
 - **Minimal ore noise**: Single `octave_sample()` per block + switch-based neighbor check instead of 7 calls
+- **Micro-optimizations**: Shift/mask ops in hot loop, trilerp grid lookup with bit ops, redundant dz check removed
 
 ## Game Tick (procedures.c:handleServerTick)
 1. Weather → 2. Fluid queue → 3. Mob AI (move to nearest player, anger timers, sounds) → 4. Projectiles → 5. XP orbs → 6. Block tick (leaf decay, crops, cactus, fire) → 7. Player tick (fall dmg, suffocate, drown, hunger, regen, portal cooldown) → 8. Mob spawning → 9. Player list broadcast

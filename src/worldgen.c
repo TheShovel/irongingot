@@ -160,13 +160,12 @@ static TLS_STORAGE double g_ore_density[GRID_CELLS][GRID_CELLS][GRID_CELLS];
 static inline double grid_lookup(double grid[GRID_CELLS][GRID_CELLS][GRID_CELLS],
                                   int wx, int wy, int wz,
                                   int ox, int oy, int oz) {
-    int rx = wx - ox, ry = wy - oy, rz = wz - oz;
-    int gx = rx / 4; if (gx > 3) gx = 3;
-    int gy = ry / 4; if (gy > 3) gy = 3;
-    int gz = rz / 4; if (gz > 3) gz = 3;
-    double fx = (rx - gx * 4) / 4.0;
-    double fy = (ry - gy * 4) / 4.0;
-    double fz = (rz - gz * 4) / 4.0;
+    int rx = wx - ox, gx = rx >> 2;
+    int ry = wy - oy, gy = ry >> 2;
+    int rz = wz - oz, gz = rz >> 2;
+    double fx = (rx & 3) * 0.25;
+    double fy = (ry & 3) * 0.25;
+    double fz = (rz & 3) * 0.25;
     int gx1 = gx + 1; if (gx1 > 3) gx1 = 3;
     int gy1 = gy + 1; if (gy1 > 3) gy1 = 3;
     int gz1 = gz + 1; if (gz1 > 3) gz1 = 3;
@@ -4009,23 +4008,26 @@ uint16_t buildChunkSection (int cx, int cy, int cz, uint8_t dimension) {
   // Generate 4096 blocks using tri-nested loop for better performance
   for (int dy = 0; dy < 16; dy++) {
     int y = cy + dy;
+    int dy_shift = dy << 8;
     for (int dz = 0; dz < 16; dz++) {
       int z = cz + dz;
-      int rz_mod = dz % CHUNK_SIZE;
-      int rz_idx = dz / CHUNK_SIZE * (16 / CHUNK_SIZE);
-      int anchor_base = dz / CHUNK_SIZE * (16 / CHUNK_SIZE + 1);
+      int dz_shift = dz << 4;
+      // CHUNK_SIZE=8: /8 = >>3, %8 = &7
+      int rz_mod = dz & 7;
+      int rz_idx = (dz >> 3) * 2;
+      int anchor_base = (dz >> 3) * 3;
 
-      for (int dx = 0; dz < 16 && dx < 16; dx++) {
+      for (int dx = 0; dx < 16; dx++) {
         // The protocol expects 8-block sequence reversal for big-endian longs
-        int address = dx + (dz << 4) + (dy << 8);
+        int address = dx + dz_shift + dy_shift;
         int index = (address & ~7) | (7 - (address & 7));
 
-        int feature_idx = dx / CHUNK_SIZE + rz_idx;
-        int anchor_idx = dx / CHUNK_SIZE + anchor_base;
+        int feature_idx = (dx >> 3) + rz_idx;
+        int anchor_idx = (dx >> 3) + anchor_base;
 
         chunk_section[index] = getTerrainAtFromCache(
           cx + dx, y, z,
-          dx % CHUNK_SIZE, rz_mod,
+          dx & 7, rz_mod,
           chunk_anchors[anchor_idx],
           chunk_features[feature_idx],
           chunk_section_height[dx][dz]
