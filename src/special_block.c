@@ -264,7 +264,8 @@ uint8_t is_fence_block(uint16_t block) {
 uint8_t is_horizontal_facing_block(uint16_t block) {
     return (
         block == B_wall_torch ||
-        block == B_lectern
+        block == B_lectern ||
+        block == B_ladder
         /* Add more horizontal facing blocks as needed */
     );
 }

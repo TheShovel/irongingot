@@ -18,7 +18,7 @@ MC 1.21.8 (proto 772) server in C. Fork of bareiron. ~7MB RAM (musl static). Lin
 | `src/varnum.c` | VarInt/VarLong read/write |
 | `src/crafting.c` | Crafting + furnace recipe lookup |
 | `src/creative_mode.c` | Creative inventory UI (scroll list, item pick) |
-| `src/special_block.c` | State hash table for doors/trapdoors/stairs/chests/fences/beds/furnaces/barrels/ender_chests |
+| `src/special_block.c` | State hash table for doors/trapdoors/stairs/chests/fences/beds/furnaces/barrels/ender_chests/ladders |
 | `src/mojang.c` | Skin fetch via Mojang API (libcurl, optional `MOJANG_SKIN_LOOKUP_AVAILABLE`) |
 | `src/thread_utils.c` | pthread create with controlled stack sizes (128K default, 512K chunk, 256K pool) |
 | `src/async.c` | Per-client async packet sender threads (priority queue) |
@@ -130,6 +130,7 @@ Single `uint16_t` bits per block type:
 - **Barrels:** bits0-2=direction, bit3=open
 - **Fences:** bits0-3=N/E/S/W connections
 - **Beds:** bits0-1=direction, bit2=head, bit3=occupied
+- **Horizontal-facing (wall_torch/lectern/ladder):** bits0-1=direction (north/south/west/east)
 
 ## Config (server.conf → `ServerConfig config`)
 

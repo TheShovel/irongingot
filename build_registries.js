@@ -1010,6 +1010,13 @@ async function convert() {
       ]),
       needs_diamond_tool: tagBlocks(["obsidian", "ancient_debris"]),
       leaves: tagBlocks(leafTypes.map((type) => `${type}_leaves`)),
+      climbable: tagBlocks([
+        "ladder",
+        "vine",
+        "twisting_vines",
+        "weeping_vines",
+        "scaffolding",
+      ]),
     },
     item: {
       planks: tagItems([

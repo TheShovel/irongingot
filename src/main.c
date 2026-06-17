@@ -597,12 +597,16 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
           if (damage > 0 && (current_gamemode == 0 || current_gamemode == 2)) {
             uint16_t block_feet = getBlockAt2(player->x, player->y, player->z, player->dimension);
             swimming = block_feet >= B_water && block_feet < B_water + 8;
-            if (!swimming) hurtEntity(client_fd, -1, D_fall, damage);
+            if (!swimming && block_feet != B_ladder) hurtEntity(client_fd, -1, D_fall, damage);
           }
           player->grounded_y = player->y;
         } else {
           uint16_t block_feet = getBlockAt2(player->x, player->y, player->z, player->dimension);
           if (block_feet >= B_water && block_feet < B_water + 8) {
+            player->grounded_y = player->y;
+          }
+          // While climbing a ladder, reset grounded_y so no fall damage accumulates
+          if (block_feet == B_ladder) {
             player->grounded_y = player->y;
           }
         }

@@ -2658,7 +2658,8 @@ uint8_t isPassableBlock (uint16_t block) {
     block == B_cornflower ||
     block == B_wither_rose ||
     block == B_lily_of_the_valley ||
-    block == B_campfire
+    block == B_campfire ||
+    block == B_ladder
   );
 }
 
@@ -5875,6 +5876,64 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
         sc_blockUpdateState(player_data[_j].client_fd, _rx, _ry, _rz, _fsid);
       }
     }
+    *count -= 1;
+    if (*count == 0) *item = 0;
+    sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
+    broadcastPlayerEquipment(player);
+    return;
+  }
+
+  // Special handling for ladder placement (must attach to a wall)
+  if (block == B_ladder) {
+    // Ladders can only be placed on walls (faces 2-5), not floor/ceiling
+    if (face < 2 || face > 5) return;
+
+    // Compute placement position based on clicked face
+    short lx = x, lz = z;
+    int16_t ly = y;
+    switch (face) {
+      case 2: lz -= 1; break;  // north face
+      case 3: lz += 1; break;  // south face
+      case 4: lx -= 1; break;  // west face
+      case 5: lx += 1; break;  // east face
+      default: return;
+    }
+
+    // Check the placement position is replaceable (air, water, etc.)
+    if (!isReplaceableBlock(getBlockAt2(lx, ly, lz, player->dimension))) return;
+
+    // The block we clicked on (x, y, z) is the wall — must be solid
+    // (not passable, not replaceable)
+    uint16_t wall_block = getBlockAt2(x, y, z, player->dimension);
+    if (isReplaceableBlock(wall_block) || isPassableBlock(wall_block)) return;
+
+    // Determine facing direction based on which face was clicked.
+    // Face 2=north, 3=south, 4=west, 5=east
+    // horizontal_state_rows order: north=0, south=1, west=2, east=3
+    uint8_t direction;
+    switch (face) {
+      case 2: direction = 0; break;  // Attached to north wall, faces north
+      case 3: direction = 1; break;  // Attached to south wall, faces south
+      case 4: direction = 2; break;  // Attached to west wall, faces west
+      case 5: direction = 3; break;  // Attached to east wall, faces east
+      default: direction = 0; break;
+    }
+
+    // Apply server-side block change
+    if (makeBlockChange(lx, ly, lz, B_ladder, player->dimension)) return;
+
+    // Store ladder facing direction
+    special_block_set_state(lx, ly, lz, player->dimension, B_ladder, horizontal_facing_encode_state(direction));
+
+    // Broadcast the correct state ID to all players so the ladder faces the right wall
+    uint16_t sid = get_horizontal_state_id(B_ladder, direction);
+    for (int j = 0; j < MAX_PLAYERS; j++) {
+      if (player_data[j].client_fd == -1) continue;
+      if (player_data[j].flags & 0x20) continue;
+      sc_blockUpdateState(player_data[j].client_fd, lx, ly, lz, sid);
+    }
+
+    // Decrease item amount
     *count -= 1;
     if (*count == 0) *item = 0;
     sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
