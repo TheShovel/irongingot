@@ -1591,9 +1591,11 @@ static uint16_t getVillageBlockAt(int x, int y, int z, uint8_t height) {
 
     uint8_t style = getVillageTemplateStyleForBiome(house_biome);
 
-    // Check if this position falls within the template's horizontal footprint.
-    // We need the template's size and origin to determine the bounds.
     const VillageTemplate *vt = &village_templates[style][v.profession[i]];
+
+    // Check xz footprint before calling getVillageTemplateBlockAt.
+    // Most blocks in the village area are outside any given house,
+    // so this spares the binary-search + terrain-fill overhead.
     int in_footprint = 0;
     if (vt->block_count > 0) {
       int lx = dx + (int)vt->origin_x;
@@ -1603,16 +1605,16 @@ static uint16_t getVillageBlockAt(int x, int y, int z, uint8_t height) {
       }
     }
 
-    // Terrain integration: fill gaps below building floors and clear terrain
-    // that would protrude into the structure.
-    uint16_t template_block = getVillageTemplateBlockAt(style, v.profession[i], dx, rel_y, dz);
-    if (template_block != VILLAGE_TEMPLATE_NONE) {
-      // Skip grindstone blocks baked into templates — they should not
-      // appear in village buildings.
-      if ((template_block & 0x1FF) != B_grindstone) return template_block;
-    }
-
     if (in_footprint) {
+      uint16_t template_block = getVillageTemplateBlockAt(style, v.profession[i], dx, rel_y, dz);
+      if (template_block != VILLAGE_TEMPLATE_NONE) {
+        // Skip grindstone blocks baked into templates — they should not
+        // appear in village buildings.
+        if ((template_block & 0x1FF) != B_grindstone) return template_block;
+      }
+
+      // Terrain integration: fill gaps below building floors and clear terrain
+      // that would protrude into the structure.
       if (rel_y < 0) {
         // Below the floor — fill with natural terrain blocks so the
         // ground under buildings blends with the surrounding terrain.
