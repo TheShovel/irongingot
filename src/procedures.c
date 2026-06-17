@@ -8493,6 +8493,19 @@ void handleServerTick (int64_t time_since_last_tick) {
         else mob_data[i].data &= ~(1 << 5);
       }
 
+      // Pre-compute normalized player direction shared by all hostile AI types.
+      // Every branch recomputes the same dx/dz/len/atan2 — do it once here.
+      double to_player_nx = 0.0, to_player_nz = 0.0, yaw_to_player = 0.0;
+      uint8_t has_player_dir = 0;
+      if (dist_to_player > 0.001) {
+        double dx = closest_player->x - old_x;
+        double dz = closest_player->z - old_z;
+        to_player_nx = dx / dist_to_player;
+        to_player_nz = dz / dist_to_player;
+        yaw_to_player = atan2(dz, dx) * RAD_TO_MOBROT;
+        has_player_dir = 1;
+      }
+
       // Skeleton AI: maintain distance and shoot arrows
       if (mob_data[i].type == E_SKELETON) {
         // Skeleton melee attack if cornered (very close)
@@ -8520,32 +8533,20 @@ void handleServerTick (int64_t time_since_last_tick) {
         if (mob_data[i].move_timer > 0) mob_data[i].move_timer--;
 
         // Skeletons maintain ~10 block distance from player
-        if (dist_to_player <= vision_range) {
-          double dx = closest_player->x - old_x;
-          double dz = closest_player->z - old_z;
-          double len = sqrt(dx * dx + dz * dz);
-
-          if (len > 0.001) {
-            double move_dir = 1.0;
-            // Back away if too close
-            if (dist_to_player < 6.0) move_dir = -1.0;
-            // Strafe if at good range
-            if (dist_to_player >= 6.0 && dist_to_player <= 12.0) {
-              // Strafe perpendicular to the player
-              double perp_x = -dz / len;
-              double perp_z = dx / len;
-              new_x += perp_x * move_amount * 2.0;
-              new_z += perp_z * move_amount * 2.0;
-              double angle = atan2(dz, dx) * RAD_TO_MOBROT;
-              yaw = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
-            } else {
-              double move_x = (dx / len) * move_amount * 2.0 * move_dir;
-              double move_z = (dz / len) * move_amount * 2.0 * move_dir;
-              new_x += move_x;
-              new_z += move_z;
-              double angle = atan2(dz, dx) * RAD_TO_MOBROT;
-              yaw = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
-            }
+        if (dist_to_player <= vision_range && has_player_dir) {
+          double move_dir = 1.0;
+          // Back away if too close
+          if (dist_to_player < 6.0) move_dir = -1.0;
+          // Strafe if at good range
+          if (dist_to_player >= 6.0 && dist_to_player <= 12.0) {
+            // Strafe perpendicular to the player
+            new_x += -to_player_nz * move_amount * 2.0;
+            new_z += to_player_nx * move_amount * 2.0;
+            yaw = (uint8_t)(((int)(yaw_to_player + 0.5) - 64) & 255);
+          } else {
+            new_x += to_player_nx * move_amount * 2.0 * move_dir;
+            new_z += to_player_nz * move_amount * 2.0 * move_dir;
+            yaw = (uint8_t)(((int)(yaw_to_player + 0.5) - 64) & 255);
           }
         }
       } else if (mob_data[i].type == E_CREEPER) {
@@ -8624,26 +8625,17 @@ void handleServerTick (int64_t time_since_last_tick) {
           }
         } else {
           // Not fusing — chase player
-          if (dist_to_player <= vision_range) {
-            double dx = closest_player->x - old_x;
-            double dz = closest_player->z - old_z;
-            double len = sqrt(dx * dx + dz * dz);
-
-            if (len > 0.001) {
-              // Start fusing when close enough
-              if (dist_to_player < 3.0 && y_diff < 2.0 && has_los) {
-                mob_data[i].move_timer = 30;
-                broadcastMobMetadata(-1, entity_id);
-                broadcastMobSound(entity_id, S_CREEPER_PRIMED, SOUND_CATEGORY_HOSTILE, 1.0f, 1.0f);
-              } else {
-                // Chase the player
-                double move_x = (dx / len) * move_amount * 2.0;
-                double move_z = (dz / len) * move_amount * 2.0;
-                new_x += move_x;
-                new_z += move_z;
-                double angle = atan2(dz, dx) * RAD_TO_MOBROT;
-                yaw = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
-              }
+          if (dist_to_player <= vision_range && has_player_dir) {
+            // Start fusing when close enough
+            if (dist_to_player < 3.0 && y_diff < 2.0 && has_los) {
+              mob_data[i].move_timer = 30;
+              broadcastMobMetadata(-1, entity_id);
+              broadcastMobSound(entity_id, S_CREEPER_PRIMED, SOUND_CATEGORY_HOSTILE, 1.0f, 1.0f);
+            } else {
+              // Chase the player
+              new_x += to_player_nx * move_amount * 2.0;
+              new_z += to_player_nz * move_amount * 2.0;
+              yaw = (uint8_t)(((int)(yaw_to_player + 0.5) - 64) & 255);
             }
           }
         }
@@ -8666,19 +8658,10 @@ void handleServerTick (int64_t time_since_last_tick) {
         if (mob_data[i].move_timer > 0) mob_data[i].move_timer--;
 
         // Move towards the closest player if within vision range
-        if (dist_to_player <= enderman_vision) {
-          double dx = closest_player->x - old_x;
-          double dz = closest_player->z - old_z;
-          double len = sqrt(dx * dx + dz * dz);
-
-          if (len > 0.001) {
-            double move_x = (dx / len) * enderman_speed;
-            double move_z = (dz / len) * enderman_speed;
-            new_x += move_x;
-            new_z += move_z;
-            double angle = atan2(dz, dx) * RAD_TO_MOBROT;
-            yaw = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
-          }
+        if (dist_to_player <= enderman_vision && has_player_dir) {
+          new_x += to_player_nx * enderman_speed;
+          new_z += to_player_nz * enderman_speed;
+          yaw = (uint8_t)(((int)(yaw_to_player + 0.5) - 64) & 255);
         }
       } else if (mob_data[i].type == E_SPIDER) {
         // Spider AI: chase and melee attack
@@ -8698,22 +8681,10 @@ void handleServerTick (int64_t time_since_last_tick) {
         if (mob_data[i].move_timer > 0) mob_data[i].move_timer--;
 
         // Move towards the closest player if within vision range
-        if (dist_to_player <= vision_range) {
-          double dx = closest_player->x - old_x;
-          double dz = closest_player->z - old_z;
-          double len = sqrt(dx * dx + dz * dz);
-
-          if (len > 0.001) {
-            double nx = dx / len;
-            double nz = dz / len;
-            double move_x = nx * spider_speed;
-            double move_z = nz * spider_speed;
-
-            new_x += move_x;
-            new_z += move_z;
-            double angle = atan2(dz, dx) * RAD_TO_MOBROT;
-            yaw = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
-          }
+        if (dist_to_player <= vision_range && has_player_dir) {
+          new_x += to_player_nx * spider_speed;
+          new_z += to_player_nz * spider_speed;
+          yaw = (uint8_t)(((int)(yaw_to_player + 0.5) - 64) & 255);
         }
       } else {
         // Standard hostile melee AI (zombies, piglins)
@@ -8732,27 +8703,18 @@ void handleServerTick (int64_t time_since_last_tick) {
         if (mob_data[i].move_timer > 0) mob_data[i].move_timer--;
 
         // Move towards the closest player if within vision range
-        if (dist_to_player <= vision_range) {
-          double dx = closest_player->x - old_x;
-          double dz = closest_player->z - old_z;
-          double len = sqrt(dx * dx + dz * dz);
-
-          if (len > 0.001) {
-            double move_x = (dx / len) * move_speed;
-            double move_z = (dz / len) * move_speed;
-            new_x += move_x;
-            new_z += move_z;
-            double angle = atan2(dz, dx) * RAD_TO_MOBROT;
-            yaw = (uint8_t)(((int)(angle + 0.5) - 64) & 255);
-          }
+        if (dist_to_player <= vision_range && has_player_dir) {
+          new_x += to_player_nx * move_speed;
+          new_z += to_player_nz * move_speed;
+          yaw = (uint8_t)(((int)(yaw_to_player + 0.5) - 64) & 255);
         }
       }
 
     }
 
-    // Collision + one-block step-up. Check the intended horizontal move before
-    // cancelling individual axes; otherwise mobs never get a chance to climb.
-    // Fish keep their vertical movement, land mobs start at old_y
+    // Collision + one-block step-up.  Most ticks the mob hasn't crossed
+    // a block boundary (moves <0.1 blocks/tick), so we skip the expensive
+    // bounding-box cascade when staying within the same horizontal block.
     if (!is_fish) {
       new_y = old_y;
     }
@@ -8792,32 +8754,42 @@ void handleServerTick (int64_t time_since_last_tick) {
         new_z = old_z;
         if (roaming) mob_data[i].move_timer = 0;
       }
-    }
+    } else {
+      // Land mob: detect whether we crossed a block boundary this tick.
+      // Roaming mobs move 0.05 blocks/tick so ~95% of ticks they stay in
+      // the same block — skip the full bounding-box cascade when possible.
+      int obx = mobBlockCoord(old_x);
+      int obz = mobBlockCoord(old_z);
+      int nbx = mobBlockCoord(new_x);
+      int nbz = mobBlockCoord(new_z);
+      uint8_t same_block = (obx == nbx && obz == nbz);
 
-    if (!is_fish && !canMobOccupyPosition(new_x, old_y, new_z, mob_data[i].dimension)) {
-      if (canMobStepTo(new_x, old_y + 1.0, new_z, mob_data[i].dimension)) {
-        new_y = old_y + 1.0;
-        stepped_up = true;
-      } else {
-        if (!canMobOccupyPosition(new_x, old_y, old_z, mob_data[i].dimension)) {
-          if (canMobStepTo(new_x, old_y + 1.0, old_z, mob_data[i].dimension)) {
-            new_y = old_y + 1.0;
-            new_z = old_z;
-            stepped_up = true;
-          } else {
-            new_x = old_x;
-            if (roaming) mob_data[i].move_timer = 0;
+      if (!same_block ||
+          !canMobOccupyPosition(new_x, old_y, new_z, mob_data[i].dimension)) {
+        if (canMobStepTo(new_x, old_y + 1.0, new_z, mob_data[i].dimension)) {
+          new_y = old_y + 1.0;
+          stepped_up = true;
+        } else {
+          if (!canMobOccupyPosition(new_x, old_y, old_z, mob_data[i].dimension)) {
+            if (canMobStepTo(new_x, old_y + 1.0, old_z, mob_data[i].dimension)) {
+              new_y = old_y + 1.0;
+              new_z = old_z;
+              stepped_up = true;
+            } else {
+              new_x = old_x;
+              if (roaming) mob_data[i].move_timer = 0;
+            }
           }
-        }
 
-        double test_y = stepped_up ? new_y : old_y;
-        if (!canMobOccupyPosition(new_x, test_y, new_z, mob_data[i].dimension)) {
-          if (!stepped_up && canMobStepTo(new_x, old_y + 1.0, new_z, mob_data[i].dimension)) {
-            new_y = old_y + 1.0;
-            stepped_up = true;
-          } else {
-            new_z = old_z;
-            if (roaming) mob_data[i].move_timer = 0;
+          double test_y = stepped_up ? new_y : old_y;
+          if (!canMobOccupyPosition(new_x, test_y, new_z, mob_data[i].dimension)) {
+            if (!stepped_up && canMobStepTo(new_x, old_y + 1.0, new_z, mob_data[i].dimension)) {
+              new_y = old_y + 1.0;
+              stepped_up = true;
+            } else {
+              new_z = old_z;
+              if (roaming) mob_data[i].move_timer = 0;
+            }
           }
         }
       }
@@ -8841,10 +8813,13 @@ void handleServerTick (int64_t time_since_last_tick) {
         fabs(new_z - mob_data[i].z) < 0.001 &&
         fabs(new_y - mob_data[i].y) < 0.001) continue;
 
-    // Prevent collisions with other mobs (using spatial hash)
+    // Prevent collisions with other mobs (using spatial hash).
+    // Skip if the mob hasn't moved at all (common for resting roaming mobs).
     uint8_t colliding = false;
     if (is_close_to_player) {
-      colliding = mob_grid_check_collision(new_x, new_y, new_z, i, mob_data[i].dimension);
+      if (fabs(new_x - old_x) > 0.0001 || fabs(new_z - old_z) > 0.0001 || fabs(new_y - old_y) > 0.0001) {
+        colliding = mob_grid_check_collision(new_x, new_y, new_z, i, mob_data[i].dimension);
+      }
     }
     if (colliding) continue;
 
