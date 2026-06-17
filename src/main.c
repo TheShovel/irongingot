@@ -79,7 +79,7 @@ static void server_idle_backoff(void) {
   #elif defined(_WIN32)
     Sleep(1);
   #else
-    usleep(100);  // 100us: prevents nonblocking idle spin without noticeable latency
+    usleep(1000);  // 1ms: prevents busy-polling while keeping packet latency <1 tick
   #endif
 }
 

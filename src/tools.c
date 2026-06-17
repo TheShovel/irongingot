@@ -100,7 +100,7 @@ static inline void socket_io_backoff(void) {
   #ifdef ESP_PLATFORM
   task_yield();
   #elif defined(__linux__)
-  sched_yield();
+  usleep(100);
   #else
   usleep(100);  // 100us
   #endif
