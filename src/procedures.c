@@ -8223,12 +8223,14 @@ void handleServerTick (int64_t time_since_last_tick) {
       continue;
     }
 
-    // Despawn mobs past a certain distance from nearest player
-    // Use squared distance to avoid sqrt (256^2 = 65536)
-    if (mob_data[i].type != E_VILLAGER &&
-        closest_dist_double > (double)MOB_DESPAWN_DISTANCE * MOB_DESPAWN_DISTANCE) {
-      mob_data[i].type = 0;
-      continue;
+    // Despawn non-villagers / skip AI for all mobs past despawn distance.
+    // Villagers persist (no despawn) but their AI is frozen to prevent CPU
+    // waste from distant villages the player has visited.
+    if (closest_dist_double > (double)MOB_DESPAWN_DISTANCE * MOB_DESPAWN_DISTANCE) {
+      if (mob_data[i].type != E_VILLAGER) {
+        mob_data[i].type = 0;  // Despawn non-villagers
+      }
+      continue;  // Skip AI for any mob beyond range (including villagers)
     }
 
     double old_x = mob_data[i].x, old_z = mob_data[i].z;
