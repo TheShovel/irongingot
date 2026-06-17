@@ -3669,6 +3669,18 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
     special_block_clear(x, y, z, player->dimension);
   }
 
+  // Clear special block state for any block type that might have one.
+  // This prevents the hash table from filling up with stale entries when
+  // blocks like stairs, fences, trapdoors, furnaces, chests, barrels,
+  // ender_chests, wall_torches, lanterns, or ladders are broken.
+  // (special_block_clear is a no-op if no entry exists.)
+  if (is_stair_block(block) || block == B_furnace || block == B_ender_chest ||
+      is_fence_block(block) || is_horizontal_facing_block(block) ||
+      block == B_lantern || block == B_chest || block == B_barrel ||
+      block == B_torch || is_trapdoor_block(block)) {
+    special_block_clear(x, y, z, player->dimension);
+  }
+
   // Cascade-break connected leaves and floating leaves (cap at 6 additional broken)
   if (isLeafBlock(block)) {
     int broken_count = 0;
@@ -8085,6 +8097,39 @@ void handleServerTick (int64_t time_since_last_tick) {
           if (player_data[j].flags & 0x20) continue;
           sc_blockUpdateState(player_data[j].client_fd,
             wc->x, wc->y, wc->z, state_id);
+        }
+      }
+    }
+
+    // Fallback: scan the hash table for any B_wheat entries that weren't added
+    // to the tracking list (e.g. when the hash table was full at planting time).
+    // Register any untracked wheat so it starts growing on the next cycle.
+    int sb_cap = special_blocks_capacity;
+    if (wheat_count < sb_cap) {
+      for (int si = 0; si < sb_cap; si++) {
+        if (special_blocks[si].block != B_wheat) continue;
+        short sx = special_blocks[si].x;
+        uint8_t sy = special_blocks[si].y;
+        short sz = special_blocks[si].z;
+        uint8_t sdim = special_blocks[si].dimension;
+        // Check if already in tracking list
+        uint8_t found = 0;
+        for (int wi = 0; wi < wheat_count; wi++) {
+          if (wheat_coords[wi].x == sx && wheat_coords[wi].y == sy &&
+              wheat_coords[wi].z == sz && wheat_coords[wi].dimension == sdim) {
+            found = 1;
+            break;
+          }
+        }
+        if (!found) {
+          // Ensure capacity (the list grows dynamically, but we're outside
+          // the special_blocks mutex here; just skip if we'd exceed current cap)
+          if (wheat_count >= wheat_capacity) break;
+          wheat_coords[wheat_count].x = sx;
+          wheat_coords[wheat_count].y = sy;
+          wheat_coords[wheat_count].z = sz;
+          wheat_coords[wheat_count].dimension = sdim;
+          wheat_count++;
         }
       }
     }

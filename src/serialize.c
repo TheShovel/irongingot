@@ -396,7 +396,8 @@ static cJSON *serializeSpecialBlocks(void) {
   cJSON *arr = cJSON_CreateArray();
   if (!arr) return NULL;
 
-  for (int i = 0; i < MAX_SPECIAL_BLOCKS; i++) {
+  int sb_cap = special_blocks_capacity;
+  for (int i = 0; i < sb_cap; i++) {
     if (special_blocks[i].block == SPECIAL_BLOCK_EMPTY) continue;
 
     cJSON *obj = cJSON_CreateObject();

@@ -63,20 +63,7 @@
  *   Bits 4-15:  unused
  */
 
-/* Maximum number of special block state entries we track. */
-#define MAX_SPECIAL_BLOCKS 8192
-
-/* Wheat coordinate tracking for fast growth iteration without scanning all 8192 entries */
-#define MAX_WHEAT_ENTRIES 2048
-typedef struct {
-    short x;
-    uint8_t y;
-    short z;
-    uint8_t dimension;
-} WheatCoord;
-extern WheatCoord wheat_coords[MAX_WHEAT_ENTRIES];
-extern int wheat_count;
-
+/* Dynamically growing hash table for special block states */
 typedef struct {
     int16_t x;
     int16_t z;
@@ -88,8 +75,20 @@ typedef struct {
 
 #define SPECIAL_BLOCK_EMPTY 0xFF
 
-extern SpecialBlockEntry special_blocks[MAX_SPECIAL_BLOCKS];
+extern SpecialBlockEntry *special_blocks;
 extern int special_blocks_count;
+extern int special_blocks_capacity;
+
+/* Dynamically growing wheat coordinate tracking list */
+typedef struct {
+    short x;
+    uint8_t y;
+    short z;
+    uint8_t dimension;
+} WheatCoord;
+extern WheatCoord *wheat_coords;
+extern int wheat_count;
+extern int wheat_capacity;
 
 /* Hash table operations */
 void special_block_init(void);
