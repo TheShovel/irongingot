@@ -39,13 +39,13 @@ You can download pre-built binaries from the [Releases page](https://github.com/
 
 ## Compilation
 
-Before compiling from source, you'll need to dump registry data and village structure templates from a vanilla Minecraft server. **The easiest way is to run `./rebuild.sh`:**
+`./rebuild.sh` does everything for you from a clean clone to a built binary in one command:
 
 ```sh
 ./rebuild.sh
 ```
 
-That script downloads and verifies the MC 1.21.8 `server.jar` into `notchian/` if needed, runs the vanilla data generator, extracts village structure NBT, regenerates `include/registries.h`, `src/registries.c`, `include/generated_village_templates.h`, and `src/generated_village_templates.c`, then runs `./build.sh`.
+It downloads and verifies the MC 1.21.8 `server.jar`, runs the vanilla data generator, extracts village structure NBT, regenerates all generated source files (`include/registries.h`, `src/registries.c`, `include/generated_village_templates.h`, `src/generated_village_templates.c`), then compiles the server.
 
 Prerequisites for `./rebuild.sh`: Java 21+ JDK, Node.js, and curl. On Windows, use **WSL** (Windows Subsystem for Linux) to run the rebuild script.
 
