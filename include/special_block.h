@@ -123,6 +123,7 @@ uint8_t is_oriented_block(uint16_t block);
 uint8_t is_fence_block(uint16_t block);
 uint8_t is_horizontal_facing_block(uint16_t block);
 uint8_t is_bed_block(uint16_t block);
+uint8_t is_full_block(uint16_t block);
 
 /* State decode helpers */
 uint8_t door_get_open(uint16_t state);

@@ -86,35 +86,10 @@ static uint8_t isWheatBlock(uint16_t block) {
 // Helper: check if a block is solid enough for a fence/glass_pane to connect to.
 // Fences connect to other fences, full solid blocks, and opaque cubes.
 static uint8_t isFenceSolidBlock(uint16_t block) {
-  // First check for fence-like blocks
+  // Fences connect to other fences and glass panes.
   if (is_fence_block(block)) return 1;
-  // Common solid building blocks
-  if (block == B_stone || block == B_cobblestone || block == B_stone_bricks ||
-      block == B_mossy_stone_bricks || block == B_cracked_stone_bricks || block == B_chiseled_stone_bricks ||
-      block == B_sandstone || block == B_cut_sandstone || block == B_chiseled_sandstone ||
-      block == B_bedrock || block == B_obsidian ||
-      block == B_nether_bricks || block == B_cracked_nether_bricks ||
-      block == B_blackstone || block == B_basalt || block == B_end_stone ||
-      block == B_mossy_cobblestone) return 1;
-  // Common terrain blocks
-  if (block == B_grass_block || block == B_snowy_grass_block ||
-      block == B_dirt || block == B_coarse_dirt ||
-      block == B_sand || block == B_red_sand ||
-      block == B_gravel || block == B_podzol ||
-      block == B_mycelium || block == B_mud ||
-      block == B_snow_block || block == B_ice ||
-      block == B_packed_ice || block == B_blue_ice) return 1;
-  // Terracotta (all colors)
-  if (block == B_terracotta || (block >= B_white_terracotta && block <= B_light_gray_terracotta)) return 1;
-  // Wood planks range
-  if (block >= B_oak_planks && block <= B_bamboo_mosaic) return 1;
-  // Wool blocks
-  if (block >= B_white_wool && block <= B_blue_wool) return 1;
-  // Logs and wood blocks
-  if ((block >= B_oak_log && block <= B_pale_oak_log) ||
-      (block >= B_oak_wood && block <= B_pale_oak_wood) ||
-      (block >= B_stripped_spruce_log && block <= B_stripped_mangrove_log)) return 1;
-  return 0;
+  // Everything else: connect only if it's a full solid cube.
+  return is_full_block(block);
 }
 
 static uint8_t wheatBlockAge(uint16_t block) {

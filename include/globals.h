@@ -351,7 +351,8 @@ typedef struct {
 extern ClientState client_states[MAX_PLAYERS];
 
 // Maximum length of a single packet (including chunk data)
-#define MAX_PACKET_LEN 1048576
+// Incoming packets are never large; this is the decompression buffer.
+#define MAX_PACKET_LEN 131072
 extern THREAD_LOCAL uint8_t *packet_buffer;
 extern THREAD_LOCAL int packet_buffer_offset;
 extern THREAD_LOCAL int packet_mode;
@@ -377,7 +378,7 @@ extern int32_t world_weather_rain_time;
 extern int32_t world_weather_thunder_time;
 
 // Fluid update queue for deferred processing
-#define FLUID_QUEUE_SIZE 65536
+#define FLUID_QUEUE_SIZE 8192
 #define FLUID_UPDATES_PER_TICK 64
 
 typedef struct {

@@ -220,21 +220,13 @@ void generate_chunk_data(int x, int z, uint8_t dimension) {
   int world_x = x * 16;
   int world_z = z * 16;
 
-  // Temporary buffer to build complete chunk data (heap allocated to avoid 160KB stack usage)
-  uint16_t (*temp_sections)[4096] = (uint16_t (*)[4096])malloc(20 * 4096 * sizeof(uint16_t));
-  uint8_t *temp_biomes = (uint8_t *)malloc(20);
-  if (!temp_sections || !temp_biomes) {
-    free(temp_sections);
-    free(temp_biomes);
-    pthread_mutex_unlock(chunk_lock);
-    return;
-  }
-
-  // Generate all 20 middle sections into temporary buffer
+  // Generate all 20 middle sections directly into the cache.
+  // The cache entry is marked as generating, so other threads won't read
+  // partially-written data. This avoids a 160KB temporary allocation.
   for (int i = 0; i < 20; i++) {
     int y = i * 16;
-    temp_biomes[i] = (uint8_t)buildChunkSection(world_x, y, world_z, dimension);
-    memcpy(temp_sections[i], chunk_section, 4096 * sizeof(uint16_t));
+    cache->biomes[i] = (uint8_t)buildChunkSection(world_x, y, world_z, dimension);
+    memcpy(cache->sections[i], chunk_section, 4096 * sizeof(uint16_t));
 
     // Register generated wheat (B_wheat_1 through B_wheat_6) in the special
     // blocks table so the growth tick handler will find and grow them.
@@ -255,18 +247,12 @@ void generate_chunk_data(int x, int z, uint8_t dimension) {
     }
   }
 
-  // Copy complete data to cache atomically
   pthread_mutex_lock(&cache_mutex);
-  memcpy(cache->sections, temp_sections, 20 * 4096 * sizeof(uint16_t));
-  memcpy(cache->biomes, temp_biomes, 20);
   cache->valid = 1;
   cache->generating = 0;  // Mark as complete
   pthread_mutex_unlock(&cache_mutex);
 
   pthread_mutex_unlock(chunk_lock);
-
-  free(temp_sections);
-  free(temp_biomes);
 }
 
 // Queue background generation for a chunk if needed.

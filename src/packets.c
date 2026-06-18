@@ -1439,6 +1439,12 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
 
   freeBlockChangesSnapshot(block_changes_snapshot);
 
+  // Shrink data buffer back to minimum after peak chunk serialization.
+  if (data_buf_capacity > 65536) {
+    void *nb = realloc(data_buf, 32768);
+    if (nb) { data_buf = nb; data_buf_capacity = 32768; }
+  }
+
   return 0;
 
 }

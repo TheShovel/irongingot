@@ -371,6 +371,65 @@ uint8_t is_bed_block(uint16_t block) {
     return block >= B_white_bed && block <= B_black_bed;
 }
 
+// Returns 1 for blocks that are full solid cubes (opaque, full collision box).
+// Used by fence connections, piston pushability, etc.
+// The rule: anything that isn't a known non-full shape is assumed full.
+uint8_t is_full_block(uint16_t block) {
+    // Air and fluids
+    if (block <= B_lava_6) return 0;
+    // Non-solid blocks
+    if (block == B_moss_carpet || block == B_composter || block == B_snow ||
+        block == B_short_grass || block == B_sugar_cane || block == B_torch ||
+        block == B_lily_pad || block == B_cactus || block == B_lily_of_the_valley)
+        return 0;
+    // Flowers (dandelion through torchflower, IDs 111-124)
+    if (block >= B_dandelion && block <= B_torchflower) return 0;
+    // Slabs
+    if (is_slab_block(block)) return 0;
+    // Stairs
+    if (is_stair_block(block)) return 0;
+    // Doors
+    if (is_door_block(block)) return 0;
+    // Trapdoors
+    if (is_trapdoor_block(block)) return 0;
+    // Fences
+    if (is_fence_block(block)) return 0;
+    // Saplings
+    if (block >= B_oak_sapling && block <= B_mangrove_propagule) return 0;
+    // Leaves
+    if ((block >= B_spruce_leaves && block <= B_mangrove_leaves && !(block & 1)) ||
+        block == B_oak_leaves)
+        return 0;
+    // Beds
+    if (is_bed_block(block)) return 0;
+    // Rails
+    if (block == B_powered_rail || block == B_detector_rail) return 0;
+    // Plants and decorative non-solids (IDs 236-242)
+    if (block >= B_cobweb && block <= B_seagrass) return 0;
+    // Crops
+    if (block >= B_wheat && block <= B_wheat_7) return 0;
+    // Pressure plates
+    if (block >= B_oak_pressure_plate && block <= B_stone_pressure_plate) return 0;
+    // Carpets
+    if (block == B_white_carpet) return 0;
+    // Walls, glass panes, iron bars
+    if (block == B_sandstone_wall || block == B_cobblestone_wall ||
+        block == B_glass_pane || block == B_iron_bars)
+        return 0;
+    // Various non-full blocks
+    if (block == B_lantern || block == B_ladder || block == B_campfire ||
+        block == B_bell || block == B_tall_grass || block == B_large_fern ||
+        block == B_spawner || block == B_fire || block == B_nether_portal ||
+        block == B_end_portal || block == B_end_portal_frame ||
+        block == B_dirt_path || block == B_farmland ||
+        block == B_lectern || block == B_brewing_stand || block == B_cauldron ||
+        block == B_grindstone || block == B_stonecutter ||
+        block == B_loom || block == B_wall_torch ||
+        block == B_chest || block == B_barrel || block == B_ender_chest)
+        return 0;
+    return 1;
+}
+
 /* ── State decode helpers ─────────────────────────────────────────── */
 
 uint8_t door_get_open(uint16_t state) { return state & 1; }
