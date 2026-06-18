@@ -1,5 +1,12 @@
 ![irongingot](images/title.png)
 
+<div align="center">
+  <img src="https://img.shields.io/github/stars/TheShovel/irongingot?style=flat-square&logo=github" alt="Stars">&nbsp;&nbsp;
+  <img src="https://img.shields.io/github/languages/top/TheShovel/irongingot?style=flat-square&logo=c&label=language" alt="Language">&nbsp;&nbsp;
+  <img src="https://img.shields.io/github/license/TheShovel/irongingot?style=flat-square" alt="License">&nbsp;&nbsp;
+  <img src="https://img.shields.io/github/last-commit/TheShovel/irongingot?style=flat-square&logo=git" alt="Last Commit">
+</div>
+
 **irongingot** is a fork of [bareiron](https://github.com/p2r3/bareiron) - a minimalist Minecraft server for low-spec hardware. This fork keeps the low memory usage and adds some much-needed features.
 
 Runs on as low as **~7MB of RAM** !!!
