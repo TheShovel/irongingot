@@ -109,7 +109,7 @@ These are advanced features or aesthetic improvements.
 - ~~`/gamerule` (Low) - Game rule modification~~ - ✅ 6 rules: doMobSpawning, keepInventory, doImmediateRespawn, naturalRegeneration, doDaylightCycle, doWeatherCycle
 - ~~`/difficulty` (Low) - Difficulty setting~~ - ✅ peaceful|easy|normal|hard
 - `/ban`, `/kick`, `/whitelist` (Low) - Admin tools (requires auth system)
-- `/warp`, `/home`, `/spawn` (Low) - Teleportation commands
+- ~~`/warp`, `/home`, `/spawn` (Low) - Teleportation commands~~ - ✅ `/spawn` - Teleport to world spawn
 
 ### 11. World Generation Enhancements
 

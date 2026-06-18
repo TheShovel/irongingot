@@ -1559,6 +1559,93 @@ static uint16_t getVillageProfessionStructureBlockAt(int dx, int dz, int rel_y, 
   return B_air;
 }
 
+/* ── Village house rotation helpers ────────────────────────────────── */
+
+// Returns rotation (0-3) for a house at (hx,hz) relative to village center (cx,cz)
+// so the front door faces toward the village center.
+// Template default: door at +x, direction=east(1).
+static uint8_t houseRotation(int hx, int hz, int cx, int cz) {
+    int dx = hx - cx;
+    int dz = hz - cz;
+    int adx = dx < 0 ? -dx : dx;
+    int adz = dz < 0 ? -dz : dz;
+    // The road radiates from the center; the house door faces the road.
+    // Houses offset more east/west face the center horizontally;
+    // houses offset more north/south face the center vertically.
+    if (adx > adz) {
+        return (dx > 0) ? 2 : 0;  // E of center: face W (180), W of center: face E (0)
+    } else {
+        return (dz > 0) ? 3 : 1;  // S of center: face N (270), N of center: face S (90)
+    }
+}
+
+// Rotate (dx,dz) by the inverse of `rot` to get template-local coords.
+// The template always has its layout in a fixed orientation (door at +x).
+// This maps a world-space offset into the template's local space.
+// rot: 0=default (door E), 1=90° CW (door S), 2=180° (door W), 3=270° CW (door N)
+// Forward (tpl→world) for rot=1: (dx,dz) = (-rdz, rdx)
+// Inverse (world→tpl) for rot=1: (rdx,rdz) = (dz, -dx)
+static void rotLocal(int dx, int dz, uint8_t rot, int *rx, int *rz) {
+    switch (rot & 3) {
+        case 0: *rx = dx; *rz = dz; break;
+        case 1: *rx = dz; *rz = -dx; break;
+        case 2: *rx = -dx; *rz = -dz; break;
+        case 3: *rx = -dz; *rz = dx; break;
+    }
+}
+
+// Rotate a direction value in north/east/south/west order.
+static uint8_t rotDir(uint8_t dir, uint8_t rot) {
+    return (dir + rot) & 3;
+}
+
+// Rotate a direction value in generated table order: north/south/west/east.
+static uint8_t rotTableDir(uint8_t dir, uint8_t rot) {
+    static const uint8_t table_to_dir[4] = {0, 2, 3, 1};
+    static const uint8_t dir_to_table[4] = {0, 3, 1, 2};
+    return dir_to_table[rotDir(table_to_dir[dir & 3], rot)];
+}
+
+static uint16_t rotFenceConnections(uint16_t block, uint8_t rot) {
+    uint8_t old_conn[4] = {
+        (uint8_t)((block >> 9) & 1),
+        (uint8_t)((block >> 10) & 1),
+        (uint8_t)((block >> 11) & 1),
+        (uint8_t)((block >> 12) & 1)
+    };
+    uint8_t new_conn[4] = {0, 0, 0, 0};
+    for (uint8_t i = 0; i < 4; i++) new_conn[(i + rot) & 3] = old_conn[i];
+    return (block & ~(0xF << 9)) |
+           ((uint16_t)new_conn[0] << 9) |
+           ((uint16_t)new_conn[1] << 10) |
+           ((uint16_t)new_conn[2] << 11) |
+           ((uint16_t)new_conn[3] << 12);
+}
+
+// Rotate packed generated-template state bits by `rot` without corrupting
+// non-directional packed state (slab type, lantern hanging, etc.).
+static uint16_t rotBlockDir(uint16_t block, uint8_t rot) {
+    if (!(block & 0x8000) || rot == 0) return block;
+    uint16_t base = block & 0x1FF;
+
+    if (is_door_block(base) || is_stair_block(base) || is_trapdoor_block(base) || is_bed_block(base)) {
+        uint8_t dir = (block >> 9) & 3;
+        return (block & ~(3 << 9)) | ((uint16_t)rotDir(dir, rot) << 9);
+    }
+    if (base == B_chest || is_horizontal_facing_block(base)) {
+        uint8_t dir = (block >> 9) & 3;
+        return (block & ~(3 << 9)) | ((uint16_t)rotTableDir(dir, rot) << 9);
+    }
+    if (base == B_barrel) {
+        uint8_t dir = (block >> 9) & 7;
+        if (dir >= 4) return block;
+        return (block & ~(7 << 9)) | ((uint16_t)rotDir(dir, rot) << 9);
+    }
+    if (is_fence_block(base)) return rotFenceConnections(block, rot);
+
+    return block;
+}
+
 static uint16_t getVillageBlockAt(int x, int y, int z, uint8_t height) {
   VillageLayout v;
   if (!getVillageLayout(x, z, &v)) return 0xFFFF;
@@ -1586,31 +1673,39 @@ static uint16_t getVillageBlockAt(int x, int y, int z, uint8_t height) {
     int dx = x - hx;
     int dz = z - hz;
     int rel_y = y - v.hy[i];
-    uint8_t house_biome = getChunkBiome(div_floor(hx, 32), div_floor(hz, 32));
+    uint8_t house_biome = v.biome;
     if (!isVillageHouseBiome(house_biome)) continue;
 
+    uint8_t rot = houseRotation(hx, hz, v.cx, v.cz);
     uint8_t style = getVillageTemplateStyleForBiome(house_biome);
 
     const VillageTemplate *vt = &village_templates[style][v.profession[i]];
+
+    // Transform world-space (dx,dz) to template-local (rdx,rdz) by inverse rotation.
+    int rdx, rdz;
+    rotLocal(dx, dz, rot, &rdx, &rdz);
 
     // Check xz footprint before calling getVillageTemplateBlockAt.
     // Most blocks in the village area are outside any given house,
     // so this spares the binary-search + terrain-fill overhead.
     int in_footprint = 0;
     if (vt->block_count > 0) {
-      int lx = dx + (int)vt->origin_x;
-      int lz = dz + (int)vt->origin_z;
+      int lx = rdx + (int)vt->origin_x;
+      int lz = rdz + (int)vt->origin_z;
       if (lx >= 0 && lx < (int)vt->size_x && lz >= 0 && lz < (int)vt->size_z) {
         in_footprint = 1;
       }
     }
 
     if (in_footprint) {
-      uint16_t template_block = getVillageTemplateBlockAt(style, v.profession[i], dx, rel_y, dz);
+      uint16_t template_block = getVillageTemplateBlockAt(style, v.profession[i], rdx, rel_y, rdz);
       if (template_block != VILLAGE_TEMPLATE_NONE) {
         // Skip grindstone blocks baked into templates — they should not
         // appear in village buildings.
-        if ((template_block & 0x1FF) != B_grindstone) return template_block;
+        if ((template_block & 0x1FF) != B_grindstone) {
+          // Rotate the block's direction to match the house rotation
+          return rotBlockDir(template_block, rot);
+        }
       }
 
       // Terrain integration: fill gaps below building floors and clear terrain
@@ -1628,7 +1723,7 @@ static uint16_t getVillageBlockAt(int x, int y, int z, uint8_t height) {
         // Only fill if this column has template blocks above that need support.
         int has_block_above = 0;
         for (int check_y = 0; check_y < (int)vt->size_y && !has_block_above; check_y++) {
-          if (getVillageTemplateBlockAt(style, v.profession[i], dx, check_y, dz) != VILLAGE_TEMPLATE_NONE) {
+          if (getVillageTemplateBlockAt(style, v.profession[i], rdx, check_y, rdz) != VILLAGE_TEMPLATE_NONE) {
             has_block_above = 1;
           }
         }
@@ -1645,8 +1740,11 @@ static uint16_t getVillageBlockAt(int x, int y, int z, uint8_t height) {
 
     if (villageTemplateExists(style, v.profession[i])) continue;
 
-    uint16_t block = getVillageProfessionStructureBlockAt(dx, dz, rel_y, v.profession[i], house_biome, v.variant[i]);
-    if (block != 0xFFFF) return block;
+    uint16_t block = getVillageProfessionStructureBlockAt(rdx, rdz, rel_y, v.profession[i], house_biome, v.variant[i]);
+    if (block != 0xFFFF) {
+      // Rotate the block's direction for special blocks (e.g. doors)
+      return rotBlockDir(block, rot);
+    }
   }
 
   uint16_t path = getVillagePathBlockAt(x, y, z, height, &v);
@@ -1666,7 +1764,7 @@ uint8_t getVillageHousePositions(int x, int z, short *house_x, short *house_z, u
   for (int i = 0; i < v.houses && count < max_houses; i++) {
     int hx = v.hx[i];
     int hz = v.hz[i];
-    uint8_t house_biome = getChunkBiome(div_floor(hx, 32), div_floor(hz, 32));
+    uint8_t house_biome = v.biome;
     if (!isVillageHouseBiome(house_biome)) continue;
 
     house_x[count] = (short)hx;
@@ -1702,16 +1800,19 @@ uint8_t getVillageProfessionAt(int x, int z) {
     int adx = dx < 0 ? -dx : dx;
     int adz = dz < 0 ? -dz : dz;
     uint8_t prof = v.profession[i];
-    uint8_t house_biome = getChunkBiome(div_floor(hx, 32), div_floor(hz, 32));
+    uint8_t house_biome = v.biome;
     if (!isVillageHouseBiome(house_biome)) continue;
 
     uint8_t style = getVillageTemplateStyleForBiome(house_biome);
     const VillageTemplate *vt = &village_templates[style][prof];
 
     if (vt->block_count > 0) {
-      // Template-based building: check template footprint
-      int lx = dx + (int)vt->origin_x;
-      int lz = dz + (int)vt->origin_z;
+      // Template-based building: check rotated template footprint
+      uint8_t rot = houseRotation(hx, hz, v.cx, v.cz);
+      int rdx, rdz;
+      rotLocal(dx, dz, rot, &rdx, &rdz);
+      int lx = rdx + (int)vt->origin_x;
+      int lz = rdz + (int)vt->origin_z;
       if (lx >= 0 && lx < (int)vt->size_x && lz >= 0 && lz < (int)vt->size_z) {
         return prof;
       }

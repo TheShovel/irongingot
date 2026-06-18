@@ -39,7 +39,28 @@ You can download pre-built binaries from the [Releases page](https://github.com/
 
 ## Compilation
 
-Before compiling, you'll need to dump registry data and village structure templates from a vanilla Minecraft server. On Linux, this can be done automatically using the `extract_registries.sh` script. Otherwise, the manual process is as follows: create a folder called `notchian` here, and put a Minecraft server JAR in it. Then, follow [this guide](https://minecraft.wiki/w/Minecraft_Wiki:Projects/wiki.vg_merge/Data_Generators) to dump all of the registries (use the _second_ command with the `--all` flag), extract `data/minecraft/structure/village` from the nested `META-INF/versions/<version>/server-<version>.jar` into `notchian/generated/data/minecraft/structure/village`, and run both `build_registries.js` and `build_village_templates.js` with either [bun](https://bun.sh/), [node](https://nodejs.org/en/download), or [deno](https://docs.deno.com/runtime/getting_started/installation/).
+Before compiling from source, you'll need to dump registry data and village structure templates from a vanilla Minecraft server. **The easiest way is to run `./rebuild.sh`:**
+
+```sh
+./rebuild.sh
+```
+
+That script downloads and verifies the MC 1.21.8 `server.jar` into `notchian/` if needed, runs the vanilla data generator, extracts village structure NBT, regenerates `include/registries.h`, `src/registries.c`, `include/generated_village_templates.h`, and `src/generated_village_templates.c`, then runs `./build.sh`.
+
+Prerequisites for `./rebuild.sh`: Java 21+ JDK, Node.js, and curl.
+
+If you prefer to do it manually: create a folder called `notchian` here, and put a Minecraft server JAR in it. Then run the following commands from the project root:
+
+```sh
+cd notchian
+java -DbundlerMainClass="net.minecraft.data.Main" -jar server.jar --all
+cd ..
+node build_registries.js
+node build_village_templates.js
+./build.sh
+```
+
+Alternatively, use the included `extract_registries.sh` script to automate the Java + extraction steps.
 
 ### Dependencies
 
@@ -73,8 +94,9 @@ sudo pacman -S --needed zig
 
 ### Build Commands
 
-Before building, generate `include/registries.h` as described above.
+Before building, generate `include/registries.h` as described above, or use `./rebuild.sh` to regenerate everything and build in one step.
 
+- **Full data/codegen rebuild + local binary:** `./rebuild.sh`
 - **All release packages:** `./build_all.sh`
   - writes packages to `build/`
   - builds `irongingot-v<VERSION>-linux-glibc.zip`

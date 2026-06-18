@@ -828,7 +828,11 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
           } else if (is_stair_block(_t)) { \
             uint8_t _d = (_pv >> 9) & 3; \
             uint8_t _h = (_pv >> 11) & 1; \
-            val = get_stair_state_id(_t, _h, _d); \
+            uint8_t _s = (_pv >> 12) & 7; \
+            val = get_stair_shape_state_id(_t, _h, _d, _s); \
+          } else if (is_slab_block(_t)) { \
+            uint8_t _type = (_pv >> 9) & 3; \
+            val = get_slab_state_id(_t, _type); \
           } else if (is_trapdoor_block(_t)) { \
             uint8_t _d = (_pv >> 9) & 3; \
             uint8_t _h = (_pv >> 11) & 1; \
@@ -1354,12 +1358,13 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
           num_generated++;
         }
       } else if (isStairBlock(block_type)) {
-        // Decode facing (bits 9-10) and half (bit 11) from raw
+        // Decode facing (bits 9-10), half (bit 11), and shape (bits 12-14) from raw
         uint8_t direction = (raw >> 9) & 3;
         uint8_t half = (raw >> 11) & 1;
+        uint8_t shape = (raw >> 12) & 7;
         if (!special_block_has_entry(wx, wy, wz, dimension))
-          special_block_set_state(wx, wy, wz, dimension, block_type, stair_encode_state(half, direction));
-        uint16_t state_id = get_stair_state_id(block_type, half, direction);
+          special_block_set_state(wx, wy, wz, dimension, block_type, stair_shape_encode_state(half, direction, shape));
+        uint16_t state_id = get_stair_shape_state_id(block_type, half, direction, shape);
         sc_blockUpdateState(client_fd, wx, wy, wz, state_id);
         if (num_generated < 62) {
           processed_generated[num_generated][0] = wx;
@@ -2697,10 +2702,17 @@ int sc_systemChat (int client_fd, char* message, uint16_t len) {
 }
 
 // C->S Chat Message
+// Flag to differentiate Chat Message (0x08) from Chat Command (0x09) packets.
+// When set, cs_chat skips readStringN (data already in recv_buffer with ! prefix)
+// and skips the Chat Message-specific packet tail cleanup.
+static int chat_is_command_packet = 0;
+
 int cs_chat (int client_fd) {
 
   // To be safe, cap messages to 32 bytes before the buffer length
-  readStringN(client_fd, 224);
+  if (!chat_is_command_packet) {
+    readStringN(client_fd, 224);
+  }
 
   PlayerData *player;
   if (getPlayerData(client_fd, &player)) return 1;
@@ -3197,6 +3209,7 @@ int cs_chat (int client_fd) {
     "  /gamemode <survival|creative|adventure|spectator> - Set server gamemode\n"
     "  /difficulty <peaceful|easy|normal|hard> - Set server difficulty\n"
     "  /tp <x> <y> <z> - Teleport to coordinates\n"
+    "  /spawn - Teleport to world spawn\n"
     "  /give [player] <item_name> [count] - Give items\n"
     "  /time set <ticks|day|noon|night|midnight> - Set world time\n"
     "  /weather <clear|rain|thunder> - Set world weather\n"
@@ -3357,6 +3370,35 @@ int cs_chat (int client_fd) {
     char response[128];
     int resp_len = snprintf(response, sizeof(response), "§7Teleported to §f%d, %d, %d", tx, ty, tz);
     sc_systemChat(client_fd, response, (uint16_t)resp_len);
+    goto cleanup;
+  }
+
+  // !spawn - Teleport to world spawn
+  if (!strncmp((char *)recv_buffer, "!spawn", 6) && isCommandBoundary(recv_buffer, 6)) {
+    short sx = 8;
+    short sz = 8;
+    uint8_t sy = getHeightAt(sx, sz);
+    if (sy < 1) sy = 64;
+
+    player->x = sx;
+    player->y = sy;
+    player->z = sz;
+    player->grounded_y = sy;
+
+    sc_synchronizePlayerPosition(client_fd, (double)sx + 0.5, (double)sy, (double)sz + 0.5,
+      (float)player->yaw * 180.0f / 127.0f, (float)player->pitch * 90.0f / 127.0f);
+
+    for (int i = 0; i < MAX_PLAYERS; i++) {
+      if (player_data[i].client_fd == -1) continue;
+      if (player_data[i].client_fd == client_fd) continue;
+      if (player_data[i].flags & 0x20) continue;
+      sc_teleportEntity(player_data[i].client_fd, client_fd,
+        (double)sx + 0.5, (double)sy, (double)sz + 0.5,
+        (float)player->yaw * 180.0f / 127.0f, (float)player->pitch * 90.0f / 127.0f);
+    }
+
+    const char msg[] = "§7Teleported to world spawn.";
+    sc_systemChat(client_fd, (char *)msg, (uint16_t)sizeof(msg) - 1);
     goto cleanup;
   }
 
@@ -3713,16 +3755,42 @@ int cs_chat (int client_fd) {
   sc_systemChat(client_fd, "§7Unknown command", 18);
 
 cleanup:
-  readUint64(client_fd); // Ignore timestamp
-  readUint64(client_fd); // Ignore salt
-  // Ignore signature (if any)
-  uint8_t has_signature = readByte(client_fd);
-  if (has_signature) recv_all(client_fd, recv_buffer, 256, false);
-  readVarInt(client_fd); // Ignore message count
-  // Ignore acknowledgement bitmask and checksum
-  recv_all(client_fd, recv_buffer, 4, false);
+  if (!chat_is_command_packet) {
+    readUint64(client_fd); // Ignore timestamp
+    readUint64(client_fd); // Ignore salt
+    // Ignore signature (if any)
+    uint8_t has_signature = readByte(client_fd);
+    if (has_signature) recv_all(client_fd, recv_buffer, 256, false);
+    readVarInt(client_fd); // Ignore message count
+    // Ignore acknowledgement bitmask and checksum
+    recv_all(client_fd, recv_buffer, 4, false);
+  }
+  chat_is_command_packet = 0;
 
   return 0;
+}
+
+// C->S Chat Command (0x09) - commands typed with / prefix
+int cs_chat_command (int client_fd) {
+  readStringN(client_fd, 224);
+
+  PlayerData *player;
+  if (getPlayerData(client_fd, &player)) return 1;
+
+  if (!config.enable_commands) {
+    sc_systemChat(client_fd, "§cCommands are disabled on this server", 39);
+    return 0;
+  }
+
+  // Prepend ! so existing command checks match
+  size_t cmd_len = strlen((char *)recv_buffer);
+  if (cmd_len > 0 && cmd_len < 223) {
+    memmove(recv_buffer + 1, recv_buffer, cmd_len + 1);
+    recv_buffer[0] = '!';
+  }
+
+  chat_is_command_packet = 1;
+  return cs_chat(client_fd);
 }
 
 // C->S Interact

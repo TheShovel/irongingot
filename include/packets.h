@@ -19,6 +19,7 @@ int cs_clickContainer (int client_fd);
 int cs_closeContainer (int client_fd);
 int cs_clientStatus (int client_fd);
 int cs_chat (int client_fd);
+int cs_chat_command (int client_fd);
 int cs_interact (int client_fd);
 int cs_playerInput (int client_fd);
 int cs_playerCommand (int client_fd);

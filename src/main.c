@@ -523,6 +523,10 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
       if (state == STATE_PLAY) cs_chat(client_fd);
       break;
 
+    case 0x09:
+      if (state == STATE_PLAY) cs_chat_command(client_fd);
+      break;
+
     case 0x0A:
       if (state == STATE_PLAY) {
         // Chunk Batch Received: desired chunks per tick (float)

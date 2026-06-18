@@ -35,6 +35,7 @@ MC 1.21.8 (proto 772) server in C. Fork of bareiron. ~7MB RAM (musl static). Lin
 | `world.json` | Auto-saved world state |
 | `build.sh` | Single binary build (gcc or musl-gcc) |
 | `build_all.sh` | Full release packaging (glibc + musl + ARM64 + Windows .zips) |
+| `rebuild.sh` | **One-command rebuild:** downloads server.jar, dumps registries, generates code, compiles |
 | `build_registries.js` | Generate `registries.h` + `registries.c` from vanilla data |
 | `build_village_templates.js` | Generate village templates from vanilla NBT |
 | `extract_registries.sh` | Automates dumping from vanilla server.jar |
@@ -121,16 +122,21 @@ Wheat growth uses a dedicated tracking list (`wheat_coords[]`/`wheat_count` in `
 
 46 internal slots: hotbar(9) + main(27) + armor(4) + offhand(1) + crafting(4) + result(1). Window types: player inventory, chest (27/54), crafting table (41), merchant (3). Slot mapping via `serverSlotToClientSlot()`/`clientSlotToServerSlot()`.
 
+## Village House Rotation (worldgen.c)
+
+Houses are placed at fixed offsets from the village center. They rotate so each front door faces the village center; all houses use the center biome style (prevents mixed taiga/birch edge houses). Helpers: `houseRotation()`, `rotLocal()`, type-aware `rotBlockDir()` (doors/stairs/trapdoors/beds/chests/horiz/fences only). Generated templates preserve stair shape + slab type.
+
 ## State Encoding (special_block.h)
 
 Single `uint16_t` bits per block type:
 - **Doors:** bit0=open, bit1=hinge, bits2-3=direction
 - **Trapdoors:** bit0=open, bit1=half, bits2-3=direction
-- **Stairs:** bits0-1=half, bits2-3=direction
+- **Stairs:** bits0-1=half, bits2-3=direction, bits4-6=shape
+- **Slabs:** bits0-1=type (generated-template packing only)
 - **Furnaces:** bits0-1=direction, bit2=lit
 - **Chests/ender_chests:** bits0-1=direction
 - **Barrels:** bits0-2=direction, bit3=open
-- **Fences:** bits0-3=N/E/S/W connections
+- **Fences/glass panes:** bits0-3=N/E/S/W connections
 - **Beds:** bits0-1=direction, bit2=head, bit3=occupied
 - **Horizontal-facing (wall_torch/lectern/ladder):** bits0-1=direction (north/south/west/east)
 
@@ -156,7 +162,9 @@ Debug: log_unknown_packets, log_length_discrepancy, log_chunk_generation
 | Linux ARM64 musl | zig cc | bundled zlib |
 | Windows | mingw-w64-gcc | bundled zlib + ws2_32 |
 
-`./build.sh` (single), `./build_all.sh` (all targets + .zips). Prereq: `include/registries.h` generated from vanilla server.jar via `extract_registries.sh` (needs Java 21+ and Node/Bun/Deno).
+`./build.sh` (single), `./build_all.sh` (all targets + .zips).
+**`./rebuild.sh`** — all-in-one: downloads server.jar → dumps registries → generates code → compiles.
+Prereq: `include/registries.h` generated from vanilla server.jar via `extract_registries.sh` or `rebuild.sh` (needs Java 21+ and Node/Bun/Deno).
 
 ## Thread Safety
 
@@ -173,4 +181,4 @@ Debug: log_unknown_packets, log_length_discrepancy, log_chunk_generation
 - Windows: ~30MB
 
 ## Key missing features (MISSING_FEATURES.md)
-Ghast/Blaze/MagmaCube/Shulker mobs, brewing/potions, enchanting/anvil, cow/pig/sheep/chicken breeding, item entities, redstone, online mode.
+Ghast/Blaze/MagmaCube/Shulker mobs, brewing/potions, enchanting/anvil, cow/pig/sheep/chicken breeding, item entities, redstone, online mode. /spawn command added. /commands fixed (Chat Command 0x09 handler).

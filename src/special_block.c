@@ -306,6 +306,23 @@ uint8_t is_stair_block(uint16_t block) {
     );
 }
 
+uint8_t is_slab_block(uint16_t block) {
+    return (
+        block == B_oak_slab ||
+        block == B_spruce_slab ||
+        block == B_birch_slab ||
+        block == B_jungle_slab ||
+        block == B_acacia_slab ||
+        block == B_cherry_slab ||
+        block == B_dark_oak_slab ||
+        block == B_pale_oak_slab ||
+        block == B_mangrove_slab ||
+        block == B_cobblestone_slab ||
+        block == B_smooth_sandstone_slab ||
+        block == B_sandstone_slab
+    );
+}
+
 uint8_t is_trapdoor_block(uint16_t block) {
     return (
         block == B_oak_trapdoor ||
@@ -337,7 +354,8 @@ uint8_t is_fence_block(uint16_t block) {
         block == B_cherry_fence ||
         block == B_dark_oak_fence ||
         block == B_pale_oak_fence ||
-        block == B_mangrove_fence
+        block == B_mangrove_fence ||
+        block == B_glass_pane
     );
 }
 
@@ -363,6 +381,8 @@ uint8_t trapdoor_get_half(uint16_t state) { return (state >> 1) & 1; }
 uint8_t trapdoor_get_direction(uint16_t state) { return (state >> 2) & 3; }
 uint8_t stair_get_half(uint16_t state) { return state & 3; }
 uint8_t stair_get_direction(uint16_t state) { return (state >> 2) & 3; }
+uint8_t stair_get_shape(uint16_t state) { return (state >> 4) & 7; }
+uint8_t slab_get_type(uint16_t state) { return state & 3; }
 uint8_t oriented_get_direction(uint16_t state) { return state & 3; }
 uint8_t furnace_get_direction(uint16_t state) { return state & 3; }
 uint8_t furnace_get_lit(uint16_t state) { return (state >> 2) & 1; }
@@ -383,17 +403,35 @@ uint8_t bed_get_occupied(uint16_t state) { return (state >> 3) & 1; }
 uint16_t get_door_state_id(uint16_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge) {
     uint8_t row = door_block_to_row[block];
     if (row == 255) return block_palette[block];
-    uint8_t idx = is_upper * 16 + hinge * 8 + direction * 2 + open;
+    // Generated table layout: facing(n,s,w,e) × half(upper,lower) × hinge(left,right) × open(true,false)
+    //   Index = facing*8 + half*4 + hinge*2 + open
+    // Convert C params to table indices:
+    //   facing (JS order): north=0, south=1, west=2, east=3
+    //   half: 0=upper, 1=lower
+    //   hinge: 0=left, 1=right
+    //   open: 0=true, 1=false
+    static const uint8_t tf[4] = {0, 3, 1, 2}; // Minecraft direction → table facing
+    uint8_t idx = tf[direction] * 8 + (1 - is_upper) * 4 + hinge * 2 + (1 - open);
     return door_state_rows[row][idx];
 }
 
 uint16_t get_stair_state_id(uint16_t block, uint8_t half, uint8_t direction) {
+    return get_stair_shape_state_id(block, half, direction, 0);
+}
+
+uint16_t get_stair_shape_state_id(uint16_t block, uint8_t half, uint8_t direction, uint8_t shape) {
     uint8_t row = stair_block_to_row[block];
     if (row == 255) return block_palette[block];
     static const uint8_t table_facing[4] = {0, 3, 1, 2};
-    uint8_t tf = table_facing[direction];
-    uint8_t idx = tf * 2 + half;
+    uint8_t tf = table_facing[direction & 3];
+    uint8_t idx = (uint8_t)(tf * 10 + (half & 1) * 5 + (shape > 4 ? 0 : shape));
     return stair_state_rows[row][idx];
+}
+
+uint16_t get_slab_state_id(uint16_t block, uint8_t type) {
+    uint8_t row = slab_block_to_row[block];
+    if (row == 255) return block_palette[block];
+    return slab_state_rows[row][type > 2 ? 0 : type];
 }
 
 uint16_t get_trapdoor_state_id(uint16_t block, uint8_t open, uint8_t direction, uint8_t half) {
@@ -452,7 +490,15 @@ uint16_t trapdoor_encode_state(uint8_t open, uint8_t half, uint8_t direction) {
 }
 
 uint16_t stair_encode_state(uint8_t half, uint8_t direction) {
-    return (uint16_t)((half & 3) | ((direction & 3) << 2));
+    return stair_shape_encode_state(half, direction, 0);
+}
+
+uint16_t stair_shape_encode_state(uint8_t half, uint8_t direction, uint8_t shape) {
+    return (uint16_t)((half & 3) | ((direction & 3) << 2) | ((shape & 7) << 4));
+}
+
+uint16_t slab_encode_state(uint8_t type) {
+    return (uint16_t)(type & 3);
 }
 
 uint16_t oriented_encode_state(uint8_t direction) {

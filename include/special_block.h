@@ -27,7 +27,12 @@
  * Stairs (all supported stairs):
  *   Bits 0-1:   half (0=bottom, 1=top)
  *   Bits 2-3:   direction (0=north, 1=east, 2=south, 3=west)
- *   Bits 4-15:  unused
+ *   Bits 4-6:   shape (0=straight, 1=inner_left, 2=inner_right, 3=outer_left, 4=outer_right)
+ *   Bits 7-15:  unused
+ *
+ * Slabs (generated templates only):
+ *   Bits 0-1:   type (0=bottom, 1=top, 2=double)
+ *   Bits 2-15:  unused
  *
  * Furnaces (B_furnace):
  *   Bits 0-1:   direction (0=north, 1=east, 2=south, 3=west)
@@ -101,6 +106,8 @@ uint8_t special_block_has_entry(short x, uint8_t y, short z, uint8_t dimension);
 uint16_t get_door_state_id(uint16_t block, uint8_t is_upper, uint8_t open, uint8_t direction, uint8_t hinge);
 uint16_t get_trapdoor_state_id(uint16_t block, uint8_t open, uint8_t direction, uint8_t half);
 uint16_t get_stair_state_id(uint16_t block, uint8_t half, uint8_t direction);
+uint16_t get_stair_shape_state_id(uint16_t block, uint8_t half, uint8_t direction, uint8_t shape);
+uint16_t get_slab_state_id(uint16_t block, uint8_t type);
 uint16_t get_oriented_state_id(uint16_t block, uint8_t direction);
 uint16_t get_furnace_state_id(uint8_t direction, uint8_t lit);
 uint16_t get_fence_state_id(uint16_t block, uint8_t connections);
@@ -110,6 +117,7 @@ uint16_t get_bed_state_id(uint16_t block, uint8_t head, uint8_t occupied, uint8_
 /* Block type queries */
 uint8_t is_door_block(uint16_t block);
 uint8_t is_stair_block(uint16_t block);
+uint8_t is_slab_block(uint16_t block);
 uint8_t is_trapdoor_block(uint16_t block);
 uint8_t is_oriented_block(uint16_t block);
 uint8_t is_fence_block(uint16_t block);
@@ -125,6 +133,8 @@ uint8_t trapdoor_get_half(uint16_t state);
 uint8_t trapdoor_get_direction(uint16_t state);
 uint8_t stair_get_half(uint16_t state);
 uint8_t stair_get_direction(uint16_t state);
+uint8_t stair_get_shape(uint16_t state);
+uint8_t slab_get_type(uint16_t state);
 uint8_t oriented_get_direction(uint16_t state);
 uint8_t furnace_get_direction(uint16_t state);
 uint8_t furnace_get_lit(uint16_t state);
@@ -144,6 +154,8 @@ uint8_t bed_get_occupied(uint16_t state);
 uint16_t door_encode_state(uint8_t open, uint8_t hinge, uint8_t direction);
 uint16_t trapdoor_encode_state(uint8_t open, uint8_t half, uint8_t direction);
 uint16_t stair_encode_state(uint8_t half, uint8_t direction);
+uint16_t stair_shape_encode_state(uint8_t half, uint8_t direction, uint8_t shape);
+uint16_t slab_encode_state(uint8_t type);
 uint16_t oriented_encode_state(uint8_t direction);
 uint16_t furnace_encode_state(uint8_t direction, uint8_t lit);
 uint16_t barrel_encode_state(uint8_t direction, uint8_t open);

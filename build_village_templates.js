@@ -241,6 +241,14 @@ function readNbt(file) {
 }
 
 const dirMap = { north: 0, east: 1, south: 2, west: 3 };
+const stairShapeMap = {
+  straight: 0,
+  inner_left: 1,
+  inner_right: 2,
+  outer_left: 3,
+  outer_right: 4,
+};
+const slabTypeMap = { bottom: 0, top: 1, double: 2 };
 const prefixOrder = [
   "oak",
   "spruce",
@@ -345,13 +353,22 @@ function mapBlock(state, reg, missing) {
     return 0x8000 | base | (d << 9);
   }
 
-  // Handle stairs with facing and half
+  // Handle stairs with facing, half, and shape
   if (name.endsWith("_stairs") && reg.has(name) && props.facing) {
     const base = reg.get(name);
     const d = dirMap[props.facing] ?? 0;
     const half = props.half === "top" ? 1 : 0;
-    // Use bits: facing in 9-10, half in 11
-    return 0x8000 | base | (d << 9) | (half << 11);
+    const shape = stairShapeMap[props.shape] ?? 0;
+    // Use bits: facing in 9-10, half in 11, shape in 12-14
+    return 0x8000 | base | (d << 9) | (half << 11) | (shape << 12);
+  }
+
+  // Handle slabs with type
+  if (name.endsWith("_slab") && reg.has(name) && props.type) {
+    const base = reg.get(name);
+    const type = slabTypeMap[props.type] ?? 0;
+    // Use bits: slab type in 9-10 (0=bottom, 1=top, 2=double)
+    return 0x8000 | base | (type << 9);
   }
 
   // Handle trapdoors with facing, half, open
@@ -373,11 +390,16 @@ function mapBlock(state, reg, missing) {
     if (fallback !== undefined && fallback !== 0xffff && props.facing) {
       const d = dirMap[props.facing] ?? 0;
       const half = props.half === "top" ? 1 : 0;
-      return 0x8000 | fallback | (d << 9) | (half << 11);
+      const shape = stairShapeMap[props.shape] ?? 0;
+      return 0x8000 | fallback | (d << 9) | (half << 11) | (shape << 12);
     }
-  } else if (name.endsWith("_slab"))
+  } else if (name.endsWith("_slab")) {
     fallback = pick(reg, `${p}_slab`, "cobblestone_slab", "oak_slab");
-  else if (name.endsWith("_trapdoor")) {
+    if (fallback !== undefined && fallback !== 0xffff && props.type) {
+      const type = slabTypeMap[props.type] ?? 0;
+      return 0x8000 | fallback | (type << 9);
+    }
+  } else if (name.endsWith("_trapdoor")) {
     fallback = pick(reg, `${p}_trapdoor`, "oak_trapdoor");
     if (fallback !== undefined && fallback !== 0xffff && props.facing) {
       const d = dirMap[props.facing] ?? 0;
