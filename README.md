@@ -47,20 +47,7 @@ Before compiling from source, you'll need to dump registry data and village stru
 
 That script downloads and verifies the MC 1.21.8 `server.jar` into `notchian/` if needed, runs the vanilla data generator, extracts village structure NBT, regenerates `include/registries.h`, `src/registries.c`, `include/generated_village_templates.h`, and `src/generated_village_templates.c`, then runs `./build.sh`.
 
-Prerequisites for `./rebuild.sh`: Java 21+ JDK, Node.js, and curl.
-
-If you prefer to do it manually: create a folder called `notchian` here, and put a Minecraft server JAR in it. Then run the following commands from the project root:
-
-```sh
-cd notchian
-java -DbundlerMainClass="net.minecraft.data.Main" -jar server.jar --all
-cd ..
-node build_registries.js
-node build_village_templates.js
-./build.sh
-```
-
-Alternatively, use the included `extract_registries.sh` script to automate the Java + extraction steps.
+Prerequisites for `./rebuild.sh`: Java 21+ JDK, Node.js, and curl. On Windows, use **WSL** (Windows Subsystem for Linux) to run the rebuild script.
 
 ### Dependencies
 
