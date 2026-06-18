@@ -7,7 +7,8 @@
 typedef struct {
   int x;  // Chunk X
   int z;  // Chunk Z
-  uint16_t sections[20][4096];  // Block data for 20 middle sections
+  uint16_t *sections[20];  // Block data for 20 middle sections, NULL if uniform
+  uint16_t uniform_blocks[20];  // Block state if section is uniform
   uint8_t biomes[20];  // Biome for each section
   uint8_t valid;
   uint8_t generating;  // Lock-free generation flag

@@ -62,14 +62,14 @@ recv → readVarInt(pid) → handlePacket() switch
 
 ## Chunk Pipeline
 
-Chunks are generated **synchronously on demand** by the chunk streamer thread (~1.7ms/chunk, 7× faster than original). A tiny LRU cache (24 entries, ~4MB) serves as scratch buffer between generation and network serialization — no async queue needed. Background worker threads opportunistically pre-generate chunks in a 3×3 area around each player.
+Chunks are generated **synchronously on demand** by the chunk streamer thread (~1.7ms/chunk, 7× faster than original). A tiny LRU cache (24 entries, dynamic allocation, ~1-2MB depending on uniform sections) serves as scratch buffer between generation and network serialization — no async queue needed. Background worker threads opportunistically pre-generate chunks in a 3×3 area around each player.
 
 Chunk flow: `streamChunksForPlayer()` → cache miss → `generate_chunk_data()` (sync, ~1.7ms) → serialize → `sc_chunkDataAndUpdateLight()` → send queue. View distance from `config.view_distance` (server.conf, clamped 2-32). Streamer sends up to 10 chunks per 20ms cycle.
 
 ## Key Datatypes
 
 - **`PlayerData`** (globals.h): pos, yaw/pitch, health/hunger/sat, hotbar+36+armor+offhand+crafting inventory (uint16_t item IDs), ender chest, flags (sprint/sneak/fly/etc), dimension, spawn, open merchant, XP, portal coords
-- **`CachedChunkData`** (chunk_generator.h): 20 sections × 4096 `uint16_t` blocks, biomes[20], LRU via access_count, lock-free `generating` flag
+- **`CachedChunkData`** (chunk_generator.h): 20 section pointers (NULL if uniform/all-air), uniform_blocks[20], biomes[20], LRU, lock-free `generating` flag
 - **`MobData`** (globals.h): type, pos, move_delta, timers, profession, dimension. Max `MAX_MOBS`
 - **`SpecialBlockEntry`** (special_block.h): hash table (MAX_SPECIAL_BLOCKS=8192), keyed by pos, value = `uint16_t` state bitfield
 - **`BlockChange`** (globals.h): player edits {x,y,z,block,dimension}

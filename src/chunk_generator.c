@@ -226,7 +226,28 @@ void generate_chunk_data(int x, int z, uint8_t dimension) {
   for (int i = 0; i < 20; i++) {
     int y = i * 16;
     cache->biomes[i] = (uint8_t)buildChunkSection(world_x, y, world_z, dimension);
-    memcpy(cache->sections[i], chunk_section, 4096 * sizeof(uint16_t));
+    uint16_t first = chunk_section[0];
+    int uniform = 1;
+    for (int j = 1; j < 4096; j++) {
+      if (chunk_section[j] != first) {
+        uniform = 0;
+        break;
+      }
+    }
+    if (uniform) {
+      if (cache->sections[i] != NULL) {
+        free(cache->sections[i]);
+        cache->sections[i] = NULL;
+      }
+      cache->uniform_blocks[i] = first;
+    } else {
+      if (cache->sections[i] == NULL) {
+        cache->sections[i] = (uint16_t *)malloc(4096 * sizeof(uint16_t));
+      }
+      if (cache->sections[i] != NULL) {
+        memcpy(cache->sections[i], chunk_section, 4096 * sizeof(uint16_t));
+      }
+    }
 
     // Register generated wheat (B_wheat_1 through B_wheat_6) in the special
     // blocks table so the growth tick handler will find and grow them.
@@ -292,7 +313,21 @@ int get_cached_chunk_copy(int x, int z, uint8_t dimension, uint16_t out_sections
     if (chunk_cache[i].valid && !chunk_cache[i].generating &&
         chunk_cache[i].x == x && chunk_cache[i].z == z && chunk_cache[i].dimension == dimension) {
       chunk_cache[i].access_count = ++global_access_counter;
-      memcpy(out_sections, chunk_cache[i].sections, sizeof(chunk_cache[i].sections));
+      for (int s = 0; s < 20; s++) {
+        if (chunk_cache[i].sections[s] != NULL) {
+          memcpy(out_sections[s], chunk_cache[i].sections[s], 4096 * sizeof(uint16_t));
+        } else {
+          uint16_t block = chunk_cache[i].uniform_blocks[s];
+          if (block == 0) {
+            memset(out_sections[s], 0, 4096 * sizeof(uint16_t));
+          } else {
+            uint16_t *dest = out_sections[s];
+            for (int j = 0; j < 4096; j++) {
+              dest[j] = block;
+            }
+          }
+        }
+      }
       memcpy(out_biomes, chunk_cache[i].biomes, sizeof(chunk_cache[i].biomes));
       pthread_mutex_unlock(&cache_mutex);
       return 1;
@@ -435,6 +470,14 @@ void shutdown_chunk_generator() {
   worker_thread_count = 1;
 
   if (chunk_cache) {
+    for (int i = 0; i < cache_size; i++) {
+      for (int s = 0; s < 20; s++) {
+        if (chunk_cache[i].sections[s] != NULL) {
+          free(chunk_cache[i].sections[s]);
+          chunk_cache[i].sections[s] = NULL;
+        }
+      }
+    }
     free(chunk_cache);
     chunk_cache = NULL;
   }
