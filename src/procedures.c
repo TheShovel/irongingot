@@ -7837,7 +7837,7 @@ void handleServerTick (int64_t time_since_last_tick) {
         } else player->flagval_8 ++;
       }
       if (player->flags & 0x10) {
-        if (player->flagval_16 >= (uint16_t)(1.6f * TICKS_PER_SECOND)) {
+        if (player->flagval_16 >= (uint16_t)(0.8f * TICKS_PER_SECOND)) {
           handlePlayerEating(&player_data[i], false);
           player->flags &= ~0x10;
           player->flagval_16 = 0;
@@ -9273,7 +9273,7 @@ static void updatePlayerStateTask(void* arg) {
 
   // Handle eating animation timer (no packet - will be sent in main thread)
   if (player->flags & 0x10) {
-    if (player->flagval_16 >= (uint16_t)(1.6f * TICKS_PER_SECOND)) {
+    if (player->flagval_16 >= (uint16_t)(0.8f * TICKS_PER_SECOND)) {
       // Complete eating - update state only, packets sent separately
       uint16_t *held_item = &player->inventory_items[player->hotbar];
       uint8_t *held_count = &player->inventory_count[player->hotbar];
