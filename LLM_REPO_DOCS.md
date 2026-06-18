@@ -6,7 +6,7 @@ MC 1.21.8 (proto 772) server in C. Fork of bareiron. ~7MB RAM (musl static). Lin
 
 | File | Role |
 |------|------|
-| `src/main.c` | Entry, epoll loop, packet dispatch switch, server tick, chunk streamer, signals |
+| `src/main.c` | Entry, nonblocking socket loop, packet dispatch switch, server tick, chunk streamer, signals |
 | `src/packets.c` | All MC protocol handlers (~170+ funcs) |
 | `src/procedures.c` | Game logic: block changes, mob AI, combat, fluids, crafting, tick |
 | `src/worldgen.c` | Terrain gen: Overworld/Nether/End, ores, caves, biomes, structures |
@@ -14,14 +14,14 @@ MC 1.21.8 (proto 772) server in C. Fork of bareiron. ~7MB RAM (musl static). Lin
 | `src/structures.c` | Tree/sapling placement |
 | `src/config.c` | `server.conf` parser → `ServerConfig config` global |
 | `src/serialize.c` | `world.json` save/load |
-| `src/tools.c` | Network I/O (`send_all`/`recv_all`), packet framing, `fast_rand()`, favicon loader |
+| `src/tools.c` | Network I/O (`send_all`/`recv_all`), packet framing, async packet senders, `fast_rand()`, favicon loader |
 | `src/varnum.c` | VarInt/VarLong read/write |
 | `src/crafting.c` | Crafting + furnace recipe lookup |
 | `src/creative_mode.c` | Creative inventory UI (scroll list, item pick) |
 | `src/special_block.c` | State hash table for doors/trapdoors/stairs/chests/fences/beds/furnaces/barrels/ender_chests/ladders |
 | `src/mojang.c` | Skin fetch via Mojang API (libcurl, optional `MOJANG_SKIN_LOOKUP_AVAILABLE`) |
 | `src/thread_utils.c` | pthread create with controlled stack sizes (128K default, 512K chunk, 256K pool) |
-| `src/async.c` | Per-client async packet sender threads (priority queue) |
+| `src/async.c` | Generic `ThreadPool` implementation |
 | `src/registries.c` | **Generated** — block palette, state tables, registry binary blobs |
 | `src/generated_village_templates.c` | **Generated** — village building NBT compiled to C |
 | `src/globals.c` | Global state init |
@@ -42,17 +42,18 @@ MC 1.21.8 (proto 772) server in C. Fork of bareiron. ~7MB RAM (musl static). Lin
 | `images/` | Screenshot, logo, background, title banner |
 | `index.html` | Landing page |
 | `MISSING_FEATURES.md` | Priority-ordered unimplemented features |
-| `CHANGELOG.md` | Release history |
+| `DEVELOPER.md` | Developer docs: full arch, code layout, thread model, packet flow, chunk pipeline, how-to guides |
 
 ## Architecture
 
 ### Threads
 | Thread | Work |
 |--------|------|
-| **Main** | epoll accept/read, packet dispatch, game tick (20 TPS), chunk streaming |
-| **Async senders** (1/client) | Drain send queue per client (mutex + condvar) |
-| **Thread pool** (N CPU cores) | Parallel chunk generation |
-| **Mojang API** (optional) | Periodic skin fetch |
+| **Main** | nonblocking accept/read, packet dispatch, tick orchestration |
+| **Global thread pool** | Parallel per-player tick state tasks; main thread sends packets afterward |
+| **Async senders** (`MAX_PLAYERS`) | Drain send queue per client slot (mutex + condvar) |
+| **Chunk gen workers** (up to 6) | Background pre-generation from request queue |
+| **Chunk streamer** | Dedicated thread, 20ms cycle, sync chunk gen |
 
 ### Packet flow
 ```
@@ -62,16 +63,16 @@ recv → readVarInt(pid) → handlePacket() switch
 
 ## Chunk Pipeline
 
-Chunks are generated **synchronously on demand** by the chunk streamer thread (~1.7ms/chunk, 7× faster than original). A tiny LRU cache (24 entries, dynamic allocation, ~1-2MB depending on uniform sections) serves as scratch buffer between generation and network serialization — no async queue needed. Background worker threads opportunistically pre-generate chunks in a 3×3 area around each player.
+Chunks are generated **synchronously on demand** by the chunk streamer thread (~1.7ms/chunk, 7× faster than original). A tiny LRU cache (configurable via `chunk_cache_size`, code default 8 or 24 in server.conf, dynamic allocation, ~1-2MB) serves as scratch buffer between generation and network serialization. Background chunk gen workers consume a request queue and opportunistically pre-generate chunks when idle.
 
 Chunk flow: `streamChunksForPlayer()` → cache miss → `generate_chunk_data()` (sync, ~1.7ms) → serialize → `sc_chunkDataAndUpdateLight()` → send queue. View distance from `config.view_distance` (server.conf, clamped 2-32). Streamer sends up to 10 chunks per 20ms cycle.
 
 ## Key Datatypes
 
-- **`PlayerData`** (globals.h): pos, yaw/pitch, health/hunger/sat, hotbar+36+armor+offhand+crafting inventory (uint16_t item IDs), ender chest, flags (sprint/sneak/fly/etc), dimension, spawn, open merchant, XP, portal coords
+- **`PlayerData`** (globals.h): pos, yaw/pitch, health/hunger/sat, `inventory_*[41]` + `craft_*[9]`, ender chest, flags (sprint/sneak/fly/etc), dimension, spawn, open merchant, XP, portal coords
 - **`CachedChunkData`** (chunk_generator.h): 20 section pointers (NULL if uniform/all-air), uniform_blocks[20], biomes[20], LRU, lock-free `generating` flag
 - **`MobData`** (globals.h): type, pos, move_delta, timers, profession, dimension, random look-around (look_timer/yaw/pitch). Max `MAX_MOBS`
-- **`SpecialBlockEntry`** (special_block.h): hash table (MAX_SPECIAL_BLOCKS=8192), keyed by pos, value = `uint16_t` state bitfield
+- **`SpecialBlockEntry`** (special_block.h): dynamically growing hash table, keyed by pos, value = `uint16_t` state bitfield
 - **`BlockChange`** (globals.h): player edits {x,y,z,block,dimension}
 - **`ProjectileData`** (globals.h): arrows + ender pearls {pos, vel, owner, damage, stuck}
 - **`FluidUpdateEntry`** (globals.h): ring buffer for deferred water/lava flow
@@ -80,7 +81,7 @@ Chunk flow: `streamChunksForPlayer()` → cache miss → `generate_chunk_data()`
 
 State machine: `Handshake → Status|Login → Configuration → Play`
 
-Compression enabled after login (threshold from config). Packet framing: VarInt length + VarInt packet ID + payload.
+Compression enabled after login (threshold from config). Uncompressed framing: VarInt(packet_length)+VarInt(packet_id)+payload. Compressed framing: VarInt(packet_length)+VarInt(data_length)+compressed or passthrough packet bytes (`data_length == 0`).
 
 ## Block System
 
@@ -114,13 +115,13 @@ Full chunk: 1.80 ms, 90 us/section  (6.6× faster)
 - **Village footprint gate**: `getVillageBlockAt` skips template binary-search + terrain-fill for houses whose xz footprint the query block misses (~80% of village lookups).
 
 ## Game Tick (procedures.c:handleServerTick)
-1. Weather → 2. Fluid queue → 3. Mob AI (move to nearest player, anger timers, sounds, random look-around). Villagers beyond `MOB_DESPAWN_DISTANCE` (256) skip AI (frozen, not despawned). Mob AI optimized: same-block collision skip (~95% ticks skip bounding-box cascade), shared direction pre-compute for hostile AI (single sqrt/atan2 per mob vs per-branch duplication), mob-grid skip when stationary. → 4. Projectiles → 5. XP orbs → 6. Block tick (leaf decay, crops/wheat growth, cactus, fire) → 7. Player tick (fall dmg, suffocate, drown, hunger, regen, portal cooldown) → 8. Mob spawning → 9. Player list broadcast
+Order: world time + parallel per-player state → weather → portal/bow → fluid queue → inventory sync + disk-save check → wheat growth → mob AI (move/anger/sounds/look-around; villagers >256 blocks skip AI) → projectiles → XP orbs + item entities → mob spawning.
 
 Wheat growth uses a dedicated tracking list (`wheat_coords[]`/`wheat_count` in `special_block.c`) to avoid scanning the hash table. Both the hash table and the wheat tracking list grow dynamically — no fixed limits. All special blocks clean up their hash entries when broken to prevent table leaks.
 
 ## Inventory
 
-46 internal slots: hotbar(9) + main(27) + armor(4) + offhand(1) + crafting(4) + result(1). Window types: player inventory, chest (27/54), crafting table (41), merchant (3). Slot mapping via `serverSlotToClientSlot()`/`clientSlotToServerSlot()`.
+Inventory is `inventory_*[41]` (hotbar 0-8, main 9-35, armor 36-39, offhand 40) plus `craft_*[9]` scratch grid for player/crafting/furnace/merchant/container overflow. Windows: player inventory(0), chest(2), crafting table(12), furnace(14), merchant(19). Slot mapping in `procedures.c`.
 
 ## Village House Rotation (worldgen.c)
 
@@ -168,10 +169,12 @@ Prereq: `include/registries.h` generated from vanilla server.jar via `extract_re
 
 ## Thread Safety
 
-- **Main thread only:** special_blocks hash table, mob/player/projectile arrays, block_changes (mutex for snapshot copy).
+- **Main thread:** packet dispatch, most world mutations, mob/projectile/item ticks, packet emission after parallel player updates.
+- **Global thread pool:** per-player tick state only; no direct packet sends.
 - **Chunk cache:** mutex lock. `generating` flag is lock-free.
 - **Fluid queue:** lock-free ring buffer with `volatile` head/tail.
 - **Send queue:** per-client mutex + condvar.
+- **Special blocks / block changes:** mutex-protected APIs/snapshots.
 - **Packet buffers:** TLS per thread.
 
 ## Build RAM targets
@@ -181,4 +184,4 @@ Prereq: `include/registries.h` generated from vanilla server.jar via `extract_re
 - Windows: ~30MB
 
 ## Key missing features (MISSING_FEATURES.md)
-Ghast/Blaze/MagmaCube/Shulker mobs, brewing/potions, enchanting/anvil, cow/pig/sheep/chicken breeding, item entities, redstone, online mode. /spawn command added. /commands fixed (Chat Command 0x09 handler).
+Ghast/Blaze/MagmaCube/Shulker mobs, brewing/potions, enchanting/anvil, cow/pig/sheep/chicken breeding, redstone, online mode. Item entities are implemented. /spawn command added. /commands fixed (Chat Command 0x09 handler).

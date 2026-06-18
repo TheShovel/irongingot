@@ -99,53 +99,9 @@ Before building, generate `include/registries.h` as described above, or use `./r
 > [!TIP]
 > The musl builds are **strongly recommended** for production use. They are fully static and are intended to provide the lower memory usage described above, including the ARM64 package.
 
-## Architecture
+## Development
 
-```mermaid
-flowchart TD
-    Client["Minecraft Client"] -->|TCP| Epoll["Epoll Loop"]
-
-    subgraph MainThread["Main Thread"]
-        Epoll --> Dispatch["Packet Dispatch"]
-        Dispatch --> Tick["Game Tick (20 TPS)"]
-        Tick --> Streamer["Chunk Streamer"]
-        Streamer -.-> Epoll
-    end
-
-    subgraph Workers["Worker Pool (N CPUs)"]
-        Gen["Chunk Generation"]
-    end
-
-    subgraph Senders["Per-Client Async Senders"]
-        Send["Send Queue
-(mutex + condvar)"]
-    end
-
-    Dispatch -->|packet| Send
-    Send --> Client
-
-    Streamer -->|cache miss| Gen
-    Gen -->|cached chunk| Streamer
-
-    subgraph TickSequence["Tick Sequence"]
-        direction LR
-        Weather --> Fluid --> MobAI --> Projectiles
-        Projectiles --> BlockTick --> PlayerTick --> MobSpawn
-    end
-
-    Tick --> TickSequence
-
-    Tick -->|periodic save| Save["world.json"]
-```
-
-### Threading Model
-
-| Thread | Work |
-|--------|------|
-| **Main** | epoll accept/read, packet dispatch, game tick (20 TPS), chunk streaming |
-| **Async senders** (1/client) | Drain per-client send queue |
-| **Thread pool** (N CPU cores) | Parallel chunk generation |
-| **Mojang API** (optional) | Periodic skin fetch |
+See [DEVELOPER.md](./DEVELOPER.md#3-architecture-overview) for the full architecture diagram, threading model, packet flow, and chunk pipeline details.
 
 ## Configuration
 
