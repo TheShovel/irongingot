@@ -70,7 +70,7 @@ Chunk flow: `streamChunksForPlayer()` → cache miss → `generate_chunk_data()`
 
 - **`PlayerData`** (globals.h): pos, yaw/pitch, health/hunger/sat, hotbar+36+armor+offhand+crafting inventory (uint16_t item IDs), ender chest, flags (sprint/sneak/fly/etc), dimension, spawn, open merchant, XP, portal coords
 - **`CachedChunkData`** (chunk_generator.h): 20 section pointers (NULL if uniform/all-air), uniform_blocks[20], biomes[20], LRU, lock-free `generating` flag
-- **`MobData`** (globals.h): type, pos, move_delta, timers, profession, dimension. Max `MAX_MOBS`
+- **`MobData`** (globals.h): type, pos, move_delta, timers, profession, dimension, random look-around (look_timer/yaw/pitch). Max `MAX_MOBS`
 - **`SpecialBlockEntry`** (special_block.h): hash table (MAX_SPECIAL_BLOCKS=8192), keyed by pos, value = `uint16_t` state bitfield
 - **`BlockChange`** (globals.h): player edits {x,y,z,block,dimension}
 - **`ProjectileData`** (globals.h): arrows + ender pearls {pos, vel, owner, damage, stuck}
@@ -114,7 +114,7 @@ Full chunk: 1.80 ms, 90 us/section  (6.6× faster)
 - **Village footprint gate**: `getVillageBlockAt` skips template binary-search + terrain-fill for houses whose xz footprint the query block misses (~80% of village lookups).
 
 ## Game Tick (procedures.c:handleServerTick)
-1. Weather → 2. Fluid queue → 3. Mob AI (move to nearest player, anger timers, sounds). Villagers beyond `MOB_DESPAWN_DISTANCE` (256) skip AI (frozen, not despawned). Mob AI optimized: same-block collision skip (~95% ticks skip bounding-box cascade), shared direction pre-compute for hostile AI (single sqrt/atan2 per mob vs per-branch duplication), mob-grid skip when stationary. → 4. Projectiles → 5. XP orbs → 6. Block tick (leaf decay, crops/wheat growth, cactus, fire) → 7. Player tick (fall dmg, suffocate, drown, hunger, regen, portal cooldown) → 8. Mob spawning → 9. Player list broadcast
+1. Weather → 2. Fluid queue → 3. Mob AI (move to nearest player, anger timers, sounds, random look-around). Villagers beyond `MOB_DESPAWN_DISTANCE` (256) skip AI (frozen, not despawned). Mob AI optimized: same-block collision skip (~95% ticks skip bounding-box cascade), shared direction pre-compute for hostile AI (single sqrt/atan2 per mob vs per-branch duplication), mob-grid skip when stationary. → 4. Projectiles → 5. XP orbs → 6. Block tick (leaf decay, crops/wheat growth, cactus, fire) → 7. Player tick (fall dmg, suffocate, drown, hunger, regen, portal cooldown) → 8. Mob spawning → 9. Player list broadcast
 
 Wheat growth uses a dedicated tracking list (`wheat_coords[]`/`wheat_count` in `special_block.c`) to avoid scanning the hash table. Both the hash table and the wheat tracking list grow dynamically — no fixed limits. All special blocks clean up their hash entries when broken to prevent table leaks.
 

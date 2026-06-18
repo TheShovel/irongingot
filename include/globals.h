@@ -525,6 +525,9 @@ typedef struct {
   uint8_t data;
   uint8_t profession;  // Village profession ID (for villagers)
   uint8_t dimension;
+  uint8_t look_timer;  // Ticks remaining in random look-around (0 = not looking)
+  uint8_t look_yaw;    // Head yaw during random look-around
+  int8_t  look_pitch;  // Head pitch during random look-around
 } MobData;
 
 // Experience Orb data structure

@@ -6004,6 +6004,9 @@ void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health, uint8_
     mob_data[i].move_dy = 0;
     mob_data[i].move_timer = 0;
     mob_data[i].yaw_store = 0;
+    mob_data[i].look_timer = 0;
+    mob_data[i].look_yaw = 0;
+    mob_data[i].look_pitch = 0;
     mob_data[i].profession = profession;
     // Reset trade usage tracking
     for (int t = 0; t < 5; t++) mob_trade_uses[i][t] = 0;
@@ -8312,6 +8315,16 @@ void handleServerTick (int64_t time_since_last_tick) {
       continue;  // Skip AI for any mob beyond range (including villagers)
     }
 
+    // Random look-around behavior - all mobs occasionally look in random directions
+    if (mob_data[i].look_timer > 0) {
+      mob_data[i].look_timer--;
+    } else if ((fast_rand() & 0xFF) == 0) {
+      // ~0.4% chance per tick to start looking around (~once per 12.8 seconds on average)
+      mob_data[i].look_timer = 15 + (fast_rand() % 25); // 15-40 ticks (0.75-2 seconds)
+      mob_data[i].look_yaw = (uint8_t)(fast_rand() & 255);
+      mob_data[i].look_pitch = (int8_t)((fast_rand() % 21) - 10); // -10 to +10
+    }
+
     double old_x = mob_data[i].x, old_z = mob_data[i].z;
     double old_y = mob_data[i].y;
 
@@ -8887,8 +8900,9 @@ void handleServerTick (int64_t time_since_last_tick) {
     uint16_t block = getBlockAt2(block_x, block_y, block_z, mob_data[i].dimension);
     uint16_t block_above = getBlockAt2(block_x, block_y + 1, block_z, mob_data[i].dimension);
 
-    // Exit early if all movement was cancelled
-    if (fabs(new_x - mob_data[i].x) < 0.001 &&
+    // Exit early if all movement was cancelled and not looking around
+    if (mob_data[i].look_timer == 0 &&
+        fabs(new_x - mob_data[i].x) < 0.001 &&
         fabs(new_z - mob_data[i].z) < 0.001 &&
         fabs(new_y - mob_data[i].y) < 0.001) continue;
 
@@ -8938,10 +8952,13 @@ void handleServerTick (int64_t time_since_last_tick) {
     mob_data[i].y = new_y;
     mob_data[i].z = new_z;
 
-    // Broadcast entity movement packets (only if we actually moved)
-    if (fabs(new_x - old_x) > 0.0001 ||
+    // Broadcast entity movement/rotation packets
+    uint8_t mob_is_looking = (mob_data[i].look_timer > 0);
+    if (mob_is_looking ||
+        fabs(new_x - old_x) > 0.0001 ||
         fabs(new_z - old_z) > 0.0001 ||
         fabs(new_y - old_y) > 0.0001) {
+      uint8_t head_yaw = mob_is_looking ? mob_data[i].look_yaw : yaw;
       for (int j = 0; j < MAX_PLAYERS; j ++) {
         if (player_data[j].client_fd == -1) continue;
         if (player_data[j].dimension != mob_data[i].dimension) continue;
@@ -8951,7 +8968,7 @@ void handleServerTick (int64_t time_since_last_tick) {
           new_x, new_y, new_z,
           yaw * 360 / 256, 0
         );
-        sc_setHeadRotation(player_data[j].client_fd, entity_id, yaw);
+        sc_setHeadRotation(player_data[j].client_fd, entity_id, head_yaw);
       }
     }
 
