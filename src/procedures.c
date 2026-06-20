@@ -766,6 +766,10 @@ void resetPlayerData (PlayerData *player) {
     player->flags |= 0x02;
   }
   player->grounded_y = player->y;
+  player->position_lock_ticks = 0;
+  player->locked_x = player->x;
+  player->locked_y = player->y;
+  player->locked_z = player->z;
   if (!config.keep_inventory) {
     for (int i = 0; i < 41; i ++) {
       player->inventory_items[i] = 0;
@@ -3992,11 +3996,62 @@ static void syncDimensionEntities(PlayerData *player, uint8_t old_dim) {
   }
 }
 
+static uint8_t isNetherSpawnFloorBlock(uint16_t block) {
+  return block != B_bedrock && block != B_magma_block && !isPassableBlock(block);
+}
+
+static uint8_t isSafeNetherSpawnColumn(int x, int floor_y, int z) {
+  return floor_y >= 72 && floor_y <= 118 &&
+         isNetherSpawnFloorBlock(getBlockAt2(x, floor_y, z, DIMENSION_NETHER)) &&
+         isPassableSpawnBlock(getBlockAt2(x, floor_y + 1, z, DIMENSION_NETHER)) &&
+         isPassableSpawnBlock(getBlockAt2(x, floor_y + 2, z, DIMENSION_NETHER)) &&
+         isPassableSpawnBlock(getBlockAt2(x, floor_y + 3, z, DIMENSION_NETHER));
+}
+
+static uint8_t findSafeNetherSpawn(int origin_x, int origin_z, int preferred_floor_y, int *out_x, int *out_z, int *out_floor_y) {
+  if (preferred_floor_y < 72 || preferred_floor_y > 118) preferred_floor_y = 80;
+
+  for (int radius = 0; radius <= 8; radius++) {
+    for (int dz = -radius; dz <= radius; dz++) {
+      for (int dx = -radius; dx <= radius; dx++) {
+        if (radius != 0 && dx != -radius && dx != radius && dz != -radius && dz != radius) continue;
+
+        int x = origin_x + dx;
+        int z = origin_z + dz;
+        for (int delta_y = 0; delta_y <= 46; delta_y++) {
+          int y = preferred_floor_y + delta_y;
+          if (y <= 118 && isSafeNetherSpawnColumn(x, y, z)) {
+            *out_x = x;
+            *out_z = z;
+            *out_floor_y = y;
+            return 1;
+          }
+
+          y = preferred_floor_y - delta_y;
+          if (delta_y != 0 && y >= 72 && isSafeNetherSpawnColumn(x, y, z)) {
+            *out_x = x;
+            *out_z = z;
+            *out_floor_y = y;
+            return 1;
+          }
+        }
+      }
+    }
+  }
+
+  return 0;
+}
+
 static void switchPlayerToDimension(PlayerData *player, uint8_t new_dim) {
   uint8_t old_dim = player->dimension;
   if (old_dim == new_dim) return;
 
+  // Drop stale chunk-stream packets from the old dimension so they cannot
+  // arrive between Respawn and the destination chunks.
+  clear_client_send_queue(player->client_fd);
+
   int had_saved_portal = 0;
+  int preferred_nether_floor_y = (int)player->y - 1;
 
   if (new_dim == DIMENSION_NETHER) {
     if (old_dim == DIMENSION_OVERWORLD) {
@@ -4042,31 +4097,33 @@ static void switchPlayerToDimension(PlayerData *player, uint8_t new_dim) {
   player->dimension = new_dim;
 
   // Compute nether Y and save portal position before respawn.
-  int np_x = 0, np_z = 0, np_h = 65;
+  int np_x = 0, np_z = 0, np_h = 80;
   if (new_dim == DIMENSION_NETHER) {
     init_worldgen();
     np_x = (int)player->x;
     np_z = (int)player->z;
-    // Sample floor height instead of ceiling height.
-    double floor_n = octave_sample(&surface_noise, (double)np_x * 0.015, 0, (double)np_z * 0.015);
-    int floor_h = 60 + (int)(floor_n * 35.0);
-    if (floor_h < 35) floor_h = 35;
-    if (floor_h > 95) floor_h = 95;
+    if (preferred_nether_floor_y < 72 || preferred_nether_floor_y > 118) preferred_nether_floor_y = 80;
 
-    // Ensure we are above the lava sea (Y=50).
-    if (floor_h < 64) floor_h = 64;
+    int safe_x = np_x, safe_z = np_z, safe_floor_y = preferred_nether_floor_y;
+    uint8_t found_natural_floor = findSafeNetherSpawn(np_x, np_z, preferred_nether_floor_y, &safe_x, &safe_z, &safe_floor_y);
+    np_x = safe_x;
+    np_z = safe_z;
+    np_h = found_natural_floor ? safe_floor_y : preferred_nether_floor_y;
+    player->y = (int16_t)(np_h + 1);
 
-    np_h = floor_h;
-    player->y = (float)(floor_h + 1);
-
-    terminal_ui_log("Nether spawn: bx=%d bz=%d floor_h=%d np_h=%d player_y=%d",
-      np_x, np_z, floor_h, np_h, (int)player->y);
+    terminal_ui_log("Nether spawn: bx=%d bz=%d preferred_floor=%d np_h=%d natural=%d player_y=%d",
+      np_x, np_z, preferred_nether_floor_y, np_h, found_natural_floor, (int)player->y);
   }
 
   sc_respawn(player->client_fd, new_dim);
 
   sc_setDefaultSpawnPosition(player->client_fd, 8, 80, 8);
   sc_startWaitingForChunks(player->client_fd);
+
+  if (new_dim == DIMENSION_NETHER) {
+    player->x = np_x;
+    player->z = np_z + 1;
+  }
 
   short cx = div_floor(player->x, 16);
   short cz = div_floor(player->z, 16);
@@ -4097,10 +4154,15 @@ static void switchPlayerToDimension(PlayerData *player, uint8_t new_dim) {
         makeBlockChange(px, np_h, pz, B_obsidian, DIMENSION_NETHER);
       }
     }
-    // Clear the blocks where the player's body spawns (in front of the
-    // portal at np_h+1 and np_h+2) to prevent suffocation.
-    makeBlockChange(np_x, np_h + 1, np_z + 1, B_air, DIMENSION_NETHER);
-    makeBlockChange(np_x, np_h + 2, np_z + 1, B_air, DIMENSION_NETHER);
+    // Clear a compact arrival room around the platform. The fallback spawn can
+    // be inside netherrack, so clearing only the player's body is not enough.
+    for (int py = np_h + 1; py <= np_h + 4; py++) {
+      for (int px = np_x - 2; px <= np_x + 2; px++) {
+        for (int pz = np_z - 2; pz <= np_z + 2; pz++) {
+          makeBlockChange(px, py, pz, B_air, DIMENSION_NETHER);
+        }
+      }
+    }
     for (int dy = 1; dy <= 3; dy++) {
       makeBlockChange(np_x, np_h + dy, np_z, B_nether_portal, DIMENSION_NETHER);
       makeBlockChange(np_x + 1, np_h + dy, np_z, B_nether_portal, DIMENSION_NETHER);
@@ -4198,6 +4260,10 @@ static void switchPlayerToDimension(PlayerData *player, uint8_t new_dim) {
   // a teleport, so reset the baseline to avoid charging the height delta
   // between the Nether portal platform and the Overworld exit position.
   player->grounded_y = player->y;
+  player->locked_x = player->x;
+  player->locked_y = player->y;
+  player->locked_z = player->z;
+  player->position_lock_ticks = 2 * TICKS_PER_SECOND;
 
   player->visited_next = 0;
   for (int j = 0; j < VISITED_HISTORY; j++) {
@@ -7833,6 +7899,13 @@ void handleServerTick (int64_t time_since_last_tick) {
           handlePlayerJoin(player);
         } else continue;
       }
+      if (player->position_lock_ticks > 0) {
+        player->position_lock_ticks--;
+        player->x = player->locked_x;
+        player->y = player->locked_y;
+        player->z = player->locked_z;
+        player->grounded_y = player->locked_y;
+      }
       if (player->flags & 0x01) {
         if (player->flagval_8 >= (uint8_t)(0.6f * TICKS_PER_SECOND)) {
           player->flags &= ~0x01;
@@ -9286,6 +9359,14 @@ static void updatePlayerStateTask(void* arg) {
     player->flagval_16++;
     free(task);
     return;
+  }
+
+  if (player->position_lock_ticks > 0) {
+    player->position_lock_ticks--;
+    player->x = player->locked_x;
+    player->y = player->locked_y;
+    player->z = player->locked_z;
+    player->grounded_y = player->locked_y;
   }
 
   // Handle eating animation timer (no packet - will be sent in main thread)

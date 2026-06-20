@@ -589,6 +589,33 @@ void handlePacket (int client_fd, int length, int packet_id, int state) {
         int player_index = (int)(player - player_data);
         uint8_t noclip_enabled = player_index >= 0 && player_index < MAX_PLAYERS && player_noclip[player_index];
 
+        if (player->position_lock_ticks > 0) {
+          uint8_t position_packet = (packet_id == 0x1D || packet_id == 0x1E);
+          uint8_t settled_on_locked_pos = position_packet && on_ground &&
+            fabs(y - (double)player->locked_y) < 0.125 &&
+            fabs(x - ((double)player->locked_x + 0.5)) < 1.0 &&
+            fabs(z - ((double)player->locked_z + 0.5)) < 1.0;
+
+          if (settled_on_locked_pos) {
+            player->position_lock_ticks = 0;
+          } else {
+            if (packet_id != 0x1D && packet_id != 0x20) {
+              player->yaw = ((short)(yaw + 540) % 360 - 180) * 127 / 180;
+              player->pitch = pitch / 90.0f * 127.0f;
+            }
+            player->x = player->locked_x;
+            player->y = player->locked_y;
+            player->z = player->locked_z;
+            player->grounded_y = player->locked_y;
+            if (packet_id != 0x20) {
+              sc_synchronizePlayerPosition(client_fd,
+                (double)player->locked_x + 0.5, (double)player->locked_y, (double)player->locked_z + 0.5,
+                player->yaw * 180.0f / 127.0f, player->pitch * 90.0f / 127.0f);
+            }
+            break;
+          }
+        }
+
         // Handle fall damage. Most movement packets are ordinary grounded walking,
         // so avoid the expensive block lookup unless water state can change damage
         // or grounded tracking.
@@ -1100,7 +1127,11 @@ int main (int argc, char **argv) {
       #endif
         #ifndef ESP_PLATFORM
         // Disable Nagle's algorithm on client sockets for low latency
+        #ifdef _WIN32
+        if (setsockopt(clients[i], IPPROTO_TCP, TCP_NODELAY, (const char*)&opt, sizeof(opt)) < 0) {
+        #else
         if (setsockopt(clients[i], IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt)) < 0) {
+        #endif
           terminal_ui_log("Warning: TCP_NODELAY failed for client fd=%d", clients[i]);
         }
         #endif

@@ -724,7 +724,7 @@ void sendCreativeItemList(int client_fd, uint16_t start_index) {
   
   // Send header
   char header[64];
-  snprintf(header, sizeof(header), "§7Items %d-%d of %d:", start_index + 1, end_index, CREATIVE_ITEM_COUNT);
+  snprintf(header, sizeof(header), "§7Items %d-%d of %zu:", start_index + 1, end_index, CREATIVE_ITEM_COUNT);
   sc_systemChat(client_fd, header, strlen(header));
   
   // Send items

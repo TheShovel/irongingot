@@ -58,7 +58,7 @@ MC 1.21.8 (proto 772) server in C. Fork of bareiron. ~7MB RAM (musl static). Lin
 ### Packet flow
 ```
 recv → readVarInt(pid) → handlePacket() switch
-  → cs_*() (modify state) → sc_*() (queue response) → async sender → send_all()
+  → cs_*() (modify state) → sc_*() (queue response) → async sender (enqueue order across hi/lo queues) → send_all()
 ```
 
 ## Chunk Pipeline
@@ -69,7 +69,7 @@ Chunk flow: `streamChunksForPlayer()` → cache miss → `generate_chunk_data()`
 
 ## Key Datatypes
 
-- **`PlayerData`** (globals.h): pos, yaw/pitch, health/hunger/sat, `inventory_*[41]` + `craft_*[9]`, ender chest, flags (sprint/sneak/fly/etc), dimension, spawn, open merchant, XP, portal coords
+- **`PlayerData`** (globals.h): pos, yaw/pitch, health/hunger/sat, `inventory_*[41]` + `craft_*[9]`, ender chest, flags (sprint/sneak/fly/etc), dimension, spawn, open merchant, XP, portal coords, short post-dimension position lock
 - **`CachedChunkData`** (chunk_generator.h): 20 section pointers (NULL if uniform/all-air), uniform_blocks[20], biomes[20], LRU, lock-free `generating` flag
 - **`MobData`** (globals.h): type, pos, move_delta, timers, profession, dimension, random look-around (look_timer/yaw/pitch). Max `MAX_MOBS`
 - **`SpecialBlockEntry`** (special_block.h): dynamically growing hash table, keyed by pos, value = `uint16_t` state bitfield
@@ -81,7 +81,7 @@ Chunk flow: `streamChunksForPlayer()` → cache miss → `generate_chunk_data()`
 
 State machine: `Handshake → Status|Login → Configuration → Play`
 
-Compression enabled after login (threshold from config). Uncompressed framing: VarInt(packet_length)+VarInt(packet_id)+payload. Compressed framing: VarInt(packet_length)+VarInt(data_length)+compressed or passthrough packet bytes (`data_length == 0`).
+Compression enabled after login (threshold from config). Uncompressed framing: VarInt(packet_length)+VarInt(packet_id)+payload. Compressed framing: VarInt(packet_length)+VarInt(data_length)+compressed or passthrough packet bytes (`data_length == 0`). Outbound packet buffer starts at 128KiB and grows for large chunk-with-light packets.
 
 ## Block System
 
@@ -116,6 +116,8 @@ Full chunk: 1.80 ms, 90 us/section  (6.6× faster)
 
 ## Game Tick (procedures.c:handleServerTick)
 Order: world time + parallel per-player state → weather → portal/bow → fluid queue → inventory sync + disk-save check → wheat growth → mob AI (move/anger/sounds/look-around; villagers >256 blocks skip AI) → projectiles → XP orbs + item entities → mob spawning.
+
+Nether portal transfer clears old send queue, picks safe floor near scaled X/Z in Y72-118 (fallback preserved/floor≈80), builds 5×5 obsidian platform + air room, then teleports and locks movement briefly until chunks become collidable.
 
 Wheat growth uses a dedicated tracking list (`wheat_coords[]`/`wheat_count` in `special_block.c`) to avoid scanning the hash table. Both the hash table and the wheat tracking list grow dynamically — no fixed limits. All special blocks clean up their hash entries when broken to prevent table leaks.
 

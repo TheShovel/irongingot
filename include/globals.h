@@ -340,6 +340,8 @@ typedef struct {
   size_t queued_bytes;
   // Queued bytes in low-priority chunk queue only.
   size_t queued_chunk_bytes;
+  // Monotonic enqueue order across high + low queues.
+  uint64_t next_send_sequence;
   uint32_t connection_generation;
   // Reusable z_stream for compressed packet decompression
   z_stream inflate_stream;
@@ -350,8 +352,8 @@ typedef struct {
 
 extern ClientState client_states[MAX_PLAYERS];
 
-// Maximum length of a single packet (including chunk data)
-// Incoming packets are never large; this is the decompression buffer.
+// Initial outbound packet buffer size and incoming decompression buffer size.
+// Outbound packets grow dynamically for large chunk-with-light packets.
 #define MAX_PACKET_LEN 131072
 extern THREAD_LOCAL uint8_t *packet_buffer;
 extern THREAD_LOCAL int packet_buffer_offset;
@@ -475,6 +477,11 @@ typedef struct {
   short portal_ow_x;
   int16_t portal_ow_y;
   short portal_ow_z;
+  // Short post-dimension-change movement lock while destination chunks become collidable.
+  uint8_t position_lock_ticks;
+  short locked_x;
+  int16_t locked_y;
+  short locked_z;
   // Bed respawn point (standing position, usually one block above the bed)
   uint8_t spawn_set;
   short spawn_x;

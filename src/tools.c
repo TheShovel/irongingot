@@ -32,6 +32,7 @@
 #include "terminal_ui.h"
 #include <zlib.h>
 #include <stdlib.h>
+#include <limits.h>
 
 #ifndef htonll
   static uint64_t htonll (uint64_t value) {
@@ -55,6 +56,7 @@ struct OutPacket {
   uint32_t len;
   uint32_t packet_id;
   uint32_t generation;
+  uint64_t sequence;
   uint8_t low_priority;
   OutPacket *next;
 };
@@ -62,6 +64,8 @@ struct OutPacket {
 static pthread_t sender_threads[MAX_PLAYERS];
 static uint8_t sender_workers_running = 0;
 static THREAD_LOCAL int current_packet_id = -1;
+static THREAD_LOCAL size_t packet_buffer_capacity = 0;
+static THREAD_LOCAL int packet_buffer_failed = 0;
 
 // Queue limits - initialized from config in main()
 static size_t max_client_send_queue_bytes = 6 * 1024 * 1024;
@@ -74,15 +78,31 @@ void set_queue_limits(size_t send_limit, size_t chunk_limit) {
 
 static ssize_t send_all_no_disconnect (int client_fd, const void *buf, ssize_t len);
 
-static int ensure_packet_buffer(void) {
-  if (packet_buffer != NULL) return 0;
-  packet_buffer = (uint8_t *)malloc(MAX_PACKET_LEN);
-  if (packet_buffer == NULL) {
-    perror("Failed to allocate packet buffer");
-    packet_buffer_offset = 0;
+static int ensure_packet_buffer_capacity(size_t needed) {
+  if (packet_buffer != NULL && packet_buffer_capacity >= needed) return 0;
+
+  size_t new_capacity = packet_buffer_capacity ? packet_buffer_capacity : MAX_PACKET_LEN;
+  while (new_capacity < needed) {
+    if (new_capacity > SIZE_MAX / 2) {
+      new_capacity = needed;
+      break;
+    }
+    new_capacity *= 2;
+  }
+
+  uint8_t *new_buffer = (uint8_t *)realloc(packet_buffer, new_capacity);
+  if (new_buffer == NULL) {
+    perror("Failed to grow packet buffer");
     return -1;
   }
+
+  packet_buffer = new_buffer;
+  packet_buffer_capacity = new_capacity;
   return 0;
+}
+
+static int ensure_packet_buffer(void) {
+  return ensure_packet_buffer_capacity(MAX_PACKET_LEN);
 }
 
 static ClientState* get_client_state_by_fd(int client_fd) {
@@ -292,6 +312,7 @@ static int enqueue_packet_bytes(int client_fd, uint8_t *data, uint32_t len, uint
   }
 
   pkt->generation = state->connection_generation;
+  pkt->sequence = state->next_send_sequence++;
 
   // Keep queue bounded.
   if (state->queued_bytes + len > max_client_send_queue_bytes) {
@@ -357,16 +378,23 @@ static void* packet_sender_worker(void *arg) {
       break;
     }
 
-    // Process chunk queue (send_head_lo) first so block updates
-    // that depend on chunk data arrive in the correct order.
-    OutPacket *pkt = state->send_head_lo;
-    uint8_t from_chunk_queue = 1;
-    if (pkt != NULL) {
+    // Preserve enqueue order across gameplay/control and chunk packets.
+    // This keeps Respawn/CenterChunk/Chunk/Teleport dimension-change sequences
+    // intact while still accounting chunk backlog separately.
+    OutPacket *pkt = NULL;
+    uint8_t from_chunk_queue = 0;
+    if (state->send_head_hi != NULL && state->send_head_lo != NULL) {
+      from_chunk_queue = state->send_head_lo->sequence < state->send_head_hi->sequence;
+    } else {
+      from_chunk_queue = state->send_head_lo != NULL;
+    }
+
+    if (from_chunk_queue) {
+      pkt = state->send_head_lo;
       state->send_head_lo = pkt->next;
       if (state->send_head_lo == NULL) state->send_tail_lo = NULL;
     } else {
       pkt = state->send_head_hi;
-      from_chunk_queue = 0;
       state->send_head_hi = pkt->next;
       if (state->send_head_hi == NULL) state->send_tail_hi = NULL;
     }
@@ -484,11 +512,19 @@ ssize_t recv_all (int client_fd, void *buf, size_t n, uint8_t require_first) {
 ssize_t send_all (int client_fd, const void *buf, ssize_t len) {
   // If we are in packet mode, buffer the data instead of sending it
   if (packet_mode) {
-    if (ensure_packet_buffer() != 0) return -1;
-    if (packet_buffer_offset + len > MAX_PACKET_LEN) {
-      terminal_ui_log("ERROR: Packet buffer overflow (%d + %zd > %d)", packet_buffer_offset, (size_t)len, MAX_PACKET_LEN);
+    if (len < 0 || packet_buffer_failed) return -1;
+    if (len > INT_MAX - packet_buffer_offset) {
+      packet_buffer_failed = 1;
+      terminal_ui_log("ERROR: Packet buffer overflow (%d + %zd > %d)", packet_buffer_offset, (size_t)len, INT_MAX);
       return -1;
     }
+
+    size_t needed = (size_t)packet_buffer_offset + (size_t)len;
+    if (ensure_packet_buffer_capacity(needed) != 0) {
+      packet_buffer_failed = 1;
+      return -1;
+    }
+
     memcpy(packet_buffer + packet_buffer_offset, buf, len);
     packet_buffer_offset += len;
     return len;
@@ -584,10 +620,12 @@ static ssize_t send_all_no_disconnect (int client_fd, const void *buf, ssize_t l
 void startPacket (int client_fd, int packet_id) {
   (void)client_fd;
   packet_buffer_offset = 0;
+  packet_buffer_failed = 0;
   packet_mode = true;
   current_packet_id = packet_id;
   if (ensure_packet_buffer() != 0) {
     current_packet_id = -1;
+    packet_buffer_failed = 1;
     return;
   }
   writeVarInt(-1, packet_id);
@@ -599,8 +637,9 @@ int endPacket (int client_fd) {
   current_packet_id = -1;
   uint8_t is_chunk_packet = packet_id == 0x27;
 
-  if (packet_buffer == NULL) {
+  if (packet_buffer == NULL || packet_buffer_failed || packet_id < 0) {
     packet_buffer_offset = 0;
+    packet_buffer_failed = 0;
     return 1;
   }
 

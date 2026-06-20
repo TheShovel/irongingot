@@ -3,7 +3,11 @@
 #include <errno.h>
 #include <stddef.h>
 #include <stdio.h>
-#include <unistd.h>
+#ifdef _WIN32
+  #include <windows.h>
+#else
+  #include <unistd.h>
+#endif
 
 int create_server_thread_with_stack(pthread_t *thread, size_t stack_size, void *(*start_routine)(void *), void *arg) {
   // Try the requested stack size first — some threads (chunk generator,
@@ -16,7 +20,13 @@ int create_server_thread_with_stack(pthread_t *thread, size_t stack_size, void *
     #endif
 
     // Round up to page size to avoid EINVAL on strict systems.
+    #ifdef _WIN32
+    SYSTEM_INFO sysinfo;
+    GetSystemInfo(&sysinfo);
+    long page_size = (long)sysinfo.dwPageSize;
+    #else
     long page_size = sysconf(_SC_PAGESIZE);
+    #endif
     if (page_size > 0) {
       size_t page_mask = (size_t)page_size - 1;
       if (stack_size & page_mask) {

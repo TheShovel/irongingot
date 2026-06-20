@@ -821,7 +821,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
       for (int _j = 0; _j < _psize; _j++) { \
         uint16_t _pv = _pal[_j]; \
         if (_pv & 0x8000) { \
-          uint8_t _t = _pv & 0x1FF; \
+          uint16_t _t = _pv & 0x1FF; \
           if (_t == B_chest) { \
             uint8_t _d = (_pv >> 9) & 3; \
             val = get_oriented_state_id(_t, _d); \
@@ -1236,10 +1236,10 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
     for (int j = 0; j < 4096; j++) {
       uint16_t raw = scan_sec[j];
       if (raw >= B_wheat && raw < B_wheat_7 && !(raw & 0x8000)) {
-        int s_addr = (j & ~7) | (7 - (j & 7));
-        int s_wx = x + (s_addr & 15);
-        int s_wz = z + ((s_addr >> 4) & 15);
-        int s_wy = scan_y + (s_addr >> 8);
+        int s_block = (j & ~7) | (7 - (j & 7));
+        int s_wx = x + (s_block & 15);
+        int s_wz = z + ((s_block >> 4) & 15);
+        int s_wy = scan_y + (s_block >> 8);
         if (!special_block_has_entry(s_wx, s_wy, s_wz, dimension)) {
           special_block_set_state(s_wx, s_wy, s_wz, dimension, B_wheat, (uint16_t)(raw - B_wheat));
         }
