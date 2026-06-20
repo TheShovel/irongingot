@@ -145,3 +145,64 @@ GPL-3.0 License - see [LICENSE](LICENSE).
 - [cubiomes](https://github.com/Cubitect/cubiomes) for biome generation
 - [Cosmopolitan Libc](https://github.com/jart/cosmopolitan) for cross-platform binaries
 - [Alexballistic](https://www.youtube.com/@alexBallistic) for the server icon/logo
+
+## AI Contribution
+
+Approximately **46%** of this project was made with AI assistance.
+Based on the currently tracked text files, that is about **29,637 AI-assisted lines** out of **64,436 total lines**. The chart below omits files with fewer than 60 estimated AI-assisted lines, because it would look ugly, and why make a pie chart if it looks ugly. This was calculated using Opencode history.
+
+```mermaid
+pie showData
+    title Estimated AI-assisted lines by file
+    "DEVELOPER.md (319 est. AI lines)" : 319
+    "LICENSE (310 est. AI lines)" : 310
+    "LLM_REPO_DOCS.md (87 est. AI lines)" : 87
+    "MISSING_FEATURES.md (77 est. AI lines)" : 77
+    "README.md (72 est. AI lines)" : 72
+    "build_all.sh (86 est. AI lines)" : 86
+    "build_registries.js (598 est. AI lines)" : 598
+    "build_village_templates.js (328 est. AI lines)" : 328
+    "decode_tags.py (311 est. AI lines)" : 311
+    "include/globals.h (299 est. AI lines)" : 299
+    "include/registries.h.bak (837 est. AI lines)" : 837
+    "include/special_block.h (79 est. AI lines)" : 79
+    "index.html (200 est. AI lines)" : 200
+    "rebuild.sh (74 est. AI lines)" : 74
+    "src/async.c (94 est. AI lines)" : 94
+    "src/chunk_generator.c (244 est. AI lines)" : 244
+    "src/config.c (178 est. AI lines)" : 178
+    "src/crafting.c (612 est. AI lines)" : 612
+    "src/creative_mode.c (362 est. AI lines)" : 362
+    "src/globals.c (63 est. AI lines)" : 63
+    "src/main.c (691 est. AI lines)" : 691
+    "src/mojang.c (178 est. AI lines)" : 178
+    "src/packets.c (2638 est. AI lines)" : 2638
+    "src/procedures.c (4453 est. AI lines)" : 4453
+    "src/registries.c.bak (237 est. AI lines)" : 237
+    "src/serialize.c (351 est. AI lines)" : 351
+    "src/special_block.c (277 est. AI lines)" : 277
+    "src/structures.c (66 est. AI lines)" : 66
+    "src/terminal_ui.c (274 est. AI lines)" : 274
+    "src/tools.c (607 est. AI lines)" : 607
+    "src/worldgen.c (1928 est. AI lines)" : 1928
+    "third_party/cjson/cJSON.c (1475 est. AI lines)" : 1475
+    "third_party/cjson/cJSON.h (92 est. AI lines)" : 92
+    "third_party/zlib/adler32.c (75 est. AI lines)" : 75
+    "third_party/zlib/crc32.c (483 est. AI lines)" : 483
+    "third_party/zlib/crc32.h (4345 est. AI lines)" : 4345
+    "third_party/zlib/deflate.c (984 est. AI lines)" : 984
+    "third_party/zlib/deflate.h (173 est. AI lines)" : 173
+    "third_party/zlib/gzguts.h (99 est. AI lines)" : 99
+    "third_party/zlib/gzlib.c (268 est. AI lines)" : 268
+    "third_party/zlib/gzread.c (277 est. AI lines)" : 277
+    "third_party/zlib/gzwrite.c (290 est. AI lines)" : 290
+    "third_party/zlib/infback.c (289 est. AI lines)" : 289
+    "third_party/zlib/inffast.c (147 est. AI lines)" : 147
+    "third_party/zlib/inflate.c (702 est. AI lines)" : 702
+    "third_party/zlib/inftrees.c (138 est. AI lines)" : 138
+    "third_party/zlib/trees.c (514 est. AI lines)" : 514
+    "third_party/zlib/zconf.h (250 est. AI lines)" : 250
+    "third_party/zlib/zlib.h (891 est. AI lines)" : 891
+    "third_party/zlib/zutil.c (138 est. AI lines)" : 138
+    "third_party/zlib/zutil.h (117 est. AI lines)" : 117
+```
