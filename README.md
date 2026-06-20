@@ -149,7 +149,7 @@ GPL-3.0 License - see [LICENSE](LICENSE).
 ## AI Contribution
 
 Approximately **46%** of this project was made with AI assistance.
-Based on the currently tracked text files, that is about **29,637 AI-assisted lines** out of **64,436 total lines**. The chart below omits files with fewer than 60 estimated AI-assisted lines, because it would look ugly, and why make a pie chart if it looks ugly. This was calculated using Opencode history.
+Based on the currently tracked text files, that is about **29,637 AI-assisted lines** out of **64,436 total lines**. The chart below omits files with fewer than 60 estimated AI-assisted lines, because it would look ugly, and why make a pie chart if it looks ugly. This was calculated using Opencode history. Edit: It still looks ugly but whatever man lmao
 
 ```mermaid
 pie showData
