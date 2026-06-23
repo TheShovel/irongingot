@@ -106,7 +106,7 @@ y=80+:     ~280 us/section  (1.1× faster)
 Full chunk: 1.80 ms, 90 us/section  (6.6× faster)
 
 ### Perf optimizations
-- **Cave/ore density grids**: 4×4×4 precomputed in `buildChunkSection` → 128 `octave_sample()` calls instead of 8192 per section. Trilinear interpolation removes square artifacts.
+- **Cave/ore density grids**: 4×4×4 precomputed in `buildChunkSection` (and lazily for direct `getTerrainAt`/`getBlockAt2` y<72) → 128 `octave_sample()` calls/section; trilerp removes square artifacts and keeps drops/chunk terrain consistent.
 - **Structure cell caches**: Per-section TLS caches for dungeon/stronghold cells → 1 `splitmix64` instead of 4096
 - **y-range guards**: Skip function calls in `getTerrainAtFromCache` when y outside structure range
 - **Lookup tables**: Biome height/scale via `biome_base[]`/`biome_scale[]` arrays replacing if-else chain

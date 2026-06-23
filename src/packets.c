@@ -1775,6 +1775,8 @@ int cs_clickContainer (int client_fd) {
   memcpy(before_craft_items, player->craft_items, sizeof(before_craft_items));
   memcpy(before_craft_count, player->craft_count, sizeof(before_craft_count));
   memcpy(before_craft_damage, player->craft_damage, sizeof(before_craft_damage));
+  uint16_t before_cursor_item = player->flagval_16;
+  uint8_t before_cursor_count = player->flagval_8;
 
   uint8_t output_click = false;
   uint8_t output_count = 0;
@@ -1825,10 +1827,20 @@ int cs_clickContainer (int client_fd) {
   }
 
   uint8_t apply_changes = true;
+  uint8_t reject_output_click = false;
   uint8_t equipment_dirty = false;
   uint8_t drop_slot = 255;
   uint8_t drop_count = 0;
   uint16_t drop_item = 0;
+
+  if (output_click && mode == 0 && (button == 0 || button == 1) && before_cursor_item != 0 && before_cursor_count > 0) {
+    uint8_t max_stack = getItemStackSize(output_item);
+    if (max_stack == 0) max_stack = 64;
+    if (before_cursor_item != output_item || before_cursor_count >= max_stack || output_count > max_stack - before_cursor_count) {
+      reject_output_click = true;
+      apply_changes = false;
+    }
+  }
 
   if (mode == 4 && clicked_slot != -999) {
     // when using drop button, manually remove item from inventory and spawn entity
@@ -2004,13 +2016,30 @@ int cs_clickContainer (int client_fd) {
 
 skip_normal_processing:
   // assign cursor-carried item slot
-  if (readByte(client_fd)) {
-    player->flagval_16 = readVarInt(client_fd);
-    player->flagval_8 = readVarInt(client_fd);
+  uint8_t cursor_present = readByte(client_fd);
+  uint16_t cursor_item = 0;
+  uint8_t cursor_count = 0;
+  if (cursor_present) {
+    cursor_item = readVarInt(client_fd);
+    cursor_count = readVarInt(client_fd);
     skipHashedSlotComponents(client_fd);
+  }
+
+  if (reject_output_click) {
+    memcpy(player->inventory_items, before_inventory_items, sizeof(before_inventory_items));
+    memcpy(player->inventory_count, before_inventory_count, sizeof(before_inventory_count));
+    memcpy(player->inventory_damage, before_inventory_damage, sizeof(before_inventory_damage));
+    memcpy(player->craft_items, before_craft_items, sizeof(before_craft_items));
+    memcpy(player->craft_count, before_craft_count, sizeof(before_craft_count));
+    memcpy(player->craft_damage, before_craft_damage, sizeof(before_craft_damage));
+    player->flagval_16 = before_cursor_item;
+    player->flagval_8 = before_cursor_count;
+    syncCraftingSlots(player, window_id);
+    sc_setContainerSlot(client_fd, window_id, 0, output_count, output_item);
+    sc_setCursorItem(client_fd, before_cursor_item, before_cursor_count);
   } else {
-    player->flagval_16 = 0;
-    player->flagval_8 = 0;
+    player->flagval_16 = cursor_item;
+    player->flagval_8 = cursor_count;
   }
 
   if (apply_changes && equipment_dirty) broadcastPlayerEquipment(player);

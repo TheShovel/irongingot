@@ -181,6 +181,40 @@ static inline double grid_lookup(double grid[GRID_CELLS][GRID_CELLS][GRID_CELLS]
     return c0 + fz * (c1 - c0);
 }
 
+static inline uint8_t density_grid_contains(int x, int y, int z) {
+    return g_cy != 0x7FFFFFFF &&
+        x >= g_cx && x < g_cx + 16 &&
+        y >= g_cy && y < g_cy + 16 &&
+        z >= g_cz && z < g_cz + 16;
+}
+
+static void fill_density_grid(int cx, int cy, int cz) {
+    for (int gz = 0; gz < GRID_CELLS; gz++) {
+        for (int gy = 0; gy < GRID_CELLS; gy++) {
+            for (int gx = 0; gx < GRID_CELLS; gx++) {
+                double wx = (double)(cx + gx * 4 + 2);
+                double wy = (double)(cy + gy * 4 + 2);
+                double wz = (double)(cz + gz * 4 + 2);
+                double cn = octave_sample(&cave_noise, wx * 0.04, wy * 0.04 * 0.5, wz * 0.04);
+                g_cave_density[gx][gy][gz] = (cn + 1.0) / 2.0;
+                double on = octave_sample(&ore_clump_noise, wx * 0.12, wy * 0.12, wz * 0.12);
+                g_ore_density[gx][gy][gz] = (on + 1.0) / 2.0;
+            }
+        }
+    }
+    g_cx = cx;
+    g_cy = cy;
+    g_cz = cz;
+}
+
+static inline uint8_t ensure_density_grid_for(int x, int y, int z) {
+    int cy = div_floor(y, 16) * 16;
+    if (cy >= 72) return false;
+    if (density_grid_contains(x, y, z)) return true;
+    fill_density_grid(div_floor(x, 16) * 16, cy, div_floor(z, 16) * 16);
+    return true;
+}
+
 // Per-section structure cell caches. A 16x16 section falls into exactly
 // one cell for each structure, so we cache after the first lookup.
 static TLS_STORAGE uint64_t d_cell_key_cache;
@@ -725,13 +759,9 @@ static uint16_t getOreSeedAt(int x, int y, int z, uint8_t biome, double ore_dens
   return 0;
 }
 
-// Return precomputed ore density from grid, or compute on the fly.
+// Return the same ore density that buildChunkSection uses for generated chunks.
 static inline double getOreDensity(int x, int y, int z) {
-    if (g_cy != 0x7FFFFFFF &&
-        x >= g_cx && x < g_cx + 16 &&
-        y >= g_cy && y < g_cy + 16 &&
-        z >= g_cz && z < g_cz + 16)
-    {
+    if (ensure_density_grid_for(x, y, z)) {
         return grid_lookup(g_ore_density, x, y, z, g_cx, g_cy, g_cz);
     }
     double on = octave_sample(&ore_clump_noise, x * 0.12, y * 0.12, z * 0.12);
@@ -796,13 +826,10 @@ static inline uint8_t isCaveSimple(int x, int y, int z, uint8_t height, uint8_t 
   // Don't generate caves below bedrock level
   if (y < 5) return 0;
 
-  // Look up from precomputed grid when available (trilinear interpolation)
+  // Match buildChunkSection: y sections below 72 use the 4×4×4 density grid;
+  // higher terrain still uses exact cave noise.
   double cave_density;
-  if (g_cy != 0x7FFFFFFF &&
-      x >= g_cx && x < g_cx + 16 &&
-      y >= g_cy && y < g_cy + 16 &&
-      z >= g_cz && z < g_cz + 16)
-  {
+  if (ensure_density_grid_for(x, y, z)) {
     cave_density = grid_lookup(g_cave_density, x, y, z, g_cx, g_cy, g_cz);
   } else {
     double noise = octave_sample(&cave_noise, x * 0.04, y * 0.04 * 0.5, z * 0.04);
@@ -4090,20 +4117,7 @@ uint16_t buildChunkSection (int cx, int cy, int cz, uint8_t dimension) {
   // Each grid cell covers 4x4x4 blocks, replacing 4096 octave_sample calls
   // with 128. Only relevant for underground sections (y < 72).
   if (cy < 72) {
-    for (int gz = 0; gz < GRID_CELLS; gz++) {
-      for (int gy = 0; gy < GRID_CELLS; gy++) {
-        for (int gx = 0; gx < GRID_CELLS; gx++) {
-          double wx = (double)(cx + gx * 4 + 2);
-          double wy = (double)(cy + gy * 4 + 2);
-          double wz = (double)(cz + gz * 4 + 2);
-          double cn = octave_sample(&cave_noise, wx * 0.04, wy * 0.04 * 0.5, wz * 0.04);
-          g_cave_density[gx][gy][gz] = (cn + 1.0) / 2.0;
-          double on = octave_sample(&ore_clump_noise, wx * 0.12, wy * 0.12, wz * 0.12);
-          g_ore_density[gx][gy][gz] = (on + 1.0) / 2.0;
-        }
-      }
-    }
-    g_cx = cx; g_cy = cy; g_cz = cz;
+    fill_density_grid(cx, cy, cz);
   } else {
     g_cy = 0x7FFFFFFF; // invalidate grid for surface-only sections
   }

@@ -6269,7 +6269,18 @@ void tickItemEntities (void) {
     int entity_id = ITEM_ENTITY_ID_BASE - i;
     item_entity_data[i].age++;
 
-    // Simulate physics: gravity and drag
+    // Simulate physics: gravity and drag. Grounded items can lose support
+    // when leaves/blocks below them are broken, so let them fall again.
+    if (item_entity_data[i].on_ground) {
+      int bx = (int)floor(item_entity_data[i].x);
+      int by = (int)floor(item_entity_data[i].y);
+      int bz = (int)floor(item_entity_data[i].z);
+      uint16_t block_below = getBlockAt2(bx, by - 1, bz, item_entity_data[i].dimension);
+      if (isPassableBlock(block_below) && item_entity_data[i].y > -64) {
+        item_entity_data[i].on_ground = 0;
+      }
+    }
+
     if (!item_entity_data[i].on_ground) {
       item_entity_data[i].vy -= 0.04;
       item_entity_data[i].vx *= 0.98;
@@ -7321,12 +7332,12 @@ void interactEntity (int entity_id, int interactor_id) {
 
       mob->data |= 1 << 5; // Set sheared to true
 
-      #ifdef ENABLE_PICKUP_ANIMATION
-      playPickupAnimation(player, I_white_wool, mob->x, mob->y, mob->z);
-      #endif
-
-      uint8_t item_count = 1 + (fast_rand() & 1); // 1-2
-      givePlayerItem(player, I_white_wool, item_count);
+      uint8_t item_count = 1 + (fast_rand() % 3); // 1-3
+      spawnItemEntity(mob->x, mob->y + 0.75, mob->z, I_white_wool, item_count, mob->dimension,
+        ((int)(fast_rand() & 0xFF) - 128) / 4096.0,
+        0.15,
+        ((int)(fast_rand() & 0xFF) - 128) / 4096.0);
+      if (getConfiguredGameMode() != 1) damageHeldItem(player, 1);
 
       for (int i = 0; i < MAX_PLAYERS; i ++) {
         PlayerData* player = &player_data[i];

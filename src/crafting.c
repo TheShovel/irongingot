@@ -488,6 +488,21 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
         *count = 1;
         return;
       }
+      // Stone tool recipes use cobblestone; check before the slab switch case.
+      if (first_item == I_cobblestone && first_row == 0 &&
+          player->craft_items[first + 3] == I_stick &&
+          player->craft_items[first + 6] == I_stick) {
+        *item = I_stone_shovel;
+        *count = 1;
+        return;
+      }
+      if (first_item == I_cobblestone && first_row == 0 &&
+          player->craft_items[first + 3] == I_cobblestone &&
+          player->craft_items[first + 6] == I_stick) {
+        *item = I_stone_sword;
+        *count = 1;
+        return;
+      }
       switch (first_item) {
         case I_cobblestone:
         case I_stone:
