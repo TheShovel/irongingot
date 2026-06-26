@@ -1992,6 +1992,77 @@ uint16_t cursor_damage = player->cursor_damage;
       before_inventory_items, before_inventory_count, before_inventory_damage);
     reconcileSlotDamages(player->craft_items, player->craft_count, player->craft_damage, 9,
       before_craft_items, before_craft_count, before_craft_damage);
+
+    // For any slot where reconcileSlotDamages couldn't find the damage source
+    // (because the source was in the cursor, or wasn't an exact item+count match),
+    // scan all before-state sources (inventory, craft, and cursor) for a matching
+    // item+count that disappeared.
+    for (uint8_t _si = 0; _si < 41; _si++) {
+      if (player->inventory_items[_si] == 0 || player->inventory_count[_si] == 0 ||
+          !isDamageableItem(player->inventory_items[_si]) || player->inventory_damage[_si] != 0)
+        continue;
+      // Slot didn't already have this item+count before (reconcile would have matched)
+      if (before_inventory_items[_si] == player->inventory_items[_si] &&
+          before_inventory_count[_si] == player->inventory_count[_si])
+        continue;
+      // Look through before-inventory
+      for (uint8_t _sj = 0; _sj < 41; _sj++) {
+        if (before_inventory_items[_sj] == player->inventory_items[_si] &&
+            before_inventory_count[_sj] == player->inventory_count[_si] &&
+            before_inventory_damage[_sj] > 0 &&
+            (player->inventory_items[_sj] != before_inventory_items[_sj] || player->inventory_count[_sj] != before_inventory_count[_sj])) {
+          player->inventory_damage[_si] = before_inventory_damage[_sj];
+          break;
+        }
+      }
+      if (player->inventory_damage[_si] != 0) continue;
+      // Look through before-craft
+      for (uint8_t _sj = 0; _sj < 9; _sj++) {
+        if (before_craft_items[_sj] == player->inventory_items[_si] &&
+            before_craft_count[_sj] == player->inventory_count[_si] &&
+            before_craft_damage[_sj] > 0 &&
+            (player->craft_items[_sj] != before_craft_items[_sj] || player->craft_count[_sj] != before_craft_count[_sj])) {
+          player->inventory_damage[_si] = before_craft_damage[_sj];
+          break;
+        }
+      }
+      if (player->inventory_damage[_si] == 0 && before_cursor_item == player->inventory_items[_si] &&
+          before_cursor_count == player->inventory_count[_si] && before_cursor_damage > 0) {
+        player->inventory_damage[_si] = before_cursor_damage;
+      }
+    }
+    // Same for craft slots
+    for (uint8_t _si = 0; _si < 9; _si++) {
+      if (player->craft_items[_si] == 0 || player->craft_count[_si] == 0 ||
+          !isDamageableItem(player->craft_items[_si]) || player->craft_damage[_si] != 0)
+        continue;
+      if (before_craft_items[_si] == player->craft_items[_si] &&
+          before_craft_count[_si] == player->craft_count[_si])
+        continue;
+      for (uint8_t _sj = 0; _sj < 41; _sj++) {
+        if (before_inventory_items[_sj] == player->craft_items[_si] &&
+            before_inventory_count[_sj] == player->craft_count[_si] &&
+            before_inventory_damage[_sj] > 0 &&
+            (player->inventory_items[_sj] != before_inventory_items[_sj] || player->inventory_count[_sj] != before_inventory_count[_sj])) {
+          player->craft_damage[_si] = before_inventory_damage[_sj];
+          break;
+        }
+      }
+      if (player->craft_damage[_si] != 0) continue;
+      for (uint8_t _sj = 0; _sj < 9; _sj++) {
+        if (before_craft_items[_sj] == player->craft_items[_si] &&
+            before_craft_count[_sj] == player->craft_count[_si] &&
+            before_craft_damage[_sj] > 0 &&
+            (player->craft_items[_sj] != before_craft_items[_sj] || player->craft_count[_sj] != before_craft_count[_sj])) {
+          player->craft_damage[_si] = before_craft_damage[_sj];
+          break;
+        }
+      }
+      if (player->craft_damage[_si] == 0 && before_cursor_item == player->craft_items[_si] &&
+          before_cursor_count == player->craft_count[_si] && before_cursor_damage > 0) {
+        player->craft_damage[_si] = before_cursor_damage;
+      }
+    }
   }
 
   // If dropping an item from inventory, spawn it on the ground
@@ -2061,28 +2132,6 @@ skip_normal_processing:
     sc_setContainerSlot(client_fd, window_id, 0, output_count, output_item);
     sc_setCursorItemWithDamage(client_fd, before_cursor_item, before_cursor_count, before_cursor_damage);
   } else {
-    // Transfer cursor damage to inventory if the cursor item moved into a slot
-    if (apply_changes && before_cursor_item != 0 && before_cursor_count > 0 && before_cursor_damage > 0 &&
-        (cursor_item != before_cursor_item || cursor_count != before_cursor_count)) {
-      for (uint8_t _i = 0; _i < 41; _i++) {
-        if ((before_inventory_items[_i] != before_cursor_item || before_inventory_count[_i] != before_cursor_count) &&
-            player->inventory_items[_i] == before_cursor_item &&
-            player->inventory_count[_i] == before_cursor_count &&
-            player->inventory_damage[_i] == 0) {
-          player->inventory_damage[_i] = before_cursor_damage;
-          break;
-        }
-      }
-      for (uint8_t _i = 0; _i < 9; _i++) {
-        if ((before_craft_items[_i] != before_cursor_item || before_craft_count[_i] != before_cursor_count) &&
-            player->craft_items[_i] == before_cursor_item &&
-            player->craft_count[_i] == before_cursor_count &&
-            player->craft_damage[_i] == 0) {
-          player->craft_damage[_i] = before_cursor_damage;
-          break;
-        }
-      }
-    }
 
     player->flagval_16 = cursor_item;
     player->flagval_8 = cursor_count;
