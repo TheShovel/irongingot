@@ -6028,7 +6028,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     if (!isReplaceableBlock(getBlockAt2(sx, sy, sz, player->dimension))) return;
     if (makeBlockChange(sx, sy, sz, block, player->dimension)) return;
 
-    uint8_t slab_type = (face == 0) ? 2 : 0;
+    uint8_t slab_type = (face == 0) ? 1 : 0;
     special_block_set_state(sx, sy, sz, player->dimension, block, slab_encode_state(slab_type));
     uint16_t sid = get_slab_state_id(block, slab_type);
     for (int j = 0; j < MAX_PLAYERS; j++) {

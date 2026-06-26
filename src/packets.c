@@ -1057,6 +1057,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
       block_changes_snapshot[i].block != B_wheat &&
       block_changes_snapshot[i].block != B_lantern &&
       block_changes_snapshot[i].block != B_furnace &&
+      !is_slab_block(block_changes_snapshot[i].block) &&
       !isOrientedBlock(block_changes_snapshot[i].block) &&
       !isStairBlock(block_changes_snapshot[i].block) &&
       !is_fence_block(block_changes_snapshot[i].block) &&

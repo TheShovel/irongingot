@@ -143,7 +143,7 @@ Single `uint16_t` bits per block type:
 - **Doors:** bit0=open, bit1=hinge, bits2-3=direction
 - **Trapdoors:** bit0=open, bit1=half, bits2-3=direction
 - **Stairs:** bits0-1=half, bits2-3=direction, bits4-6=shape
-- **Slabs:** bits0-1=type (0=bottom,2=top, set on placement via undo-face click; broadcast to chunk)
+- **Slabs:** bits0-1=type (0=bottom,1=top, set on placement via underside-face click; broadcast to chunk)
 - **Furnaces:** bits0-1=direction, bit2=lit
 - **Chests/ender_chests:** bits0-1=direction
 - **Barrels:** bits0-2=direction, bit3=open
