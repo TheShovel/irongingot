@@ -90,5 +90,6 @@ int cs_containerButtonClick(int client_fd);
 int cs_craftRecipeRequest(int client_fd);
 
 void writeItemSlot(int client_fd, uint8_t count, uint16_t item);
+void writeItemSlotWithDamage(int client_fd, uint8_t count, uint16_t item, uint16_t damage);
 
 #endif

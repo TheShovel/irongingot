@@ -752,7 +752,7 @@ void handleCreativeItemClick(int client_fd, uint16_t item_id) {
       uint8_t stack_size = getItemStackSize(item_id);
       
       // Give the player the item
-      int result = givePlayerItem(player, item_id, stack_size);
+      int result = givePlayerItem(player, item_id, stack_size, 0, 0);
       
       if (result == 0) {
         char msg[128];

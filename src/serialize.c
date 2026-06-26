@@ -243,6 +243,20 @@ static cJSON *serializePlayerData(void) {
     }
     cJSON_AddItemToObject(obj, "craft_damage", craft_dmg);
 
+    cJSON *inv_uid = cJSON_CreateArray();
+    for (int i = 0; i < 41; i++) {
+      cJSON_AddItemToArray(inv_uid, cJSON_CreateNumber((double)pd->item_uid[i]));
+    }
+    cJSON_AddItemToObject(obj, "item_uid", inv_uid);
+
+    cJSON *craft_uid = cJSON_CreateArray();
+    for (int i = 0; i < 9; i++) {
+      cJSON_AddItemToArray(craft_uid, cJSON_CreateNumber((double)pd->craft_uid[i]));
+    }
+    cJSON_AddItemToObject(obj, "craft_uid", craft_uid);
+
+    cJSON_AddNumberToObject(obj, "cursor_uid", (double)pd->cursor_uid);
+
     cJSON *ec_arr = cJSON_CreateArray();
     for (int i = 0; i < 27; i++) {
       cJSON_AddItemToArray(ec_arr, cJSON_CreateNumber(pd->ender_chest_items[i]));
@@ -362,6 +376,9 @@ static int deserializePlayerData(cJSON *arr) {
     READ_ARRAY(craft_items, "craft_items", 9);
     READ_ARRAY(craft_count, "craft_count", 9);
     READ_ARRAY(craft_damage, "craft_damage", 9);
+    READ_ARRAY(item_uid, "item_uid", 41);
+    READ_ARRAY(craft_uid, "craft_uid", 9);
+    READ_NUMBER(cursor_uid, "cursor_uid");
     READ_ARRAY(ender_chest_items, "ender_chest_items", 27);
     READ_ARRAY(ender_chest_count, "ender_chest_count", 27);
     READ_ARRAY(ender_chest_damage, "ender_chest_damage", 27);

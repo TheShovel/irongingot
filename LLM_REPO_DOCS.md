@@ -129,6 +129,10 @@ Inventory is `inventory_*[41]` (hotbar 0-8, main 9-35, armor 36-39, offhand 40) 
 
 PlayerData gets `cursor_damage` field so tool durability survives being carried in the inventory cursor. Damage transfers to/from inventory via click-handler cursor scan. Serialized in world.json.
 
+ItemEntityData has `damage` field; `spawnItemEntity`/`givePlayerItem` accept a `uint16_t damage` parameter (0 for non-damageable items). This lets dropped/picked-up items retain durability.
+
+Every item instance gets a unique `uint64_t uid` (item_uid[41], craft_uid[9], cursor_uid) so identical tool types can be distinguished. UIDs are preserved on move/swap/pickup/drop and serialized in world.json. This prevents durability from being incorrectly transferred between identical items.
+
 ## Village House Rotation (worldgen.c)
 
 Houses are placed at fixed offsets from the village center. They rotate so each front door faces the village center; all houses use the center biome style (prevents mixed taiga/birch edge houses). Helpers: `houseRotation()`, `rotLocal()`, type-aware `rotBlockDir()` (doors/stairs/trapdoors/beds/chests/horiz/fences only). Generated templates preserve stair shape + slab type.

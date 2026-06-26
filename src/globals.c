@@ -48,6 +48,7 @@ uint32_t rng_seed = INITIAL_RNG_SEED;
 
 uint16_t world_time = 0;
 uint64_t world_day_time = 0;
+uint64_t next_item_uid = 1;
 uint32_t server_ticks = 0;
 
 float world_rain_level = 0.0f;

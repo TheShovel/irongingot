@@ -1854,6 +1854,7 @@ uint16_t cursor_damage = player->cursor_damage;
   uint8_t drop_slot = 255;
   uint8_t drop_count = 0;
   uint16_t drop_item = 0;
+  uint16_t drop_damage = 0;
 
   if (output_click && mode == 0 && (button == 0 || button == 1) && before_cursor_item != 0 && before_cursor_count > 0) {
     uint8_t max_stack = getItemStackSize(output_item);
@@ -1872,6 +1873,7 @@ uint16_t cursor_damage = player->cursor_damage;
       drop_slot = slot;
       drop_item = player->inventory_items[slot];
       drop_count = count;
+      drop_damage = player->inventory_damage[slot];
       player->inventory_count[slot] -= count;
       if (player->inventory_count[slot] == 0) player->inventory_items[slot] = 0;
       sc_setContainerSlot(client_fd, window_id, clicked_slot, player->inventory_count[slot], player->inventory_items[slot]);
@@ -1888,14 +1890,14 @@ uint16_t cursor_damage = player->cursor_damage;
         spawnItemEntity(player->x + 0.5, player->y + 0.5, player->z + 0.5, player->flagval_16, player->flagval_8, player->dimension,
           -sin(yaw_rad) * cos(pitch_rad) * speed,
           -sin(pitch_rad) * speed + 0.3,
-          cos(yaw_rad) * cos(pitch_rad) * speed);
+          cos(yaw_rad) * cos(pitch_rad) * speed, player->cursor_damage, player->cursor_uid);
         player->flagval_16 = 0;
         player->flagval_8 = 0;
       } else {
         spawnItemEntity(player->x + 0.5, player->y + 0.5, player->z + 0.5, player->flagval_16, 1, player->dimension,
           -sin(yaw_rad) * cos(pitch_rad) * speed,
           -sin(pitch_rad) * speed + 0.3,
-          cos(yaw_rad) * cos(pitch_rad) * speed);
+          cos(yaw_rad) * cos(pitch_rad) * speed, player->cursor_damage, player->cursor_uid);
         player->flagval_8 -= 1;
         if (player->flagval_8 == 0) player->flagval_16 = 0;
       }
@@ -1903,9 +1905,131 @@ uint16_t cursor_damage = player->cursor_damage;
     apply_changes = false;
   }
 
-  uint8_t slot, count, present, craft = false;
+  // Server-side click handling for mode=0 (standard click).
+  // Computes the correct slot/cursor state from click parameters alone,
+  // ignoring the client's slot changes which may be stale from rapid clicks.
+  if (mode == 0 && clicked_slot != -999 && apply_changes && window_id == 0) {
+    uint8_t s_slot = clientSlotToServerSlot(0, (uint8_t)clicked_slot);
+    uint16_t *slot_item, *slot_damage;
+    uint64_t *slot_uid;
+    uint8_t *slot_count;
+    if (s_slot <= 40) {
+      slot_item = &player->inventory_items[s_slot];
+      slot_count = &player->inventory_count[s_slot];
+      slot_damage = &player->inventory_damage[s_slot];
+      slot_uid = &player->item_uid[s_slot];
+    } else if (s_slot >= 41 && s_slot <= 49) {
+      uint8_t ci = s_slot - 41;
+      slot_item = &player->craft_items[ci];
+      slot_count = &player->craft_count[ci];
+      slot_damage = &player->craft_damage[ci];
+      slot_uid = &player->craft_uid[ci];
+    } else {
+      s_slot = 255;
+    }
+
+    if (s_slot != 255 && *slot_count > 0 && *slot_item != 0) {
+      uint8_t max_stack = getItemStackSize(*slot_item);
+      if (max_stack == 0) max_stack = 64;
+      uint16_t cur_item = player->flagval_16;
+      uint8_t cur_count = player->flagval_8;
+      uint16_t cur_damage = player->cursor_damage;
+      uint64_t cur_uid = player->cursor_uid;
+
+      if (cur_count == 0 || cur_item == 0) {
+        // --- Cursor empty: pick up from slot ---
+        if (button == 0) {
+          // Left click: pick up entire stack
+          player->flagval_16 = *slot_item;
+          player->flagval_8 = *slot_count;
+          player->cursor_damage = *slot_damage;
+          player->cursor_uid = *slot_uid;
+          *slot_item = 0;
+          *slot_count = 0;
+          *slot_damage = 0;
+          *slot_uid = 0;
+        } else {
+          // Right click: pick up half
+          uint8_t half = (*slot_count + 1) / 2;
+          player->flagval_16 = *slot_item;
+          player->flagval_8 = half;
+          player->cursor_damage = (half == *slot_count) ? *slot_damage : 0;
+          player->cursor_uid = (half == *slot_count) ? *slot_uid : 0;
+          *slot_count -= half;
+          if (*slot_count == 0) { *slot_item = 0; *slot_damage = 0; }
+        }
+      } else if (cur_item == *slot_item) {
+        // --- Same item type: merge stacks ---
+        uint8_t space = max_stack - *slot_count;
+        if (space > 0) {
+          uint8_t move = cur_count < space ? cur_count : space;
+          *slot_count += move;
+          cur_count -= move;
+          if (cur_count == 0) {
+            cur_item = 0;
+            cur_damage = 0;
+          }
+          player->flagval_16 = cur_item;
+          player->flagval_8 = cur_count;
+          player->cursor_damage = cur_damage;
+        } else if (button == 0) {
+          // Slot is full, swap on left click
+          goto mode0_swap;
+        } else {
+          // Right-click on full slot of same type: also swap for tools
+          goto mode0_swap;
+        }
+      } else if (button == 0) {
+        // --- Different item: swap (left click only) ---
+mode0_swap:
+        player->flagval_16 = *slot_item;
+        player->flagval_8 = *slot_count;
+        player->cursor_damage = *slot_damage;
+        player->cursor_uid = *slot_uid;
+        *slot_item = cur_item;
+        *slot_count = cur_count;
+        *slot_damage = cur_damage;
+        *slot_uid = cur_uid;
+      }
+    } else if (s_slot != 255) {
+      // Slot is empty: place cursor into slot
+      uint16_t cur_item = player->flagval_16;
+      uint8_t cur_count = player->flagval_8;
+      uint16_t cur_damage = player->cursor_damage;
+      uint64_t cur_uid = player->cursor_uid;
+      if (cur_count > 0 && cur_item != 0) {
+        if (button == 0 || button == 1) {
+          uint8_t place = (button == 0) ? cur_count : 1;
+          *slot_item = cur_item;
+          *slot_count = place;
+          *slot_damage = (place == cur_count) ? cur_damage : 0;
+          *slot_uid = (place == cur_count) ? cur_uid : ++next_item_uid;
+          cur_count -= place;
+          if (cur_count == 0) { cur_item = 0; cur_damage = 0; }
+          player->flagval_16 = cur_item;
+          player->flagval_8 = cur_count;
+          player->cursor_damage = cur_damage;
+        }
+      }
+    }
+
+    // Sync slot to client with correct damage
+    if (s_slot != 255 && s_slot <= 40) {
+      sc_setContainerSlot(client_fd, window_id, (uint16_t)clicked_slot,
+        player->inventory_count[s_slot], player->inventory_items[s_slot]);
+      if (s_slot == player->hotbar || s_slot == 40 || (s_slot >= 36 && s_slot <= 39))
+        equipment_dirty = true;
+    } else if (s_slot >= 41 && s_slot <= 49) {
+      sc_setContainerSlot(client_fd, window_id, (uint16_t)clicked_slot,
+        *slot_count, *slot_item);
+    }
+    apply_changes = false;
+  }
+
+  uint8_t slot, count, present;
   uint16_t item;
   int tmp;
+  uint8_t craft = false;
 
   uint16_t *p_item;
   uint8_t *p_count;
@@ -2001,10 +2125,6 @@ uint16_t cursor_damage = player->cursor_damage;
       if (player->inventory_items[_si] == 0 || player->inventory_count[_si] == 0 ||
           !isDamageableItem(player->inventory_items[_si]) || player->inventory_damage[_si] != 0)
         continue;
-      // Slot didn't already have this item+count before (reconcile would have matched)
-      if (before_inventory_items[_si] == player->inventory_items[_si] &&
-          before_inventory_count[_si] == player->inventory_count[_si])
-        continue;
       // Look through before-inventory
       for (uint8_t _sj = 0; _sj < 41; _sj++) {
         if (before_inventory_items[_sj] == player->inventory_items[_si] &&
@@ -2035,9 +2155,6 @@ uint16_t cursor_damage = player->cursor_damage;
     for (uint8_t _si = 0; _si < 9; _si++) {
       if (player->craft_items[_si] == 0 || player->craft_count[_si] == 0 ||
           !isDamageableItem(player->craft_items[_si]) || player->craft_damage[_si] != 0)
-        continue;
-      if (before_craft_items[_si] == player->craft_items[_si] &&
-          before_craft_count[_si] == player->craft_count[_si])
         continue;
       for (uint8_t _sj = 0; _sj < 41; _sj++) {
         if (before_inventory_items[_sj] == player->craft_items[_si] &&
@@ -2073,7 +2190,7 @@ uint16_t cursor_damage = player->cursor_damage;
     spawnItemEntity(player->x + 0.5, player->y + 0.5, player->z + 0.5, drop_item, drop_count, player->dimension,
       -sin(yaw_rad) * cos(pitch_rad) * speed,
       -sin(pitch_rad) * speed + 0.3,
-      cos(yaw_rad) * cos(pitch_rad) * speed);
+      cos(yaw_rad) * cos(pitch_rad) * speed, drop_damage, 0);
   }
 
   // window 0 is player inventory, window 12 is crafting table
@@ -2118,7 +2235,16 @@ skip_normal_processing:
     skipHashedSlotComponents(client_fd);
   }
 
-  if (reject_output_click) {
+  if (mode == 0 && clicked_slot == -999) {
+    // Manual drop handler already set flagval_16/flagval_8/cursor_damage
+    // Packet cursor is stale — trust server state and sync it back to client
+    player->cursor_damage = 0;
+    sc_setCursorItemWithDamage(client_fd, player->flagval_16, player->flagval_8, 0);
+  } else if (mode == 0 && clicked_slot != -999 && window_id == 0 && !apply_changes) {
+    // Server-side click already computed the correct cursor state
+    // Send it to the client so its UI matches
+    sc_setCursorItemWithDamage(client_fd, player->flagval_16, player->flagval_8, player->cursor_damage);
+  } else if (reject_output_click) {
     memcpy(player->inventory_items, before_inventory_items, sizeof(before_inventory_items));
     memcpy(player->inventory_count, before_inventory_count, sizeof(before_inventory_count));
     memcpy(player->inventory_damage, before_inventory_damage, sizeof(before_inventory_damage));
@@ -2328,7 +2454,8 @@ int cs_closeContainer (int client_fd) {
 	  // or, in the case of chests, simply clear the storage pointer
 	  for (uint8_t i = 0; i < 9; i ++) {
 	    if (window_id != 2) {
-	      givePlayerItem(player, player->craft_items[i], player->craft_count[i]);
+	      uint16_t _d = isDamageableItem(player->craft_items[i]) ? player->craft_damage[i] : 0;
+	      givePlayerItem(player, player->craft_items[i], player->craft_count[i], _d, player->craft_uid[i]);
 	      uint8_t client_slot = serverSlotToClientSlot(window_id, 41 + i);
 	      if (client_slot != 255) sc_setContainerSlot(player->client_fd, window_id, client_slot, 0, 0);
 	    }
@@ -2362,7 +2489,7 @@ int cs_closeContainer (int client_fd) {
 	  }
 	  #endif
 
-    givePlayerItem(player, player->flagval_16, player->flagval_8);
+    givePlayerItem(player, player->flagval_16, player->flagval_8, player->cursor_damage, player->cursor_uid);
     // Transfer cursor damage to the inventory slot that received the item
     if (player->flagval_16 != 0 && player->flagval_8 > 0 && player->cursor_damage > 0) {
       uint16_t _ci = player->flagval_16;
@@ -3176,7 +3303,7 @@ int cs_chat (int client_fd) {
     if (stack_size == 0) stack_size = 64;
     while (remaining > 0) {
       uint8_t give_count = remaining > stack_size ? stack_size : (uint8_t)remaining;
-      if (givePlayerItem(target, item_id, give_count)) break;
+      if (givePlayerItem(target, item_id, give_count, 0, 0)) break;
       remaining -= give_count;
       given += give_count;
     }

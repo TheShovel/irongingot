@@ -23,7 +23,7 @@ PlayerData *getPlayerByName (int start_offset, int end_offset, uint8_t *buffer);
 void handlePlayerDisconnect (int client_fd);
 void handlePlayerJoin (PlayerData* player);
 void disconnectClient (int *client_fd, int cause);
-int givePlayerItem (PlayerData *player, uint16_t item, uint8_t count);
+int givePlayerItem(PlayerData *player, uint16_t item, uint8_t count, uint16_t damage, uint64_t uid);
 void spawnPlayer (PlayerData *player);
 
 void sendPlayerMetadata (int client_fd, PlayerData *player);
@@ -88,7 +88,7 @@ void spawnMob (uint8_t type, short x, uint8_t y, short z, uint8_t health, uint8_
 void spawnXpOrb (double x, double y, double z, uint8_t value, uint8_t dimension);
 void tickXpOrbs (void);
 void spawnItemEntity (double x, double y, double z, uint16_t item, uint8_t count, uint8_t dimension,
-    double vx, double vy, double vz);
+    double vx, double vy, double vz, uint16_t damage, uint64_t uid);
 void tickItemEntities (void);
 void interactEntity (int entity_id, int interactor_id);
 void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t damage);
