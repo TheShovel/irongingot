@@ -370,6 +370,7 @@ extern uint32_t world_seed;
 extern uint32_t rng_seed;
 
 extern uint16_t world_time;
+extern uint64_t world_day_time;
 extern uint32_t server_ticks;
 
 extern float world_rain_level;
@@ -450,6 +451,7 @@ typedef struct {
   uint8_t craft_count[9];
   uint16_t inventory_damage[41];
   uint16_t craft_damage[9];
+  uint16_t cursor_damage;
   // Usage depends on player's flags, see below
   // When no flags are set, acts as cursor item ID
   uint16_t flagval_16;

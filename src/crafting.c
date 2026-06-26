@@ -591,6 +591,23 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
       break;
 
     case 4:
+      // Hoe recipes: two materials on top, two sticks down the middle (left or right aligned)
+      if (first_row == 0 && first_col < 2 &&
+          player->craft_items[first + 1] != 0 &&
+          player->craft_items[first + 3] == I_stick &&
+          player->craft_items[first + 6] == I_stick) {
+        if (isPlankItem(first_item) && isPlankItem(player->craft_items[first + 1])) *item = I_wooden_hoe;
+        else if (first_item == I_cobblestone && player->craft_items[first + 1] == I_cobblestone) *item = I_stone_hoe;
+        else if (first_item == I_iron_ingot && player->craft_items[first + 1] == I_iron_ingot) *item = I_iron_hoe;
+        else if (first_item == I_gold_ingot && player->craft_items[first + 1] == I_gold_ingot) *item = I_golden_hoe;
+        else if (first_item == I_diamond && player->craft_items[first + 1] == I_diamond) *item = I_diamond_hoe;
+        else if (first_item == I_netherite_ingot && player->craft_items[first + 1] == I_netherite_ingot) *item = I_netherite_hoe;
+        if (*item != 0) {
+          *count = 1;
+          return;
+        }
+      }
+
       // 2x2 crafting table from any planks
       if (isPlankItem(first_item) &&
           first_col != 2 && first_row != 2 &&
@@ -968,29 +985,6 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
         *count = 6;
         return;
       }
-      // Stone brick stairs (6 stone bricks in stair pattern)
-      // Pattern 1: X.. / XX. / XXX (slots 0,3,4,6,7,8)
-      if (first_item == I_stone_bricks && first_col == 0 && first_row == 0 &&
-          player->craft_items[3] == first_item &&
-          player->craft_items[4] == first_item &&
-          player->craft_items[6] == first_item &&
-          player->craft_items[7] == first_item &&
-          player->craft_items[8] == first_item) {
-        *item = I_stone_brick_stairs;
-        *count = 4;
-        return;
-      }
-      // Pattern 2: ..X / .XX / XXX (slots 2,4,5,6,7,8)
-      if (first_item == I_stone_bricks && first_col == 2 && first_row == 0 &&
-          player->craft_items[4] == first_item &&
-          player->craft_items[5] == first_item &&
-          player->craft_items[6] == first_item &&
-          player->craft_items[7] == first_item &&
-          player->craft_items[8] == first_item) {
-        *item = I_stone_brick_stairs;
-        *count = 4;
-        return;
-      }
       // Cobblestone stairs (6 cobblestone in stair pattern)
       // Pattern 1: X.. / XX. / XXX (slots 0,3,4,6,7,8)
       if (first_item == I_cobblestone && first_col == 0 && first_row == 0 &&
@@ -1275,6 +1269,7 @@ void getSmeltingOutput (PlayerData *player) {
   else if (*fuel == I_wooden_shovel) fuel_value = 1;
   else if (*fuel == I_wooden_sword) fuel_value = 1;
   else if (*fuel == I_wooden_hoe) fuel_value = 1;
+  else if (*fuel == I_lava_bucket) fuel_value = 100;
   else return;
 
   uint8_t exchange = *material_count > fuel_value ? fuel_value : *material_count;
@@ -1333,8 +1328,12 @@ void getSmeltingOutput (PlayerData *player) {
   *output_count += exchange;
   *material_count -= exchange;
 
+  uint8_t used_lava_bucket = (*fuel == I_lava_bucket);
   *fuel_count -= 1;
-  if (*fuel_count == 0) *fuel = 0;
+  if (used_lava_bucket) {
+    *fuel = I_bucket;
+    *fuel_count = 1;
+  } else if (*fuel_count == 0) *fuel = 0;
 
   if (*material_count <= 0) {
     *material_count = 0;

@@ -47,6 +47,7 @@ uint32_t world_seed = INITIAL_WORLD_SEED;
 uint32_t rng_seed = INITIAL_RNG_SEED;
 
 uint16_t world_time = 0;
+uint64_t world_day_time = 0;
 uint32_t server_ticks = 0;
 
 float world_rain_level = 0.0f;

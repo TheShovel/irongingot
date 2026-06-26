@@ -117,6 +117,8 @@ Full chunk: 1.80 ms, 90 us/section  (6.6× faster)
 ## Game Tick (procedures.c:handleServerTick)
 Order: world time + parallel per-player state → weather → portal/bow → fluid queue → inventory sync + disk-save check → wheat growth → mob AI (move/anger/sounds/look-around; villagers >256 blocks skip AI) → projectiles → XP orbs + item entities → mob spawning.
 
+`world_day_time` (uint64_t, serialized in globals.c) tracks absolute tick count; `world_time` is `world_day_time % 24000`. `sc_updateTime` sends `world_day_time` so client day counter actually increments.
+
 Nether portal transfer clears old send queue, picks safe floor near scaled X/Z in Y72-118 (fallback preserved/floor≈80), builds 5×5 obsidian platform + air room, then teleports and locks movement briefly until chunks become collidable.
 
 Wheat growth uses a dedicated tracking list (`wheat_coords[]`/`wheat_count` in `special_block.c`) to avoid scanning the hash table. Both the hash table and the wheat tracking list grow dynamically — no fixed limits. All special blocks clean up their hash entries when broken to prevent table leaks.
@@ -124,6 +126,8 @@ Wheat growth uses a dedicated tracking list (`wheat_coords[]`/`wheat_count` in `
 ## Inventory
 
 Inventory is `inventory_*[41]` (hotbar 0-8, main 9-35, armor 36-39, offhand 40) plus `craft_*[9]` scratch grid for player/crafting/furnace/merchant/container overflow. Windows: player inventory(0), chest(2), crafting table(12), furnace(14), merchant(19). Slot mapping in `procedures.c`.
+
+PlayerData gets `cursor_damage` field so tool durability survives being carried in the inventory cursor. Damage transfers to/from inventory via click-handler cursor scan. Serialized in world.json.
 
 ## Village House Rotation (worldgen.c)
 
@@ -135,7 +139,7 @@ Single `uint16_t` bits per block type:
 - **Doors:** bit0=open, bit1=hinge, bits2-3=direction
 - **Trapdoors:** bit0=open, bit1=half, bits2-3=direction
 - **Stairs:** bits0-1=half, bits2-3=direction, bits4-6=shape
-- **Slabs:** bits0-1=type (generated-template packing only)
+- **Slabs:** bits0-1=type (0=bottom,2=top, set on placement via undo-face click; broadcast to chunk)
 - **Furnaces:** bits0-1=direction, bit2=lit
 - **Chests/ender_chests:** bits0-1=direction
 - **Barrels:** bits0-2=direction, bit3=open
@@ -151,6 +155,8 @@ Worldgen: chunk_size, terrain_base_height, cave_base_depth, biome_size
 Perf: chunk_cache_size, max_block_changes, infinite_block_changes, tick_interval, disk_sync_interval
 Features: sync_world_to_disk, do_fluid_flow, allow_chests, allow_doors, enable_flight, enable_commands, fetch_skins_from_mojang, safe_area_radius
 Debug: log_unknown_packets, log_length_discrepancy, log_chunk_generation
+
+Note: `/gamerule keepInventory` calls `save_config("server.conf")` so the change persists across restarts. Lava bucket can be used as furnace fuel (value 100). Hoe recipes added for all material tiers (wood→netherite).
 
 ## world.json format
 

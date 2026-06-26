@@ -97,7 +97,21 @@ static void placeDenseTree(short x, uint8_t y, short z, uint16_t log, uint16_t l
   setBlockIfReplaceable(x, y + height + 1, z, leaves);
 }
 
+static uint8_t saplingHasVerticalClearance(short x, uint8_t y, short z, uint8_t height) {
+  for (uint16_t yy = y; yy <= (uint16_t)y + height; yy++) {
+    uint16_t target = getBlockAt(x, (uint8_t)yy, z);
+    if (!isReplaceableBlock(target) && !isLeafBlock(target) && !isSaplingBlock(target)) return 0;
+  }
+  return 1;
+}
+
 void placeSaplingStructure (short x, uint8_t y, short z, uint16_t sapling_block) {
+  uint8_t max_height = 8;
+  if (sapling_block == B_jungle_sapling) max_height = 12;
+  else if (sapling_block == B_spruce_sapling) max_height = 10;
+  else if (sapling_block == B_oak_sapling) max_height = 8;
+  if (!saplingHasVerticalClearance(x, y, z, max_height)) return;
+
   switch (sapling_block) {
     case B_spruce_sapling:
       placeConiferTree(x, y, z, B_spruce_log, B_spruce_leaves);

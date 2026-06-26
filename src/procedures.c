@@ -774,16 +774,22 @@ void resetPlayerData (PlayerData *player) {
     for (int i = 0; i < 41; i ++) {
       player->inventory_items[i] = 0;
       player->inventory_count[i] = 0;
+      player->inventory_damage[i] = 0;
     }
     for (int i = 0; i < 9; i ++) {
       player->craft_items[i] = 0;
       player->craft_count[i] = 0;
+      player->craft_damage[i] = 0;
     }
     for (int i = 0; i < 27; i ++) {
       player->ender_chest_items[i] = 0;
       player->ender_chest_count[i] = 0;
     }
   }
+  // Always clear cursor on respawn
+  player->flagval_16 = 0;
+  player->flagval_8 = 0;
+  player->cursor_damage = 0;
   player->flags &= ~0x80;
   player->last_attack_time = 0;
   // Initialize XP
@@ -1258,7 +1264,7 @@ void spawnPlayer (PlayerData *player) {
   // Sync client XP
   sc_setExperience(player->client_fd, player->xp_total, player->xp_level, player->xp_progress);
   // Sync client clock time
-  sc_updateTime(player->client_fd, world_time);
+  sc_updateTime(player->client_fd, world_day_time);
 
   // Sync respawn screen state (event 11 = enable respawn screen)
   sc_gameEvent(player->client_fd, 11, config.do_immediate_respawn ? 0.0f : 1.0f);
@@ -3344,7 +3350,7 @@ static void broadcastSleepTimeAndWeather(void) {
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (player_data[i].client_fd == -1) continue;
     if (player_data[i].flags & 0x20) continue;
-    sc_updateTime(player_data[i].client_fd, world_time);
+    sc_updateTime(player_data[i].client_fd, world_day_time);
     if (player_data[i].dimension == DIMENSION_OVERWORLD) {
       sc_gameEvent(player_data[i].client_fd, 2, 0.0f);
       sc_gameEvent(player_data[i].client_fd, 7, 0.0f);
@@ -3436,6 +3442,7 @@ static void handleBedInteraction(PlayerData *player, short x, int16_t y, short z
     return;
   }
 
+  world_day_time = ((world_day_time / 24000) + 1) * 24000 + 1000;
   world_time = 1000;
   world_weather_clear = 1;
   world_rain_level = 0.0f;
@@ -3576,6 +3583,11 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
 
   uint16_t held_item = player->inventory_items[player->hotbar];
   uint16_t item = getMiningResult(held_item, block);
+  uint8_t drop_count = 1;
+  if (block == B_copper_ore) {
+    item = I_raw_copper;
+    drop_count = 2 + (fast_rand() % 4);
+  }
   uint8_t durability_cost = getBlockBreakDurabilityCost(held_item);
 
   if (is_bed_block(block)) {
@@ -3634,7 +3646,7 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
   #endif
 
   if (item) {
-    spawnItemEntity(x + 0.5, y + 0.5, z + 0.5, item, 1, player->dimension, 0, 0, 0);
+    spawnItemEntity(x + 0.5, y + 0.5, z + 0.5, item, drop_count, player->dimension, 0, 0, 0);
   }
 
   // Special handling for wheat drops based on maturity
@@ -5615,7 +5627,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
   }
 
   // Special handling for oriented block placement (chests, furnaces, barrels, ender chests, lecterns)
-  if (isOrientedBlock(block) || block == B_lectern) {
+  if (isOrientedBlock(block) || block == B_furnace || block == B_ender_chest || block == B_lectern) {
     if ((block == B_chest || block == B_ender_chest) && !config.allow_chests) return;
     // Determine placement position
     switch (face) {
@@ -5664,6 +5676,8 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
       uint16_t state;
       if (block == B_barrel) {
         state = barrel_encode_state(direction, 0);
+      } else if (block == B_furnace) {
+        state = furnace_encode_state(direction, 0);
       } else if (block == B_ender_chest) {
         state = ender_chest_encode_state(direction, 0);
       } else if (block == B_lectern) {
@@ -5702,6 +5716,8 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
           uint8_t horiz_dir = st & 3;
           uint16_t sid = get_horizontal_state_id(block, horiz_dir);
           sc_blockUpdateState(player_data[j].client_fd, x, y, z, sid);
+        } else if (block == B_furnace) {
+          sc_blockUpdateState(player_data[j].client_fd, x, y, z, get_furnace_state_id(direction, 0));
         } else {
           sendOrientedUpdate(player_data[j].client_fd, x, y, z, block, direction);
         }
@@ -5994,6 +6010,31 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
     return;
   }
 
+  // Special handling for slab placement. Clicking a block underside places a top slab;
+  // other clicks place a bottom slab. (Side-click cursor height is not tracked here.)
+  if (is_slab_block(block)) {
+    short sx = x, sz = z;
+    int16_t sy = y;
+    if (!getFaceOffsetBlock(x, y, z, face, &sx, &sy, &sz)) return;
+    if (!isReplaceableBlock(getBlockAt2(sx, sy, sz, player->dimension))) return;
+    if (makeBlockChange(sx, sy, sz, block, player->dimension)) return;
+
+    uint8_t slab_type = (face == 0) ? 2 : 0;
+    special_block_set_state(sx, sy, sz, player->dimension, block, slab_encode_state(slab_type));
+    uint16_t sid = get_slab_state_id(block, slab_type);
+    for (int j = 0; j < MAX_PLAYERS; j++) {
+      if (player_data[j].client_fd == -1) continue;
+      if (player_data[j].flags & 0x20) continue;
+      sc_blockUpdateState(player_data[j].client_fd, sx, sy, sz, sid);
+    }
+
+    *count -= 1;
+    if (*count == 0) *item = 0;
+    sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, player->hotbar), *count, *item);
+    broadcastPlayerEquipment(player);
+    return;
+  }
+
   switch (face) {
     case 0: y -= 1; break;
     case 1: y += 1; break;
@@ -6261,6 +6302,11 @@ void spawnItemEntity (double x, double y, double z, uint16_t item, uint8_t count
   }
 }
 
+static uint8_t itemEntityPositionBlocked(double x, double y, double z, uint8_t dimension) {
+  uint16_t block = getBlockAt2((int)floor(x), (int)floor(y), (int)floor(z), dimension);
+  return block != 0 && !isPassableBlock(block);
+}
+
 // Tick item entities - check for pickups and despawn
 void tickItemEntities (void) {
   for (int i = 0; i < MAX_ITEM_ENTITIES; i++) {
@@ -6286,9 +6332,27 @@ void tickItemEntities (void) {
       item_entity_data[i].vx *= 0.98;
       item_entity_data[i].vy *= 0.98;
       item_entity_data[i].vz *= 0.98;
-      item_entity_data[i].x += item_entity_data[i].vx;
-      item_entity_data[i].y += item_entity_data[i].vy;
-      item_entity_data[i].z += item_entity_data[i].vz;
+
+      double next_x = item_entity_data[i].x + item_entity_data[i].vx;
+      if (itemEntityPositionBlocked(next_x, item_entity_data[i].y, item_entity_data[i].z, item_entity_data[i].dimension)) {
+        item_entity_data[i].vx = 0;
+      } else {
+        item_entity_data[i].x = next_x;
+      }
+
+      double next_z = item_entity_data[i].z + item_entity_data[i].vz;
+      if (itemEntityPositionBlocked(item_entity_data[i].x, item_entity_data[i].y, next_z, item_entity_data[i].dimension)) {
+        item_entity_data[i].vz = 0;
+      } else {
+        item_entity_data[i].z = next_z;
+      }
+
+      double next_y = item_entity_data[i].y + item_entity_data[i].vy;
+      if (item_entity_data[i].vy > 0 && itemEntityPositionBlocked(item_entity_data[i].x, next_y, item_entity_data[i].z, item_entity_data[i].dimension)) {
+        item_entity_data[i].vy = 0;
+      } else {
+        item_entity_data[i].y = next_y;
+      }
       // Check if item hit the ground
       if (item_entity_data[i].vy < 0) {
         int bx = (int)floor(item_entity_data[i].x);
@@ -7412,6 +7476,28 @@ void interactEntity (int entity_id, int interactor_id) {
   }
 }
 
+static void dropPlayerInventoryOnDeath(PlayerData *player) {
+  if (config.keep_inventory) return;
+  for (int i = 0; i < 41; i++) {
+    if (player->inventory_items[i] == 0 || player->inventory_count[i] == 0) continue;
+    spawnItemEntity(player->x + 0.5, player->y + 0.5, player->z + 0.5,
+      player->inventory_items[i], player->inventory_count[i], player->dimension,
+      ((int)(fast_rand() & 255) - 128) / 512.0, 0.2,
+      ((int)(fast_rand() & 255) - 128) / 512.0);
+    player->inventory_items[i] = 0;
+    player->inventory_count[i] = 0;
+    player->inventory_damage[i] = 0;
+  }
+  for (int i = 0; i < 9; i++) {
+    player->craft_items[i] = 0;
+    player->craft_count[i] = 0;
+    player->craft_damage[i] = 0;
+  }
+  player->flagval_16 = 0;
+  player->flagval_8 = 0;
+  player->cursor_damage = 0;
+}
+
 void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t damage) {
 
   // Whether this attack was blocked by a shield
@@ -7580,6 +7666,7 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
     // Process health change on the server
     if (player->health <= effective_damage) {
 
+      dropPlayerInventoryOnDeath(player);
       player->health = 0;
       entity_died = true;
 
@@ -7888,7 +7975,9 @@ void handleServerTick (int64_t time_since_last_tick) {
 
   // Update world time
   if (config.do_daylight_cycle) {
-    world_time = (world_time + time_since_last_tick / 50000) % 24000;
+    uint64_t elapsed_ticks = (uint64_t)(time_since_last_tick / 50000);
+    world_day_time += elapsed_ticks;
+    world_time = (uint16_t)(world_day_time % 24000);
   }
   // Increment server tick counter
   server_ticks ++;
@@ -7955,7 +8044,7 @@ void handleServerTick (int64_t time_since_last_tick) {
 
       if (server_ticks % (uint32_t)TICKS_PER_SECOND != 0) continue;
       sc_keepAlive(player->client_fd);
-      sc_updateTime(player->client_fd, world_time);
+      sc_updateTime(player->client_fd, world_day_time);
       uint8_t pdim = player->dimension;
       uint16_t block = getBlockAt2(player->x, player->y, player->z, pdim);
       if (block >= B_lava && block < B_lava + 4) {
@@ -9550,7 +9639,7 @@ static void sendPlayerUpdatePackets(int64_t time_since_last_tick) {
     // Send once-per-second packets
     if (server_ticks % (uint32_t)TICKS_PER_SECOND == 0) {
       sc_keepAlive(player->client_fd);
-      sc_updateTime(player->client_fd, world_time);
+      sc_updateTime(player->client_fd, world_day_time);
       sc_setHealth(player->client_fd, player->health, player->hunger, player->saturation);
       // Sync air value to client for oxygen bar display
       // Only send the air metadata entry (index 1) to avoid re-sending pose/sneak

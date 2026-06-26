@@ -248,7 +248,7 @@ static void broadcastTimeUpdate(void) {
   for (int i = 0; i < MAX_PLAYERS; i++) {
     if (player_data[i].client_fd == -1) continue;
     if (player_data[i].flags & 0x20) continue;
-    sc_updateTime(player_data[i].client_fd, world_time);
+    sc_updateTime(player_data[i].client_fd, world_day_time);
   }
 }
 
@@ -1056,6 +1056,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
       block_changes_snapshot[i].block != B_torch &&
       block_changes_snapshot[i].block != B_wheat &&
       block_changes_snapshot[i].block != B_lantern &&
+      block_changes_snapshot[i].block != B_furnace &&
       !isOrientedBlock(block_changes_snapshot[i].block) &&
       !isStairBlock(block_changes_snapshot[i].block) &&
       !is_fence_block(block_changes_snapshot[i].block) &&
@@ -1142,6 +1143,23 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
       continue;
     }
 
+    if (block_changes_snapshot[i].block == B_furnace) {
+      // Furnace state
+      uint16_t state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].dimension);
+      uint8_t direction = state & 3;
+      uint8_t lit = (state >> 2) & 1;
+      sc_blockUpdateState(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, get_furnace_state_id(direction, lit));
+      continue;
+    }
+
+    if (is_slab_block(block_changes_snapshot[i].block)) {
+      // Slab state (bottom/top/double)
+      uint16_t state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].dimension);
+      uint8_t type = state & 3;
+      sc_blockUpdateState(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, get_slab_state_id(block_changes_snapshot[i].block, type));
+      continue;
+    }
+
     if (isOrientedBlock(block_changes_snapshot[i].block)) {
       // Read direction from the unified special block table
       uint16_t state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].dimension);
@@ -1154,6 +1172,8 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
         sendOrientedUpdate(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].block, direction);
         if (i + 14 >= block_changes_snapshot_count) continue;
         i += 14;
+      } else if (block_changes_snapshot[i].block == B_furnace) {
+        // Skips state entry (already handled above)
       } else {
         sendOrientedUpdate(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].block, direction);
         i += 1;
@@ -1775,8 +1795,10 @@ int cs_clickContainer (int client_fd) {
   memcpy(before_craft_items, player->craft_items, sizeof(before_craft_items));
   memcpy(before_craft_count, player->craft_count, sizeof(before_craft_count));
   memcpy(before_craft_damage, player->craft_damage, sizeof(before_craft_damage));
+uint16_t cursor_damage = player->cursor_damage;
   uint16_t before_cursor_item = player->flagval_16;
   uint8_t before_cursor_count = player->flagval_8;
+  uint16_t before_cursor_damage = player->cursor_damage;
 
   uint8_t output_click = false;
   uint8_t output_count = 0;
@@ -2034,12 +2056,60 @@ skip_normal_processing:
     memcpy(player->craft_damage, before_craft_damage, sizeof(before_craft_damage));
     player->flagval_16 = before_cursor_item;
     player->flagval_8 = before_cursor_count;
+    player->cursor_damage = before_cursor_damage;
     syncCraftingSlots(player, window_id);
     sc_setContainerSlot(client_fd, window_id, 0, output_count, output_item);
-    sc_setCursorItem(client_fd, before_cursor_item, before_cursor_count);
+    sc_setCursorItemWithDamage(client_fd, before_cursor_item, before_cursor_count, before_cursor_damage);
   } else {
+    // Transfer cursor damage to inventory if the cursor item moved into a slot
+    if (apply_changes && before_cursor_item != 0 && before_cursor_count > 0 && before_cursor_damage > 0 &&
+        (cursor_item != before_cursor_item || cursor_count != before_cursor_count)) {
+      for (uint8_t _i = 0; _i < 41; _i++) {
+        if ((before_inventory_items[_i] != before_cursor_item || before_inventory_count[_i] != before_cursor_count) &&
+            player->inventory_items[_i] == before_cursor_item &&
+            player->inventory_count[_i] == before_cursor_count &&
+            player->inventory_damage[_i] == 0) {
+          player->inventory_damage[_i] = before_cursor_damage;
+          break;
+        }
+      }
+      for (uint8_t _i = 0; _i < 9; _i++) {
+        if ((before_craft_items[_i] != before_cursor_item || before_craft_count[_i] != before_cursor_count) &&
+            player->craft_items[_i] == before_cursor_item &&
+            player->craft_count[_i] == before_cursor_count &&
+            player->craft_damage[_i] == 0) {
+          player->craft_damage[_i] = before_cursor_damage;
+          break;
+        }
+      }
+    }
+
     player->flagval_16 = cursor_item;
     player->flagval_8 = cursor_count;
+    if (cursor_item == before_cursor_item && cursor_count == before_cursor_count) {
+      player->cursor_damage = cursor_damage;
+    } else if (cursor_item != 0 && cursor_count > 0 && before_cursor_item == 0) {
+      // Item was picked up from inventory/craft to cursor - transfer damage
+      player->cursor_damage = 0;
+      for (uint8_t _i = 0; _i < 41; _i++) {
+        if (before_inventory_items[_i] == cursor_item && before_inventory_count[_i] == cursor_count &&
+            player->inventory_items[_i] == 0) {
+          player->cursor_damage = before_inventory_damage[_i];
+          break;
+        }
+      }
+      if (player->cursor_damage == 0) {
+        for (uint8_t _i = 0; _i < 9; _i++) {
+          if (before_craft_items[_i] == cursor_item && before_craft_count[_i] == cursor_count &&
+              player->craft_items[_i] == 0) {
+            player->cursor_damage = before_craft_damage[_i];
+            break;
+          }
+        }
+      }
+    } else {
+      player->cursor_damage = 0;
+    }
   }
 
   if (apply_changes && equipment_dirty) broadcastPlayerEquipment(player);
@@ -2050,21 +2120,13 @@ skip_normal_processing:
 
 // S->C Set Cursor Item
 int sc_setCursorItem (int client_fd, uint16_t item, uint8_t count) {
+  return sc_setCursorItemWithDamage(client_fd, item, count, 0);
+}
+
+int sc_setCursorItemWithDamage (int client_fd, uint16_t item, uint8_t count, uint16_t damage) {
 
   startPacket(client_fd, 0x59);
-
-  writeVarInt(client_fd, count);
-  if (count == 0) {
-    endPacket(client_fd);
-    return 0;
-  }
-
-  writeVarInt(client_fd, item);
-
-  // Skip components
-  writeByte(client_fd, 0);
-  writeByte(client_fd, 0);
-
+  writeItemSlotWithDamage(client_fd, count, item, damage);
   endPacket(client_fd);
 
   return 0;
@@ -2251,10 +2313,23 @@ int cs_closeContainer (int client_fd) {
 	  }
 	  #endif
 
-	  givePlayerItem(player, player->flagval_16, player->flagval_8);
+    givePlayerItem(player, player->flagval_16, player->flagval_8);
+    // Transfer cursor damage to the inventory slot that received the item
+    if (player->flagval_16 != 0 && player->flagval_8 > 0 && player->cursor_damage > 0) {
+      uint16_t _ci = player->flagval_16;
+      uint8_t _cc = player->flagval_8;
+      uint16_t _cd = player->cursor_damage;
+      for (int _s = 0; _s < 41; _s++) {
+        if (player->inventory_items[_s] == _ci && player->inventory_count[_s] == _cc && player->inventory_damage[_s] == 0) {
+          player->inventory_damage[_s] = _cd;
+          break;
+        }
+      }
+    }
   sc_setCursorItem(client_fd, 0, 0);
   player->flagval_16 = 0;
   player->flagval_8 = 0;
+  player->cursor_damage = 0;
 
   // Clean up merchant state when closing the merchant GUI
   if (window_id == 19) {
@@ -3209,6 +3284,7 @@ int cs_chat (int client_fd) {
       resp_len = snprintf(response, sizeof(response), "§aGame rule §fdoMobSpawning§a set to §f%s", new_val ? "true" : "false");
     } else if (!strcmp(rule_buf, "keepInventory")) {
       config.keep_inventory = new_val;
+      save_config("server.conf");
       resp_len = snprintf(response, sizeof(response), "§aGame rule §fkeepInventory§a set to §f%s", new_val ? "true" : "false");
     } else if (!strcmp(rule_buf, "doImmediateRespawn")) {
       config.do_immediate_respawn = new_val;

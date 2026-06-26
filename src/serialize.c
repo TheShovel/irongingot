@@ -190,6 +190,7 @@ static cJSON *serializePlayerData(void) {
     cJSON_AddNumberToObject(obj, "flags", pd->flags);
     cJSON_AddNumberToObject(obj, "flagval_16", pd->flagval_16);
     cJSON_AddNumberToObject(obj, "flagval_8", pd->flagval_8);
+    cJSON_AddNumberToObject(obj, "cursor_damage", pd->cursor_damage);
     cJSON_AddNumberToObject(obj, "xp_total", pd->xp_total);
     cJSON_AddNumberToObject(obj, "xp_level", pd->xp_level);
     cJSON_AddNumberToObject(obj, "xp_progress", pd->xp_progress);
@@ -326,6 +327,7 @@ static int deserializePlayerData(cJSON *arr) {
     READ_NUMBER(flags, "flags");
     READ_NUMBER(flagval_16, "flagval_16");
     READ_NUMBER(flagval_8, "flagval_8");
+    READ_NUMBER(cursor_damage, "cursor_damage");
     READ_NUMBER(xp_total, "xp_total");
     READ_NUMBER(xp_level, "xp_level");
     READ_NUMBER(xp_progress, "xp_progress");

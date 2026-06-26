@@ -48,6 +48,7 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
 int sc_keepAlive (int client_fd);
 int sc_setContainerSlot (int client_fd, int window_id, uint16_t slot, uint8_t count, uint16_t item);
 int sc_setCursorItem (int client_fd, uint16_t item, uint8_t count);
+int sc_setCursorItemWithDamage (int client_fd, uint16_t item, uint8_t count, uint16_t damage);
 int sc_setHeldItem (int client_fd, uint8_t slot);
 int sc_blockUpdate (int client_fd, int64_t x, int64_t y, int64_t z, uint16_t block);
 int sc_blockUpdateState (int client_fd, int64_t x, int64_t y, int64_t z, uint16_t state_id);
