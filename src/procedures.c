@@ -6335,9 +6335,15 @@ void spawnItemEntity (double x, double y, double z, uint16_t item, uint8_t count
     memcpy(uuid + 4, &idx, 4);
     memset(uuid + 8, 0, 8);
 
+    // Distance threshold for item entity visibility (~4 chunks; items are tiny)
+    double spawn_dist_sq = (double)(config.view_distance * 16) * (double)(config.view_distance * 16);
+    if (spawn_dist_sq < 4096.0) spawn_dist_sq = 4096.0; // minimum 64 blocks
     for (int j = 0; j < MAX_PLAYERS; j++) {
       if (player_data[j].client_fd == -1) continue;
       if (player_data[j].dimension != dimension) continue;
+      double dx = player_data[j].x - x;
+      double dz = player_data[j].z - z;
+      if (dx * dx + dz * dz > spawn_dist_sq) continue;
       sc_spawnEntity(player_data[j].client_fd, entity_id, uuid, 69, x, y, z, 0, 0, mvx, mvy, mvz);
       // Send item slot metadata (index 8 = item, type 7 = slot)
       startPacket(player_data[j].client_fd, 0x5C);
@@ -6362,6 +6368,11 @@ static uint8_t itemEntityPositionBlocked(double x, double y, double z, uint8_t d
 
 // Tick item entities - check for pickups and despawn
 void tickItemEntities (void) {
+  // Visibility range for item entities (~4 chunks minimum; items are small)
+  double item_view_dist = (double)(config.view_distance * 16);
+  double item_view_dist_sq = item_view_dist * item_view_dist;
+  if (item_view_dist_sq < 4096.0) item_view_dist_sq = 4096.0; // minimum 64 blocks
+
   for (int i = 0; i < MAX_ITEM_ENTITIES; i++) {
     if (!item_entity_data[i].active) continue;
 
@@ -6442,6 +6453,9 @@ void tickItemEntities (void) {
           if (player_data[j].client_fd == -1) continue;
           if (player_data[j].flags & 0x20) continue;
           if (player_data[j].dimension != item_entity_data[i].dimension) continue;
+          double dx = player_data[j].x - item_entity_data[i].x;
+          double dz = player_data[j].z - item_entity_data[i].z;
+          if (dx * dx + dz * dz > item_view_dist_sq) continue;
           sc_teleportEntity(player_data[j].client_fd, entity_id,
             item_entity_data[i].x, item_entity_data[i].y, item_entity_data[i].z, 0, 0);
         }
@@ -6454,6 +6468,9 @@ void tickItemEntities (void) {
       for (int j = 0; j < MAX_PLAYERS; j++) {
         if (player_data[j].client_fd == -1) continue;
         if (player_data[j].dimension != item_entity_data[i].dimension) continue;
+        double dx = player_data[j].x - item_entity_data[i].x;
+        double dz = player_data[j].z - item_entity_data[i].z;
+        if (dx * dx + dz * dz > item_view_dist_sq) continue;
         sc_removeEntity(player_data[j].client_fd, entity_id);
       }
       continue;
@@ -6476,6 +6493,9 @@ void tickItemEntities (void) {
           for (int k = 0; k < MAX_PLAYERS; k++) {
             if (player_data[k].client_fd == -1) continue;
             if (player_data[k].dimension != item_entity_data[i].dimension) continue;
+            double dkx = player_data[k].x - item_entity_data[i].x;
+            double dkz = player_data[k].z - item_entity_data[i].z;
+            if (dkx * dkx + dkz * dkz > item_view_dist_sq) continue;
             sc_pickupItem(player_data[k].client_fd, entity_id, player_data[j].client_fd, item_entity_data[i].count);
             sc_removeEntity(player_data[k].client_fd, entity_id);
           }

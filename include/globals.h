@@ -212,8 +212,10 @@
 
 // Whether to sync block changes to disk on an interval, instead of syncing
 // on each change. On systems with fast random disk access, this shouldn't
-// be necessary.
-// #define DISK_SYNC_BLOCKS_ON_INTERVAL
+// be necessary. Uncommented: block changes save only on the periodic
+// disk-sync interval (every ~15s), avoiding per-change world.json writes
+// that stall the tick loop for hundreds of milliseconds on large worlds.
+#define DISK_SYNC_BLOCKS_ON_INTERVAL
 
 // Time in microseconds to spend waiting for data transmission before
 // timing out. Default is 15s, which leaves 5s to prevent starving other

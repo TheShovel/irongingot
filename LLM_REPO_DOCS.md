@@ -117,6 +117,8 @@ Full chunk: 1.80 ms, 90 us/section  (6.6× faster)
 ## Game Tick (procedures.c:handleServerTick)
 Order: world time + parallel per-player state → weather → portal/bow → fluid queue → inventory sync + disk-save check → wheat growth → mob AI (move/anger/sounds/look-around; villagers >256 blocks skip AI) → projectiles → XP orbs + item entities → mob spawning.
 
+Item entity spawn/teleport/despawn/pickup broadcasts are distance-culled to `config.view_distance * 16` blocks (min 64) to avoid flooding send queues when many items exist in entity-dense areas.
+
 `world_day_time` (uint64_t, serialized in globals.c) tracks absolute tick count; `world_time` is `world_day_time % 24000`. `sc_updateTime` sends `world_day_time` so client day counter actually increments.
 
 Nether portal transfer clears old send queue, picks safe floor near scaled X/Z in Y72-118 (fallback preserved/floor≈80), builds 5×5 obsidian platform + air room, then teleports and locks movement briefly until chunks become collidable.
@@ -156,7 +158,7 @@ Single `uint16_t` bits per block type:
 Network: port, max_players, compression_threshold, network_timeout, mojang_api_timeout_ms
 Game: gamemode(0-3), difficulty(0-3), view_distance, world_seed, rng_seed, mob_* params
 Worldgen: chunk_size, terrain_base_height, cave_base_depth, biome_size
-Perf: chunk_cache_size, max_block_changes, infinite_block_changes, tick_interval (compat; tick loop uses `TIME_BETWEEN_TICKS`), disk_sync_interval
+Perf: chunk_cache_size, max_block_changes, infinite_block_changes, tick_interval (compat; tick loop uses `TIME_BETWEEN_TICKS`), disk_sync_interval. `DISK_SYNC_BLOCKS_ON_INTERVAL` enabled — block changes save only during periodic interval (~15s), not on every change.
 Features: sync_world_to_disk, do_fluid_flow, allow_chests, allow_doors, enable_flight, enable_commands, fetch_skins_from_mojang, safe_area_radius
 Debug: log_unknown_packets, log_length_discrepancy, log_chunk_generation
 

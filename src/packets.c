@@ -1662,7 +1662,9 @@ uint16_t cursor_damage = player->cursor_damage;
   if (output_click && mode == 0 && (button == 0 || button == 1) && before_cursor_item != 0 && before_cursor_count > 0) {
     uint8_t max_stack = getItemStackSize(output_item);
     if (max_stack == 0) max_stack = 64;
-    if (before_cursor_item != output_item || before_cursor_count >= max_stack || output_count > max_stack - before_cursor_count) {
+    // Right-click picks up only 1 item; space check must match actual amount.
+    uint8_t pickup = (button == 0) ? output_count : 1;
+    if (before_cursor_item != output_item || before_cursor_count >= max_stack || pickup > max_stack - before_cursor_count) {
       reject_output_click = true;
       apply_changes = false;
     }
@@ -1711,6 +1713,7 @@ uint16_t cursor_damage = player->cursor_damage;
   // Server-side click handling for mode=0 (standard click).
   // Computes the correct slot/cursor state from click parameters alone,
   // ignoring the client's slot changes which may be stale from rapid clicks.
+  uint8_t craft = false;
   if (mode == 0 && clicked_slot != -999 && apply_changes && window_id == 0) {
     uint8_t s_slot = clientSlotToServerSlot(0, (uint8_t)clicked_slot);
     uint16_t *slot_item, *slot_damage;
@@ -1825,14 +1828,17 @@ mode0_swap:
     } else if (s_slot >= 41 && s_slot <= 49) {
       sc_setContainerSlot(client_fd, window_id, (uint16_t)clicked_slot,
         *slot_count, *slot_item);
+      craft = true;
     }
-    apply_changes = false;
+    // Only skip client-slot-change processing when we actually handled a slot.
+    // s_slot == 255 means the output slot was clicked — leave apply_changes
+    // alone so ingredient consumption and output recalculation still happen.
+    if (s_slot != 255) apply_changes = false;
   }
 
   uint8_t slot, count, present;
   uint16_t item;
   int tmp;
-  uint8_t craft = false;
 
   uint16_t *p_item;
   uint8_t *p_count;
