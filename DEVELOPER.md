@@ -70,7 +70,7 @@ irongingot/
 │   ├── async.h            # Empty compatibility header
 │   ├── thread_pool.h      # Generic thread pool interface
 │   ├── thread_utils.h     # pthread stack size helpers
-│   ├── terminal_ui.h      # Terminal status panel
+│   ├── terminal_ui.h      # Plain stdout logging stubs (inline, no .c file)
 │   └── perlin.h           # Java-compatible Perlin noise
 ├── src/                   # Source files
 │   ├── main.c             # Entry, nonblocking socket loop, packet dispatch, server tick, signals
@@ -89,7 +89,6 @@ irongingot/
 │   ├── mojang.c           # Skin fetch via Mojang API (optional)
 │   ├── thread_utils.c     # pthread create with controlled stack sizes
 │   ├── async.c            # Generic thread pool implementation
-│   ├── terminal_ui.c      # Terminal status panel + log
 │   ├── globals.c          # Global state initialization
 │   ├── registries.c       # GENERATED - block palette, registry blobs
 │   ├── generated_village_templates.c  # GENERATED - village NBT
