@@ -1106,15 +1106,25 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
       uint8_t hinge = door_get_hinge(state);
       uint8_t direction = door_get_direction(state);
 
-      // Send door with proper state (both halves)
+      // Send door with proper state (both halves). The persisted upper-half
+      // block_change is the source of truth here; the upper special_blocks entry
+      // may be absent after load/cleanup because both halves share one state.
       sendDoorUpdate(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].block, 0, open, direction, hinge);
-      // Check if upper half exists in special block table
-      uint16_t upper_state = special_block_get_state(block_changes_snapshot[i].x, block_changes_snapshot[i].y + 1, block_changes_snapshot[i].z, block_changes_snapshot[i].dimension);
-      if (upper_state != 0) {
-        // Upper half exists, send it
+      uint8_t upper_exists = (
+        i + 1 < block_changes_snapshot_count &&
+        block_changes_snapshot[i + 1].block == block_changes_snapshot[i].block &&
+        block_changes_snapshot[i + 1].x == block_changes_snapshot[i].x &&
+        block_changes_snapshot[i + 1].y == block_changes_snapshot[i].y + 1 &&
+        block_changes_snapshot[i + 1].z == block_changes_snapshot[i].z &&
+        block_changes_snapshot[i + 1].dimension == block_changes_snapshot[i].dimension
+      );
+      if (!upper_exists) {
+        upper_exists = special_block_has_entry(block_changes_snapshot[i].x, block_changes_snapshot[i].y + 1, block_changes_snapshot[i].z, block_changes_snapshot[i].dimension);
+      }
+      if (upper_exists) {
         sendDoorUpdate(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y + 1, block_changes_snapshot[i].z, block_changes_snapshot[i].block, 1, open, direction, hinge);
       }
-      // Skip the next two entries (state data for this door half)
+      // Skip the next two entries (upper half + state data for this door)
       i += 2;
       continue;
     }
