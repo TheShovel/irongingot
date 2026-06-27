@@ -4938,6 +4938,39 @@ static int findArrowHitEntity(ProjectileData *p, double x, double y, double z) {
   return 0;
 }
 
+static void ensureGeneratedSpecialBlockState(short x, int16_t y, short z, uint8_t dimension, uint16_t block) {
+  if (y < 0 || y > 255) return;
+  uint8_t uy = (uint8_t)y;
+  if (special_block_has_entry(x, uy, z, dimension)) return;
+
+  uint16_t raw = getRawBlockAt2(x, y, z, dimension);
+  if (!(raw & 0x8000) || (raw & 0x1FF) != block) return;
+
+  uint16_t state = 0;
+  uint8_t has_state = 1;
+  if (block == B_chest) {
+    state = oriented_encode_state((raw >> 9) & 3);
+  } else if (block == B_barrel) {
+    state = barrel_encode_state((raw >> 9) & 7, 0);
+  } else if (is_door_block(block)) {
+    state = door_encode_state((raw >> 13) & 1, (raw >> 12) & 1, (raw >> 9) & 3);
+  } else if (is_trapdoor_block(block)) {
+    state = trapdoor_encode_state((raw >> 12) & 1, (raw >> 11) & 1, (raw >> 9) & 3);
+  } else if (is_bed_block(block)) {
+    state = bed_encode_state((raw >> 11) & 1, (raw >> 12) & 1, (raw >> 9) & 3);
+  } else if (is_stair_block(block)) {
+    state = stair_shape_encode_state((raw >> 11) & 1, (raw >> 9) & 3, (raw >> 12) & 7);
+  } else if (is_fence_block(block)) {
+    state = fence_encode_state((raw >> 9) & 1, (raw >> 10) & 1, (raw >> 11) & 1, (raw >> 12) & 1);
+  } else if (is_horizontal_facing_block(block)) {
+    state = horizontal_facing_encode_state((raw >> 9) & 3);
+  } else {
+    has_state = 0;
+  }
+
+  if (has_state) special_block_set_state(x, uy, z, dimension, block, state);
+}
+
 void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t face, uint8_t hand) {
 
   // Check spawn protection for block interactions
@@ -4948,6 +4981,12 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
 
   // Get targeted block (if coordinates are provided)
   uint16_t target = face == 255 ? 0 : getBlockAt2(x, y, z, player->dimension);
+  if (face != 255 && (
+      target == B_chest || target == B_barrel || is_door_block(target) ||
+      is_trapdoor_block(target) || is_bed_block(target) || is_stair_block(target) ||
+      is_fence_block(target) || is_horizontal_facing_block(target))) {
+    ensureGeneratedSpecialBlockState(x, y, z, player->dimension, target);
+  }
   // Get held item properties
   uint8_t *count;
   uint16_t *item;
@@ -5133,7 +5172,9 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
           block_changes[base].x = x; block_changes[base].y = y; block_changes[base].z = z;
           block_changes[base].block = B_barrel; block_changes[base].dimension = player->dimension;
           memset(&block_changes[base + 1], 0, 14 * sizeof(BlockChange));
-          special_block_set_state(x, y, z, player->dimension, B_barrel, barrel_encode_state(0, 0));
+          if (!special_block_has_entry(x, (uint8_t)y, z, player->dimension)) {
+            special_block_set_state(x, y, z, player->dimension, B_barrel, barrel_encode_state(0, 0));
+          }
           if (i >= block_changes_count) block_changes_count = i + 1;
           barrel_idx = base;
           break;
@@ -5191,6 +5232,7 @@ void handlePlayerUseItem (PlayerData *player, short x, short y, short z, uint8_t
         door_y = y - 1;
       }
 
+      ensureGeneratedSpecialBlockState(door_x, door_y, door_z, player->dimension, getBlockAt2(door_x, door_y, door_z, player->dimension));
       uint16_t state = special_block_get_state(door_x, door_y, door_z, player->dimension);
       uint8_t open = door_get_open(state);
       uint8_t hinge = door_get_hinge(state);

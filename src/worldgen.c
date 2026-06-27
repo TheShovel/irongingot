@@ -3753,7 +3753,7 @@ uint16_t buildEndChunkSection(int cx, int cy, int cz) {
   return biome;
 }
 
-uint16_t getBlockAt2 (int x, int y, int z, uint8_t dimension) {
+uint16_t getRawBlockAt2 (int x, int y, int z, uint8_t dimension) {
   uint16_t block_change = getBlockChange(x, y, z, dimension);
   if (block_change != 0xFF) return block_change;
   if (dimension == DIMENSION_NETHER) {
@@ -3770,7 +3770,11 @@ uint16_t getBlockAt2 (int x, int y, int z, uint8_t dimension) {
     .hash = getChunkHash(anchor_x, anchor_z),
     .biome = getChunkBiome(anchor_x, anchor_z)
   };
-  uint16_t block = getTerrainAt(x, y, z, anchor);
+  return getTerrainAt(x, y, z, anchor);
+}
+
+uint16_t getBlockAt2 (int x, int y, int z, uint8_t dimension) {
+  uint16_t block = getRawBlockAt2(x, y, z, dimension);
   if (block & 0x8000) return block & 0x1FF;
   return block;
 }

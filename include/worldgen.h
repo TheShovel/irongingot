@@ -39,6 +39,7 @@ uint8_t getHeightAt (int x, int z);
 uint16_t getTerrainAt (int x, int y, int z, ChunkAnchor anchor);
 uint16_t getBlockAt (int x, int y, int z);
 uint16_t getBlockAt2 (int x, int y, int z, uint8_t dimension);
+uint16_t getRawBlockAt2 (int x, int y, int z, uint8_t dimension);
 uint16_t getNetherBlockAt (int x, int y, int z);
 uint16_t getEndBlockAt (int x, int y, int z);
 const char* getBiomeName(uint8_t biome_id);

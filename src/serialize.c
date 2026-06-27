@@ -411,6 +411,43 @@ static int deserializePlayerData(cJSON *arr) {
   return 1;
 }
 
+static uint8_t specialBlockHasPersistedBlockChange(short x, uint8_t y, short z, uint8_t dimension) {
+  for (int i = 0; i < block_changes_count; i++) {
+    uint16_t b = block_changes[i].block;
+    if (b == 0xFF) continue;
+
+    uint8_t matches = (
+      block_changes[i].x == x &&
+      block_changes[i].y == y &&
+      block_changes[i].z == z &&
+      block_changes[i].dimension == dimension
+    );
+
+    if (b == B_chest || b == B_barrel) {
+      if (matches) return 1;
+      i += 14;
+      continue;
+    }
+
+    if (is_door_block(b)) {
+      if (matches) return 1;
+      i += 2;
+      continue;
+    }
+
+    if (is_stair_block(b) || b == B_furnace || b == B_ender_chest ||
+        is_fence_block(b) || is_horizontal_facing_block(b) || b == B_lantern) {
+      if (matches) return 1;
+      i += 1;
+      continue;
+    }
+
+    if (matches) return 1;
+  }
+
+  return 0;
+}
+
 static cJSON *serializeSpecialBlocks(void) {
   cJSON *arr = cJSON_CreateArray();
   if (!arr) return NULL;
@@ -418,6 +455,12 @@ static cJSON *serializeSpecialBlocks(void) {
   int sb_cap = special_blocks_capacity;
   for (int i = 0; i < sb_cap; i++) {
     if (special_blocks[i].block == SPECIAL_BLOCK_EMPTY) continue;
+    if (!specialBlockHasPersistedBlockChange(
+      special_blocks[i].x,
+      special_blocks[i].y,
+      special_blocks[i].z,
+      special_blocks[i].dimension
+    )) continue;
 
     cJSON *obj = cJSON_CreateObject();
     if (!obj) { cJSON_Delete(arr); return NULL; }
@@ -455,11 +498,18 @@ static int deserializeSpecialBlocks(cJSON *arr) {
     if (!cJSON_IsNumber(x) || !cJSON_IsNumber(y) || !cJSON_IsNumber(z) ||
         !cJSON_IsNumber(state) || !cJSON_IsNumber(block) || !cJSON_IsNumber(dim)) continue;
 
+    short sx = (short)cJSON_GetNumberValue(x);
+    uint8_t sy = (uint8_t)cJSON_GetNumberValue(y);
+    short sz = (short)cJSON_GetNumberValue(z);
+    uint8_t sdim = (uint8_t)cJSON_GetNumberValue(dim);
+
+    if (!specialBlockHasPersistedBlockChange(sx, sy, sz, sdim)) continue;
+
     special_block_set_state(
-      (short)cJSON_GetNumberValue(x),
-      (uint8_t)cJSON_GetNumberValue(y),
-      (short)cJSON_GetNumberValue(z),
-      (uint8_t)cJSON_GetNumberValue(dim),
+      sx,
+      sy,
+      sz,
+      sdim,
       (uint16_t)cJSON_GetNumberValue(block),
       (uint16_t)cJSON_GetNumberValue(state)
     );

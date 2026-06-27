@@ -300,7 +300,7 @@ The chunk gen workers opportunistically pre-generate chunks (when the request qu
 
 ## 7. Game Tick
 
-`handleServerTick()` in `procedures.c` runs at 20 TPS by default (`config.tick_interval=50000μs`). The provided `server.conf` overrides this to 10 TPS (`tick_interval=100000μs`).
+`handleServerTick()` in `procedures.c` runs at 20 TPS (`TIME_BETWEEN_TICKS=50000μs`; `tick_interval` remains a config field for compatibility).
 
 ### Tick Sequence
 

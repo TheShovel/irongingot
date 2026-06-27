@@ -12,7 +12,6 @@
 #include "thread_utils.h"
 #include "terminal_ui.h"
 #include "registries.h"
-#include "special_block.h"
 
 // Simple chunk cache - stores generated chunk section data
 // Size is determined by config.chunk_cache_size
@@ -249,23 +248,6 @@ void generate_chunk_data(int x, int z, uint8_t dimension) {
       }
     }
 
-    // Register generated wheat (B_wheat_1 through B_wheat_6) in the special
-    // blocks table so the growth tick handler will find and grow them.
-    // Fully-grown wheat (B_wheat_7) and player-planted wheat (B_wheat) are
-    // already handled elsewhere.
-    for (int j = 0; j < 4096; j++) {
-      uint16_t raw = chunk_section[j];
-      if (raw >= B_wheat && raw < B_wheat_7) {
-        // Convert section index to world coordinates (bit-reversed addressing)
-        int _addr = (j & ~7) | (7 - (j & 7));
-        int _wx = world_x + (_addr & 15);
-        int _wz = world_z + ((_addr >> 4) & 15);
-        int _wy = y + (_addr >> 8);
-        if (!special_block_has_entry(_wx, _wy, _wz, dimension)) {
-          special_block_set_state(_wx, _wy, _wz, dimension, B_wheat, (uint16_t)(raw - B_wheat));
-        }
-      }
-    }
   }
 
   pthread_mutex_lock(&cache_mutex);
@@ -338,23 +320,6 @@ int get_cached_chunk_copy(int x, int z, uint8_t dimension, uint16_t out_sections
   return 0;
 }
 
-// Scan a single chunk section for unregistered wheat and register it.
-// Called during chunk copy to pick up any generated wheat that wasn't
-// registered during initial chunk generation.
-static void scan_chunk_for_wheat(int world_x, int section_y, int world_z, uint16_t* section, uint8_t dimension) {
-  for (int j = 0; j < 4096; j++) {
-    uint16_t raw = section[j];
-    if (raw >= B_wheat && raw < B_wheat_7) {
-      int _addr = (j & ~7) | (7 - (j & 7));
-      int _wx = world_x + (_addr & 15);
-      int _wz = world_z + ((_addr >> 4) & 15);
-      int _wy = section_y + (_addr >> 8);
-      if (!special_block_has_entry(_wx, _wy, _wz, dimension)) {
-        special_block_set_state(_wx, _wy, _wz, dimension, B_wheat, (uint16_t)(raw - B_wheat));
-      }
-    }
-  }
-}
 
 // Invalidate cached chunk (called when block changes are made)
 void invalidate_cached_chunk(int x, int z, uint8_t dimension) {

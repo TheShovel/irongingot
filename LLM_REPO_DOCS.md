@@ -156,7 +156,7 @@ Single `uint16_t` bits per block type:
 Network: port, max_players, compression_threshold, network_timeout, mojang_api_timeout_ms
 Game: gamemode(0-3), difficulty(0-3), view_distance, world_seed, rng_seed, mob_* params
 Worldgen: chunk_size, terrain_base_height, cave_base_depth, biome_size
-Perf: chunk_cache_size, max_block_changes, infinite_block_changes, tick_interval, disk_sync_interval
+Perf: chunk_cache_size, max_block_changes, infinite_block_changes, tick_interval (compat; tick loop uses `TIME_BETWEEN_TICKS`), disk_sync_interval
 Features: sync_world_to_disk, do_fluid_flow, allow_chests, allow_doors, enable_flight, enable_commands, fetch_skins_from_mojang, safe_area_radius
 Debug: log_unknown_packets, log_length_discrepancy, log_chunk_generation
 
@@ -164,7 +164,7 @@ Note: `/gamerule keepInventory` calls `save_config("server.conf")` so the change
 
 ## world.json format
 
-`format_version`, `block_changes[]` (player edits), `players[]` (full state per player), `special_blocks[]` (interactive block states), `mobs[]` (persistent mobs). Auto-saves on `disk_sync_interval`.
+`format_version`, `block_changes[]` (player edits), `players[]` (full state), `special_blocks[]` (only states backed by `block_changes`; generated chunk states are not persisted), `mobs[]`. Auto-saves on `disk_sync_interval`.
 
 ## Build
 
