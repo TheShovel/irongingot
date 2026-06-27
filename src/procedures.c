@@ -2420,7 +2420,7 @@ static uint8_t isShovelItem(uint16_t item) {
 }
 
 static uint8_t isShearsFastBlock(uint16_t block) {
-  return isLeafBlock(block) || (block >= B_white_wool && block <= B_blue_wool) || block == B_cobweb;
+  return isLeafBlock(block) || block == B_white_wool || block == B_orange_wool || block == B_magenta_wool || block == B_cobweb;
 }
 
 static uint8_t isIronTierPickaxeDropBlock(uint16_t block) {

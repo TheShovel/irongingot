@@ -4782,7 +4782,7 @@ int sc_declareRecipes(int client_fd) {
   total += ARMOR_MATERIALS; total += ARMOR_MATERIALS; total += 1;
   total += BED_COLORS; total += DOOR_TYPES; total += STAIR_TYPES;
   total += FENCE_TYPES; total += TRAPDOOR_TYPES; total += FENCE_GATE_TYPES;
-  total += 5; total += 1; total += 1; total += 1; total += 1;
+  total += 5 + 4; total += 1; total += 1; total += 1; total += 1;
   total += 1; total += 1; total += 1; total += 1; total += 1;
   total += BLOCK_CRAFT_ENTRIES + 1; total += 1;
   total += SMELTING_ENTRIES + SMELTING_EXTRA;
@@ -4960,12 +4960,16 @@ int sc_declareRecipes(int client_fd) {
     recipeId(idx++, rid); items[0] = g_planks[i]; items[1] = I_stick; items[2] = g_fence_gates[i];
     writeDeclareEntry(client_fd, rid, items, 3); }
 
-  // 30-34. Glass, bars, wall, stairs
+  // 30-38. Glass, bars, wall, stairs
   DECLARE_1x1(I_glass, I_glass_pane);
   DECLARE_1x1(I_iron_ingot, I_iron_bars);
   DECLARE_1x1(I_cobblestone, I_cobblestone_wall);
   DECLARE_1x1(I_stone_bricks, I_stone_brick_stairs);
   DECLARE_1x1(I_cobblestone, I_cobblestone_stairs);
+  DECLARE_1x1(I_stone, I_stone_stairs);
+  DECLARE_1x1(I_brick, I_brick_stairs);
+  DECLARE_1x1(I_nether_brick, I_nether_brick_stairs);
+  DECLARE_1x1(I_sandstone, I_sandstone_stairs);
 
   // 35. Ladder
   { recipeId(idx++, rid); items[0] = I_stick; items[1] = I_ladder;
@@ -5048,7 +5052,7 @@ int sc_unlockRecipes(int client_fd) {
   total += ARMOR_MATERIALS; total += ARMOR_MATERIALS; total += 1;
   total += BED_COLORS; total += DOOR_TYPES; total += STAIR_TYPES;
   total += FENCE_TYPES; total += TRAPDOOR_TYPES; total += FENCE_GATE_TYPES;
-  total += 5; total += 1; total += 1; total += 1; total += 1;
+  total += 5 + 4; total += 1; total += 1; total += 1; total += 1;
   total += 1; total += 1; total += 1; total += 1; total += 1;
   total += BLOCK_CRAFT_ENTRIES + 1; total += 1;
   total += SMELTING_ENTRIES + SMELTING_EXTRA;
@@ -5302,6 +5306,26 @@ int sc_unlockRecipes(int client_fd) {
   grid[3] = I_cobblestone; grid[4] = I_cobblestone; grid[5] = 0;
   grid[6] = I_cobblestone; grid[7] = I_cobblestone; grid[8] = I_cobblestone;
   ADD_SHAPED(3, 3, grid, I_cobblestone_stairs, 0);
+  // Stone stairs
+  grid[0] = I_stone; grid[1] = 0; grid[2] = 0;
+  grid[3] = I_stone; grid[4] = I_stone; grid[5] = 0;
+  grid[6] = I_stone; grid[7] = I_stone; grid[8] = I_stone;
+  ADD_SHAPED(3, 3, grid, I_stone_stairs, 0);
+  // Brick stairs
+  grid[0] = I_brick; grid[1] = 0; grid[2] = 0;
+  grid[3] = I_brick; grid[4] = I_brick; grid[5] = 0;
+  grid[6] = I_brick; grid[7] = I_brick; grid[8] = I_brick;
+  ADD_SHAPED(3, 3, grid, I_brick_stairs, 0);
+  // Nether brick stairs
+  grid[0] = I_nether_brick; grid[1] = 0; grid[2] = 0;
+  grid[3] = I_nether_brick; grid[4] = I_nether_brick; grid[5] = 0;
+  grid[6] = I_nether_brick; grid[7] = I_nether_brick; grid[8] = I_nether_brick;
+  ADD_SHAPED(3, 3, grid, I_nether_brick_stairs, 0);
+  // Sandstone stairs
+  grid[0] = I_sandstone; grid[1] = 0; grid[2] = 0;
+  grid[3] = I_sandstone; grid[4] = I_sandstone; grid[5] = 0;
+  grid[6] = I_sandstone; grid[7] = I_sandstone; grid[8] = I_sandstone;
+  ADD_SHAPED(3, 3, grid, I_sandstone_stairs, 0);
 
   // 35. Ladder (3×3)
   grid[0] = I_stick; grid[1] = 0; grid[2] = I_stick;
@@ -5653,6 +5677,18 @@ int cs_craftRecipeRequest(int client_fd) {
   // 34. Cobblestone stairs
   if (rid == 0) {
     ing[0]=ing[3]=ing[4]=ing[6]=ing[7]=ing[8]=I_cobblestone; w=3; h=3; goto found; } rid--;
+  // 35. Stone stairs
+  if (rid == 0) {
+    ing[0]=ing[3]=ing[4]=ing[6]=ing[7]=ing[8]=I_stone; w=3; h=3; goto found; } rid--;
+  // 36. Brick stairs
+  if (rid == 0) {
+    ing[0]=ing[3]=ing[4]=ing[6]=ing[7]=ing[8]=I_brick; w=3; h=3; goto found; } rid--;
+  // 37. Nether brick stairs
+  if (rid == 0) {
+    ing[0]=ing[3]=ing[4]=ing[6]=ing[7]=ing[8]=I_nether_brick; w=3; h=3; goto found; } rid--;
+  // 38. Sandstone stairs
+  if (rid == 0) {
+    ing[0]=ing[3]=ing[4]=ing[6]=ing[7]=ing[8]=I_sandstone; w=3; h=3; goto found; } rid--;
 
   // 35. Ladder
   if (rid == 0) {

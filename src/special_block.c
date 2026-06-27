@@ -302,7 +302,12 @@ uint8_t is_stair_block(uint16_t block) {
         block == B_pale_oak_stairs ||
         block == B_mangrove_stairs ||
         block == B_cobblestone_stairs ||
-        block == B_smooth_sandstone_stairs
+        block == B_smooth_sandstone_stairs ||
+        block == B_stone_stairs ||
+        block == B_stone_brick_stairs ||
+        block == B_brick_stairs ||
+        block == B_nether_brick_stairs ||
+        block == B_sandstone_stairs
     );
 }
 
@@ -319,7 +324,11 @@ uint8_t is_slab_block(uint16_t block) {
         block == B_mangrove_slab ||
         block == B_cobblestone_slab ||
         block == B_smooth_sandstone_slab ||
-        block == B_sandstone_slab
+        block == B_sandstone_slab ||
+        block == B_stone_slab ||
+        block == B_stone_brick_slab ||
+        block == B_brick_slab ||
+        block == B_nether_brick_slab
     );
 }
 

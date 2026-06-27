@@ -164,6 +164,16 @@ const blockWhitelist = [
   // Cobblestone
   "cobblestone_slab",
   "cobblestone_stairs",
+  // Stone (all stone variants)
+  "stone_slab",
+  "stone_stairs",
+  "stone_brick_slab",
+  "stone_brick_stairs",
+  "brick_slab",
+  "brick_stairs",
+  "nether_brick_slab",
+  "nether_brick_stairs",
+  "sandstone_stairs",
   // Essential blocks referenced in code
   "torch",
   "dandelion",

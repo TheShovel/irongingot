@@ -985,26 +985,38 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
         *count = 6;
         return;
       }
-      // Cobblestone stairs (6 cobblestone in stair pattern)
+      // Stone stairs (generalized: cobblestone, stone, stone_brick, brick, nether_brick, sandstone)
       // Pattern 1: X.. / XX. / XXX (slots 0,3,4,6,7,8)
-      if (first_item == I_cobblestone && first_col == 0 && first_row == 0 &&
+      uint16_t stairs_item = 0;
+      if (first_col == 0 && first_row == 0 &&
           player->craft_items[3] == first_item &&
           player->craft_items[4] == first_item &&
           player->craft_items[6] == first_item &&
           player->craft_items[7] == first_item &&
           player->craft_items[8] == first_item) {
-        *item = I_cobblestone_stairs;
-        *count = 4;
-        return;
+        if (first_item == I_cobblestone) stairs_item = I_cobblestone_stairs;
+        else if (first_item == I_stone) stairs_item = I_stone_stairs;
+        else if (first_item == I_stone_bricks) stairs_item = I_stone_brick_stairs;
+        else if (first_item == I_brick) stairs_item = I_brick_stairs;
+        else if (first_item == I_nether_brick) stairs_item = I_nether_brick_stairs;
+        else if (first_item == I_sandstone) stairs_item = I_sandstone_stairs;
       }
       // Pattern 2: ..X / .XX / XXX (slots 2,4,5,6,7,8)
-      if (first_item == I_cobblestone && first_col == 2 && first_row == 0 &&
+      if (!stairs_item && first_col == 2 && first_row == 0 &&
           player->craft_items[4] == first_item &&
           player->craft_items[5] == first_item &&
           player->craft_items[6] == first_item &&
           player->craft_items[7] == first_item &&
           player->craft_items[8] == first_item) {
-        *item = I_cobblestone_stairs;
+        if (first_item == I_cobblestone) stairs_item = I_cobblestone_stairs;
+        else if (first_item == I_stone) stairs_item = I_stone_stairs;
+        else if (first_item == I_stone_bricks) stairs_item = I_stone_brick_stairs;
+        else if (first_item == I_brick) stairs_item = I_brick_stairs;
+        else if (first_item == I_nether_brick) stairs_item = I_nether_brick_stairs;
+        else if (first_item == I_sandstone) stairs_item = I_sandstone_stairs;
+      }
+      if (stairs_item) {
+        *item = stairs_item;
         *count = 4;
         return;
       }
