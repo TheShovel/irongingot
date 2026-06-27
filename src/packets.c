@@ -5740,9 +5740,12 @@ found:
     }
   }
 
-  // Clear the visible crafting grid before placing the requested recipe.
+  // Return any existing grid items to the player's inventory before clearing.
   for (int i = 0; i < 9; i++) {
     if (window_id == 12 || i == 0 || i == 1 || i == 3 || i == 4) {
+      if (player->craft_items[i] != 0 && player->craft_count[i] > 0) {
+        givePlayerItem(player, player->craft_items[i], player->craft_count[i], 0, 0);
+      }
       player->craft_items[i] = 0;
       player->craft_count[i] = 0;
     }

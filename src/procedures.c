@@ -7807,6 +7807,24 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
 
     } else player->health -= effective_damage;
 
+    // Damage armor (1 durability per piece per hit)
+    if (effective_damage > 0 && damage_type != D_fall && damage_type != D_drown &&
+        damage_type != D_starve && damage_type != D_cactus && damage_type != D_out_of_world) {
+      for (int slot = 36; slot <= 39; slot++) {
+        uint16_t item = player->inventory_items[slot];
+        uint16_t max_damage = getItemMaxDamage(item);
+        if (max_damage == 0 || player->inventory_count[slot] == 0) continue;
+        uint32_t new_damage = (uint32_t)player->inventory_damage[slot] + 1;
+        if (new_damage >= max_damage) {
+          player->inventory_items[slot] = 0;
+          player->inventory_count[slot] = 0;
+          player->inventory_damage[slot] = 0;
+        } else {
+          player->inventory_damage[slot] = (uint16_t)new_damage;
+        }
+      }
+    }
+
     // Update health on the client
     sc_setHealth(player->client_fd, player->health, player->hunger, player->saturation);
 
@@ -8796,7 +8814,7 @@ void handleServerTick (int64_t time_since_last_tick) {
 
       double move_speed = move_amount;
       double vision_range = 16.0;
-      double attack_range = 3.0;
+      double attack_range = 2.0;  // vanilla zombie reach (~1.5 blocks); 3.0 was far too generous
 
       // Zombies move 2x faster
       if (mob_data[i].type == 145) move_speed = move_amount * 2.0;
