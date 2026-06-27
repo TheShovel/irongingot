@@ -1690,18 +1690,18 @@ uint16_t cursor_damage = player->cursor_damage;
     if (player->flagval_16 != 0 && player->flagval_8 > 0) {
       double yaw_rad = player->yaw * M_PI / 127.0;
       double pitch_rad = player->pitch * M_PI / 254.0;
-      double speed = 0.4;
+      double speed = 0.5;
       if (button == 0) {
         spawnItemEntity(player->x + 0.5, player->y + 0.5, player->z + 0.5, player->flagval_16, player->flagval_8, player->dimension,
           -sin(yaw_rad) * cos(pitch_rad) * speed,
-          -sin(pitch_rad) * speed + 0.3,
+          -sin(pitch_rad) * speed + 0.2,
           cos(yaw_rad) * cos(pitch_rad) * speed, player->cursor_damage, player->cursor_uid);
         player->flagval_16 = 0;
         player->flagval_8 = 0;
       } else {
         spawnItemEntity(player->x + 0.5, player->y + 0.5, player->z + 0.5, player->flagval_16, 1, player->dimension,
           -sin(yaw_rad) * cos(pitch_rad) * speed,
-          -sin(pitch_rad) * speed + 0.3,
+          -sin(pitch_rad) * speed + 0.2,
           cos(yaw_rad) * cos(pitch_rad) * speed, player->cursor_damage, player->cursor_uid);
         player->flagval_8 -= 1;
         if (player->flagval_8 == 0) player->flagval_16 = 0;
@@ -1995,10 +1995,10 @@ mode0_swap:
   if (drop_slot != 255 && drop_item != 0 && drop_count > 0) {
     double yaw_rad = player->yaw * M_PI / 127.0;
     double pitch_rad = player->pitch * M_PI / 254.0;
-    double speed = 0.4;
+    double speed = 0.5;
     spawnItemEntity(player->x + 0.5, player->y + 0.5, player->z + 0.5, drop_item, drop_count, player->dimension,
       -sin(yaw_rad) * cos(pitch_rad) * speed,
-      -sin(pitch_rad) * speed + 0.3,
+      -sin(pitch_rad) * speed + 0.2,
       cos(yaw_rad) * cos(pitch_rad) * speed, drop_damage, 0);
   }
 

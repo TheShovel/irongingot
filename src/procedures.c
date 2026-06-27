@@ -3498,12 +3498,12 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
       if (player->inventory_count[slot] == 0) player->inventory_items[slot] = 0;
       double yaw_rad = player->yaw * M_PI / 127.0;
       double pitch_rad = player->pitch * M_PI / 254.0;
-      double speed = 0.4;
+      double speed = 0.5;
       sc_setContainerSlot(player->client_fd, 0, serverSlotToClientSlot(0, slot),
         player->inventory_count[slot], player->inventory_items[slot]);
       spawnItemEntity(player->x + 0.5, player->y + 0.5, player->z + 0.5, item, count, player->dimension,
         -sin(yaw_rad) * cos(pitch_rad) * speed,
-        -sin(pitch_rad) * speed + 0.3,
+        -sin(pitch_rad) * speed + 0.2,
         cos(yaw_rad) * cos(pitch_rad) * speed, player->inventory_damage[slot], player->item_uid[slot]);
       broadcastPlayerEquipment(player);
     }
@@ -6303,10 +6303,11 @@ void spawnItemEntity (double x, double y, double z, uint16_t item, uint8_t count
     double vx, double vy, double vz, uint16_t damage, uint64_t uid) {
   if (item == 0 || count == 0) return;
 
-  // Server simulates physics — client just renders where we tell it
-  int16_t mvx = 0;
-  int16_t mvy = 0;
-  int16_t mvz = 0;
+  // Server simulates physics — client just renders where we tell it.
+  // Send initial velocity so the client can interpolate smoothly.
+  int16_t mvx = (int16_t)(vx * 8000.0);
+  int16_t mvy = (int16_t)(vy * 8000.0);
+  int16_t mvz = (int16_t)(vz * 8000.0);
 
   // Scan for free slot starting from the last known free position
   for (int i = 0; i < MAX_ITEM_ENTITIES; i++) {
@@ -6388,14 +6389,27 @@ void tickItemEntities (void) {
       uint16_t block_below = getBlockAt2(bx, by - 1, bz, item_entity_data[i].dimension);
       if (isPassableBlock(block_below) && item_entity_data[i].y > -64) {
         item_entity_data[i].on_ground = 0;
+        // Tell the client the item is airborne again so it starts
+        // predicting the fall from the current position + gravity.
+        for (int j = 0; j < MAX_PLAYERS; j++) {
+          if (player_data[j].client_fd == -1) continue;
+          if (player_data[j].flags & 0x20) continue;
+          if (player_data[j].dimension != item_entity_data[i].dimension) continue;
+          double dx = player_data[j].x - item_entity_data[i].x;
+          double dz = player_data[j].z - item_entity_data[i].z;
+          if (dx * dx + dz * dz > item_view_dist_sq) continue;
+          sc_teleportEntity(player_data[j].client_fd, entity_id,
+            item_entity_data[i].x, item_entity_data[i].y, item_entity_data[i].z, 0, 0);
+          sc_setEntityVelocity(player_data[j].client_fd, entity_id, 0,
+            (int16_t)(-0.04 * 8000.0), 0);
+        }
       }
     }
 
     if (!item_entity_data[i].on_ground) {
+      // Vanilla: gravity only, no air drag. Items maintain horizontal
+      // velocity until they hit the ground, then use friction.
       item_entity_data[i].vy -= 0.04;
-      item_entity_data[i].vx *= 0.98;
-      item_entity_data[i].vy *= 0.98;
-      item_entity_data[i].vz *= 0.98;
 
       double next_x = item_entity_data[i].x + item_entity_data[i].vx;
       if (itemEntityPositionBlocked(next_x, item_entity_data[i].y, item_entity_data[i].z, item_entity_data[i].dimension)) {
@@ -6429,38 +6443,26 @@ void tickItemEntities (void) {
           item_entity_data[i].vy = 0;
           item_entity_data[i].vz = 0;
           item_entity_data[i].on_ground = 1;
+          // Immediately sync the stopped position + zero velocity so the
+          // client doesn't keep simulating a bounce with stale velocity.
+          for (int j = 0; j < MAX_PLAYERS; j++) {
+            if (player_data[j].client_fd == -1) continue;
+            if (player_data[j].flags & 0x20) continue;
+            if (player_data[j].dimension != item_entity_data[i].dimension) continue;
+            double dx = player_data[j].x - item_entity_data[i].x;
+            double dz = player_data[j].z - item_entity_data[i].z;
+            if (dx * dx + dz * dz > item_view_dist_sq) continue;
+            sc_teleportEntity(player_data[j].client_fd, entity_id,
+              item_entity_data[i].x, item_entity_data[i].y, item_entity_data[i].z, 0, 0);
+            sc_setEntityVelocity(player_data[j].client_fd, entity_id, 0, 0, 0);
+          }
         }
       }
     }
 
-    // Teleport while flying — grounded items don't move
-    // Throttle: only broadcast every 3 ticks when near the ground or moving slowly.
-    if (!item_entity_data[i].on_ground) {
-      uint8_t should_broadcast = 1;
-      double speed_sq = item_entity_data[i].vx * item_entity_data[i].vx +
-                        item_entity_data[i].vy * item_entity_data[i].vy +
-                        item_entity_data[i].vz * item_entity_data[i].vz;
-      if (speed_sq < 0.0001) {
-        // Almost stopped — throttle to every 3 ticks
-        should_broadcast = (item_entity_data[i].age % 3 == 0);
-      } else if (speed_sq < 0.01 && item_entity_data[i].age > 60) {
-        // Very slow and been around a while — throttle to every 2 ticks
-        should_broadcast = (item_entity_data[i].age % 2 == 0);
-      }
-
-      if (should_broadcast) {
-        for (int j = 0; j < MAX_PLAYERS; j++) {
-          if (player_data[j].client_fd == -1) continue;
-          if (player_data[j].flags & 0x20) continue;
-          if (player_data[j].dimension != item_entity_data[i].dimension) continue;
-          double dx = player_data[j].x - item_entity_data[i].x;
-          double dz = player_data[j].z - item_entity_data[i].z;
-          if (dx * dx + dz * dz > item_view_dist_sq) continue;
-          sc_teleportEntity(player_data[j].client_fd, entity_id,
-            item_entity_data[i].x, item_entity_data[i].y, item_entity_data[i].z, 0, 0);
-        }
-      }
-    }
+    // Airborne items: let the client predict the flight path from the
+    // spawn velocity. No teleports during flight — only sync on ground
+    // contact (handled above) to avoid desync from physics mismatches.
 
     // Despawn after 5 minutes (6000 ticks)
     if (item_entity_data[i].age > 6000) {
