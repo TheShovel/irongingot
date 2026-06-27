@@ -35,7 +35,7 @@ Compared with the original bareiron, **irongingot** targets modern vanilla Minec
 - **Trees and vegetation** - Biome-appropriate trees, flowers, and grass generate in the world
 - **Better terrain** - Improved world generation with better caves, mountains, ore distribution, and dimension-specific terrain
 - **Config file** - Change settings in `server.conf` instead of recompiling
-- **Terminal UI** - Server status and logs are shown in a terminal interface
+- **Terminal UI removed** — plain timestamped stdout logging replaced the old terminal escape-code panel
 - **Multithreaded chunk gen** - Chunk generation runs in worker threads
 - **Musl libc support** - Build with `--musl` for ~7MB RAM usage, plus ARM64 musl cross-build support with Zig
 - **Performance fixes** - Various optimizations for chunk streaming, fluid updates, packet handling, and CPU usage
@@ -182,7 +182,6 @@ pie showData
     "src/serialize.c (351 est. AI lines)" : 351
     "src/special_block.c (277 est. AI lines)" : 277
     "src/structures.c (66 est. AI lines)" : 66
-    "src/terminal_ui.c (274 est. AI lines)" : 274
     "src/tools.c (607 est. AI lines)" : 607
     "src/worldgen.c (1928 est. AI lines)" : 1928
     "third_party/cjson/cJSON.c (1475 est. AI lines)" : 1475
