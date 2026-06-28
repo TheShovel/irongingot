@@ -25,7 +25,7 @@ MC 1.21.8 (proto 772) server in C. Fork of bareiron. ~7MB RAM (musl static). Lin
 | `src/registries.c` | **Generated** — block palette, state tables, registry binary blobs |
 | `src/generated_village_templates.c` | **Generated** — village building NBT compiled to C |
 | `src/globals.c` | Global state init |
-| `src/terminal_ui.c` | Terminal status panel + log |
+| `src/terminal_ui.c` | **Removed v1.6.4** — terminal_ui.h now inline stdout-logging stubs |
 | `src/noise/perlin.c` | Java-compatible Perlin noise (JavaRandom, OctavePerlinNoiseSampler) |
 | `src/cubiomes/` | Git submodule — biome generation, structure finders |
 | `third_party/cjson/` | Vendored cJSON (world.json) |
@@ -87,6 +87,8 @@ Compression enabled after login (threshold from config). Uncompressed framing: V
 
 ~337 block types as `uint16_t` IDs (`B_*` defines in registries.h). Interactive blocks (door/trapdoor/stair/fence/chest/furnace/barrel/bed/ender_chest) store state in `special_block.c` hash table as packed `uint16_t` bitfields.
 
+`getRawBlockAt2` (v1.6.4): returns raw chunk block value with packed state bits (unlike `getBlockAt2` which masks to block ID). Used by `ensureGeneratedSpecialBlockState` for on-demand generated-block state registration.
+
 ## World Gen
 
 Perlin noise (Java-compatible) for terrain height, detail, mountains. Cubiomes for biome assignment. Ores by Y-level + biome (grid-based: 4×4×4 precomputed density grid replaces per-block noise + 6-neighbor spread). Caves: 4×4×4 grid replaces per-block noise. Combined ~7× chunk gen speedup vs original. Structures: villages (5 styles×13 professions from NBT templates), dungeons (mossy+cobble, chests, spawners), mineshafts, strongholds (silverfish, portal), nether fortresses, trees (8 species).
@@ -119,6 +121,8 @@ Order: world time + parallel per-player state → weather → portal/bow → flu
 
 Item entity spawn/teleport/despawn/pickup broadcasts are distance-culled to `config.view_distance * 16` blocks (min 64) to avoid flooding send queues when many items exist in entity-dense areas.
 
+Item physics (v1.6.4): items send initial velocity to client for smooth interpolation. No air drag (vanilla: gravity only). Ground contact syncs zero position+velocity. Airborne items don't get periodic teleports — client predicts from spawn velocity. Fall restart teleports + sets downward velocity.
+
 `world_day_time` (uint64_t, serialized in globals.c) tracks absolute tick count; `world_time` is `world_day_time % 24000`. `sc_updateTime` sends `world_day_time` so client day counter actually increments.
 
 Nether portal transfer clears old send queue, picks safe floor near scaled X/Z in Y72-118 (fallback preserved/floor≈80), builds 5×5 obsidian platform + air room, then teleports and locks movement briefly until chunks become collidable.
@@ -131,6 +135,8 @@ Inventory is `inventory_*[41]` (hotbar 0-8, main 9-35, armor 36-39, offhand 40) 
 
 PlayerData gets `cursor_damage` field so tool durability survives being carried in the inventory cursor. Damage transfers to/from inventory via click-handler cursor scan. Serialized in world.json.
 
+Armor damage (v1.6.4): `hurtEntity` damages armor 1 durability/hit for non-fall/drown/starve/cactus damage types.
+
 ItemEntityData has `damage` field; `spawnItemEntity`/`givePlayerItem` accept a `uint16_t damage` parameter (0 for non-damageable items). This lets dropped/picked-up items retain durability.
 
 Every item instance gets a unique `uint64_t uid` (item_uid[41], craft_uid[9], cursor_uid) so identical tool types can be distinguished. UIDs are preserved on move/swap/pickup/drop and serialized in world.json. This prevents durability from being incorrectly transferred between identical items.
@@ -140,6 +146,8 @@ Every item instance gets a unique `uint64_t uid` (item_uid[41], craft_uid[9], cu
 Houses are placed at fixed offsets from the village center. They rotate so each front door faces the village center; all houses use the center biome style (prevents mixed taiga/birch edge houses). Helpers: `houseRotation()`, `rotLocal()`, type-aware `rotBlockDir()` (doors/stairs/trapdoors/beds/chests/horiz/fences only). Generated templates preserve stair shape + slab type.
 
 ## State Encoding (special_block.h)
+
+Generated special-block states (v1.6.4): no longer registered during chunk streaming. `ensureGeneratedSpecialBlockState()` in procedures.c lazily creates entries on player interaction, decoding raw chunk bits. Serialization filtered to only persist states backed by a block_change (generated chunk states excluded from world.json).
 
 Single `uint16_t` bits per block type:
 - **Doors:** bit0=open, bit1=hinge, bits2-3=direction
@@ -158,11 +166,11 @@ Single `uint16_t` bits per block type:
 Network: port, max_players, compression_threshold, network_timeout, mojang_api_timeout_ms
 Game: gamemode(0-3), difficulty(0-3), view_distance, world_seed, rng_seed, mob_* params
 Worldgen: chunk_size, terrain_base_height, cave_base_depth, biome_size
-Perf: chunk_cache_size, max_block_changes, infinite_block_changes, tick_interval (compat; tick loop uses `TIME_BETWEEN_TICKS`), disk_sync_interval. `DISK_SYNC_BLOCKS_ON_INTERVAL` enabled — block changes save only during periodic interval (~15s), not on every change.
+Perf: chunk_cache_size, max_block_changes, infinite_block_changes, tick_interval (default 50000=20 TPS in v1.6.4; tick loop uses `TIME_BETWEEN_TICKS`), disk_sync_interval. `DISK_SYNC_BLOCKS_ON_INTERVAL` enabled — block changes save only during periodic interval (~15s), not on every change.
 Features: sync_world_to_disk, do_fluid_flow, allow_chests, allow_doors, enable_flight, enable_commands, fetch_skins_from_mojang, safe_area_radius
 Debug: log_unknown_packets, log_length_discrepancy, log_chunk_generation
 
-Note: `/gamerule keepInventory` calls `save_config("server.conf")` so the change persists across restarts. Lava bucket can be used as furnace fuel (value 100). Hoe recipes added for all material tiers (wood→netherite).
+Note: `/gamerule keepInventory` calls `save_config("server.conf")` so the change persists across restarts. Lava bucket can be used as furnace fuel (value 100). Hoe recipes added for all material tiers (wood→netherite). Stairs (v1.6.4): stone, stone_brick, brick, nether_brick, sandstone stairs added to registry + crafting + recipe book.
 
 ## world.json format
 
