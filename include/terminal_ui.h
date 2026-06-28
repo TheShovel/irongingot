@@ -19,7 +19,11 @@ static inline void terminal_ui_log(const char *fmt, ...) {
   char buf[2048];
   time_t now = time(NULL);
   struct tm tm;
+#ifdef _WIN32
+  localtime_s(&tm, &now);
+#else
   localtime_r(&now, &tm);
+#endif
   int off = (int)(size_t)strftime(buf, 32, "[%H:%M:%S] ", &tm);
   va_list ap;
   va_start(ap, fmt);
