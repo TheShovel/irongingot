@@ -6990,8 +6990,8 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
       uint8_t surface_y = getEndSpawnSurfaceY(spawn_x, spawn_z);
       if (surface_y == 0) continue;
 
-      // Enderman (147) spawns in the End — vanilla health is 40
-      spawnMob(E_ENDERMAN, spawn_x, surface_y + 1, spawn_z, 40, player->dimension, 0);
+      // Enderman spawns in the End — capped at 30 (max 5-bit health field)
+      spawnMob(E_ENDERMAN, spawn_x, surface_y + 1, spawn_z, 30, player->dimension, 0);
     }
 
     return;
@@ -7116,7 +7116,7 @@ static void spawnMobsAroundPlayer (PlayerData *player) {
 
       uint8_t type = hostile_types[fast_rand() % num_hostile_types];
       uint8_t health = 20;  // Zombies(145) and Skeletons(E_SKELETON): vanilla 20 HP
-      if (type == E_ENDERMAN) health = 40;
+      if (type == E_ENDERMAN) health = 30;  // Capped at 30 (max 5-bit health field)
       else if (type == E_SPIDER) health = 16;
       else if (type == E_CREEPER) health = 20;
 
@@ -8553,14 +8553,14 @@ void handleServerTick (int64_t time_since_last_tick) {
         if (diff > 127) diff -= 256;
         if (diff < -128) diff += 256;
         uint8_t staring = 0;
-        if (abs(diff) <= 30) {
+        if (abs(diff) <= 8) {
           double dy = mob_data[i].y - (closest_player->y + 1.6);
           double horiz_dist = sqrt(dist_sq);
           if (horiz_dist > 0.5) {
             double pitch_rad = atan2(dy, horiz_dist);
             int8_t target_pitch = (int8_t)(pitch_rad * RAD_TO_MOBROT);
             int16_t pitch_diff = (int16_t)((int16_t)(int8_t)closest_player->pitch - (int16_t)target_pitch);
-            if (abs((int)pitch_diff) <= 20) staring = 1;
+            if (abs((int)pitch_diff) <= 8) staring = 1;
           }
         }
         if (staring) {
@@ -8728,9 +8728,9 @@ void handleServerTick (int64_t time_since_last_tick) {
       int ws_fish_block_z = mobBlockCoord(new_z);
       int fish_surface = get_water_surface_y(ws_fish_block_x, ws_fish_block_z, mob_data[i].dimension);
 
-      // Fish must stay at least 1 block below the water surface
+      // Fish must stay within the water column, even in 1-block-deep water
       if (fish_surface > 0) {
-        double max_y = (double)fish_surface - 1.0; // At least 1 block under surface
+        double max_y = (double)fish_surface - 0.3; // Just below surface, works in any depth
         if (new_y > max_y) new_y = max_y;
       }
       // Also clamp to prevent swimming too far from spawn depth
@@ -9035,8 +9035,8 @@ void handleServerTick (int64_t time_since_last_tick) {
           }
         }
 
-        // Enderman teleports away when hit by a projectile
-        if (mob_data[i].anger_timer <= 0) {
+        // Enderman teleports away when hit by a projectile (even when angry at player)
+        if (mob_data[i].move_timer <= 0) {
           for (int pi = 0; pi < MAX_PROJECTILES; pi++) {
             if (!projectile_data[pi].active || projectile_data[pi].type != E_ARROW) continue;
             if (projectile_data[pi].stuck) continue;
@@ -9058,7 +9058,7 @@ void handleServerTick (int64_t time_since_last_tick) {
                   mob_data[i].x = tx;
                   mob_data[i].y = (double)ty2 + 1.0;
                   mob_data[i].z = tz;
-                  mob_data[i].move_timer = 0;
+                  mob_data[i].move_timer = 60; // 3-second cooldown before next teleport
                   broadcastMobMetadata(-1, entity_id);
                   broadcastMobSound(entity_id, S_ENDERMAN_TELEPORT, SOUND_CATEGORY_HOSTILE, 1.0f, 1.0f);
                   for (int pj = 0; pj < MAX_PLAYERS; pj++) {
