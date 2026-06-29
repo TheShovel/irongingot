@@ -123,7 +123,7 @@ Item entity spawn/teleport/despawn/pickup broadcasts are distance-culled to `con
 
 Item physics (v1.6.4): items send initial velocity to client for smooth interpolation. No air drag (vanilla: gravity only). Ground contact syncs zero position+velocity. Airborne items don't get periodic teleports — client predicts from spawn velocity. Fall restart teleports + sets downward velocity.
 
-`world_day_time` (uint64_t, serialized in globals.c) tracks absolute tick count; `world_time` is `world_day_time % 24000`. `sc_updateTime` sends `world_day_time` so client day counter actually increments.
+`world_day_time` (uint64_t, serialized in globals.c) tracks absolute tick count; `world_time` is `world_day_time % 24000`. `sc_updateTime` sends `world_day_time` so client day counter actually increments. `/time set` command updates both `world_time` and `world_day_time` (preserves day counter, changes time-of-day). `world_day_time` is persisted in world.json across restarts (format_version=2).
 
 Nether portal transfer clears old send queue, picks safe floor near scaled X/Z in Y72-118 (fallback preserved/floor≈80), builds 5×5 obsidian platform + air room, then teleports and locks movement briefly until chunks become collidable.
 
@@ -137,9 +137,16 @@ PlayerData gets `cursor_damage` field so tool durability survives being carried 
 
 Armor damage (v1.6.4): `hurtEntity` damages armor 1 durability/hit for non-fall/drown/starve/cactus damage types.
 
+### Combat
+- Armor formula: `effective = ceil(damage * (25 - min(defense, 20)) / 25)`, min 1 — always deals at least 1 damage even at full defense (so armor durability is consumed).
+- Mob melee damage: zombie/piglin=4, spider=3, skeleton melee=2, enderman=7. Skeleton arrow damage=4.
+- Endermen teleport away when hit by incoming projectiles (arrows). Skeleton arrows (owner_index=-1) are not pickupable.
+
 ItemEntityData has `damage` field; `spawnItemEntity`/`givePlayerItem` accept a `uint16_t damage` parameter (0 for non-damageable items). This lets dropped/picked-up items retain durability.
 
 Every item instance gets a unique `uint64_t uid` (item_uid[41], craft_uid[9], cursor_uid) so identical tool types can be distinguished. UIDs are preserved on move/swap/pickup/drop and serialized in world.json. This prevents durability from being incorrectly transferred between identical items.
+
+Chest item persistence: chest contents (27 slots) live in adjacent `block_changes` entries; breaking a chest drops its contents as item entities before the block change clears the slots. Closing inventory with items in cursor/craft grid first attempts `givePlayerItem`, and drops items on the ground if the inventory is full (no item loss).
 
 ## Village House Rotation (worldgen.c)
 

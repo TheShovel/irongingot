@@ -2264,7 +2264,12 @@ int cs_closeContainer (int client_fd) {
 	  for (uint8_t i = 0; i < 9; i ++) {
 	    if (window_id != 2) {
 	      uint16_t _d = isDamageableItem(player->craft_items[i]) ? player->craft_damage[i] : 0;
-	      givePlayerItem(player, player->craft_items[i], player->craft_count[i], _d, player->craft_uid[i]);
+	      int cr = givePlayerItem(player, player->craft_items[i], player->craft_count[i], _d, player->craft_uid[i]);
+	      // If inventory is full, drop craft items on the ground instead of losing them
+	      if (cr != 0 && player->craft_items[i] != 0 && player->craft_count[i] > 0) {
+	        spawnItemEntity(player->x + 0.5, player->y + 0.5, player->z + 0.5,
+	          player->craft_items[i], player->craft_count[i], player->dimension, 0, 0, 0, _d, player->craft_uid[i]);
+	      }
 	      uint8_t client_slot = serverSlotToClientSlot(window_id, 41 + i);
 	      if (client_slot != 255) sc_setContainerSlot(player->client_fd, window_id, client_slot, 0, 0);
 	    }
@@ -2298,7 +2303,12 @@ int cs_closeContainer (int client_fd) {
 	  }
 	  #endif
 
-    givePlayerItem(player, player->flagval_16, player->flagval_8, player->cursor_damage, player->cursor_uid);
+    int give_result = givePlayerItem(player, player->flagval_16, player->flagval_8, player->cursor_damage, player->cursor_uid);
+    // If inventory is full, drop cursor items on the ground instead of losing them
+    if (give_result != 0 && player->flagval_16 != 0 && player->flagval_8 > 0) {
+      spawnItemEntity(player->x + 0.5, player->y + 0.5, player->z + 0.5,
+        player->flagval_16, player->flagval_8, player->dimension, 0, 0, 0, player->cursor_damage, player->cursor_uid);
+    }
     // Transfer cursor damage to the inventory slot that received the item
     if (player->flagval_16 != 0 && player->flagval_8 > 0 && player->cursor_damage > 0) {
       uint16_t _ci = player->flagval_16;
@@ -3539,6 +3549,7 @@ int cs_chat (int client_fd) {
     }
 
     world_time = add_time ? normalizeWorldTime((int)world_time + parsed_time) : normalizeWorldTime(parsed_time);
+    world_day_time = (world_day_time / 24000) * 24000 + world_time;
     broadcastTimeUpdate();
 
     char response[64];

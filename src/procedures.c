@@ -3547,6 +3547,24 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
 
   uint16_t block = getBlockAt2(x, y, z, player->dimension);
 
+  // If breaking a chest, drop its contents before the block change clears the stored items
+  if (block == B_chest || block == B_barrel) {
+    for (int ci = 0; ci < block_changes_count; ci++) {
+      if (block_changes[ci].block != block) continue;
+      if (block_changes[ci].x == x && block_changes[ci].y == y && block_changes[ci].z == z) {
+        uint8_t *base = (uint8_t *)&block_changes[ci + 1];
+        for (int si = 0; si < 27; si++) {
+          uint16_t citem = *(uint16_t *)(base + si * 3);
+          uint8_t ccount = *(uint8_t *)(base + si * 3 + 2);
+          if (citem != 0 && ccount > 0) {
+            spawnItemEntity(x + 0.5, y + 0.5, z + 0.5, citem, ccount, player->dimension, 0, 0, 0, 0, 0);
+          }
+        }
+        break;
+      }
+    }
+  }
+
   // If this is a "start mining" packet, the block must be instamine
   if (action == 0 && !isInstantlyMined(player, block)) return;
 
@@ -4836,7 +4854,7 @@ static void shootSkeletonArrow(int mob_index, double target_x, double target_y, 
   p->vy = (dy / dist) * speed;
   p->vz = (dz / dist) * speed;
   p->spawn_tick = server_ticks;
-  p->damage = 2;
+  p->damage = 4;
   p->stuck = 0;
   makeProjectileUuid(p, slot);
 
@@ -4896,6 +4914,9 @@ static void syncStoppedArrow(int slot, ProjectileData *p) {
 }
 
 static uint8_t tryPickupStuckArrow(int slot, ProjectileData *p) {
+  // Skeleton arrows (owner_index == -1) are not pickupable in vanilla
+  if (p->owner_index == -1) return 0;
+
   for (int i = 0; i < MAX_PLAYERS; i++) {
     PlayerData *player = &player_data[i];
     if (player->client_fd == -1) continue;
@@ -6487,9 +6508,9 @@ void tickItemEntities (void) {
       if (player_data[j].flags & 0x20) continue;
       if (player_data[j].dimension != item_entity_data[i].dimension) continue;
 
-      double dx = item_entity_data[i].x - player_data[j].x;
-      double dy = item_entity_data[i].y - player_data[j].y;
-      double dz = item_entity_data[i].z - player_data[j].z;
+      double dx = item_entity_data[i].x - ((double)player_data[j].x + 0.5);
+      double dy = item_entity_data[i].y - ((double)player_data[j].y + 0.5);
+      double dz = item_entity_data[i].z - ((double)player_data[j].z + 0.5);
       if (dx * dx + dy * dy + dz * dz <= 2.5) { // ~1.6 block radius, matches vanilla pickup feel
         if (givePlayerItem(&player_data[j], item_entity_data[i].item, item_entity_data[i].count, item_entity_data[i].damage, item_entity_data[i].uid) == 0) {
           for (int k = 0; k < MAX_PLAYERS; k++) {
@@ -7709,11 +7730,11 @@ void hurtEntity (int entity_id, int attacker_id, uint8_t damage_type, uint8_t da
 
     // Calculate damage reduction from player's armor
     uint8_t defense = getPlayerDefensePoints(player);
-    // This uses the old (pre-1.9) protection calculation. Factors are
-    // scaled up 256 times to avoid floating point math. Due to lost
-    // precision, the 4% reduction factor drops to ~3.9%, although the
-    // the resulting effective damage is then also rounded down.
-    uint8_t effective_damage = damage * (256 - defense * 10) / 256;
+    // Vanilla-like armor reduction: damage * (25 - defense) / 25, capped at 20 defense.
+    // Minimum effective damage is always 1 so armor takes durability hits.
+    int reduction = defense > 20 ? 20 : (int)defense;
+    uint8_t effective_damage = (uint8_t)((float)damage * (25.0f - (float)reduction) / 25.0f + 0.5f);
+    if (effective_damage < 1) effective_damage = 1;
 
     // Calculate damage reduction from player's shield
     if (player->flags & 0x0100) {
@@ -8872,7 +8893,7 @@ void handleServerTick (int64_t time_since_last_tick) {
         if (dist_to_player < 2.0 && y_diff < 2.0 && has_los) {
           if (mob_data[i].move_timer <= 0) {
             if (closest_player->client_fd != -1) {
-              hurtEntity(closest_player->client_fd, entity_id, D_generic, 1);
+              hurtEntity(closest_player->client_fd, entity_id, D_generic, 2);
             }
             mob_data[i].move_timer = 20;
           }
@@ -9008,11 +9029,55 @@ void handleServerTick (int64_t time_since_last_tick) {
         if (dist_to_player < 3.0 && y_diff < 2.0 && has_los) {
           if (mob_data[i].move_timer <= 0) {
             if (closest_player->client_fd != -1) {
-              hurtEntity(closest_player->client_fd, entity_id, D_generic, 1);
+              hurtEntity(closest_player->client_fd, entity_id, D_generic, 7);
             }
             mob_data[i].move_timer = 20;
           }
         }
+
+        // Enderman teleports away when hit by a projectile
+        if (mob_data[i].anger_timer <= 0) {
+          for (int pi = 0; pi < MAX_PROJECTILES; pi++) {
+            if (!projectile_data[pi].active || projectile_data[pi].type != E_ARROW) continue;
+            if (projectile_data[pi].stuck) continue;
+            if (projectile_data[pi].dimension != mob_data[i].dimension) continue;
+            double pdx = mob_data[i].x - projectile_data[pi].x;
+            double pdz = mob_data[i].z - projectile_data[pi].z;
+            double pdy = fabs(mob_data[i].y + 1.0 - projectile_data[pi].y);
+            if (pdx * pdx + pdz * pdz < 9.0 && pdy < 3.0) {
+              double angle = (double)(fast_rand() % 628) / 100.0;
+              double tele_dist = 16.0 + (double)(fast_rand() % 160) / 10.0;
+              double tx = mob_data[i].x + cos(angle) * tele_dist;
+              double tz = mob_data[i].z + sin(angle) * tele_dist;
+              int ty = (int)mob_data[i].y;
+              for (int ty2 = ty + 5; ty2 >= ty - 2; ty2--) {
+                if (ty2 < 0 || ty2 > 319) continue;
+                uint16_t b = getBlockAt2((short)tx, (int16_t)ty2, (short)tz, mob_data[i].dimension);
+                uint16_t ba = getBlockAt2((short)tx, (int16_t)(ty2 + 1), (short)tz, mob_data[i].dimension);
+                if (isPassableBlock(ba) && !isPassableBlock(b)) {
+                  mob_data[i].x = tx;
+                  mob_data[i].y = (double)ty2 + 1.0;
+                  mob_data[i].z = tz;
+                  mob_data[i].move_timer = 0;
+                  broadcastMobMetadata(-1, entity_id);
+                  broadcastMobSound(entity_id, S_ENDERMAN_TELEPORT, SOUND_CATEGORY_HOSTILE, 1.0f, 1.0f);
+                  for (int pj = 0; pj < MAX_PLAYERS; pj++) {
+                    if (player_data[pj].client_fd == -1) continue;
+                    if (player_data[pj].dimension != mob_data[i].dimension) continue;
+                    sc_teleportEntity(player_data[pj].client_fd, entity_id,
+                      mob_data[i].x, mob_data[i].y, mob_data[i].z, 0, 0);
+                  }
+                  // Update movement targets so the teleported position is preserved
+                  new_x = mob_data[i].x;
+                  new_y = mob_data[i].y;
+                  new_z = mob_data[i].z;
+                  goto enderman_teleported;
+                }
+              }
+            }
+          }
+        }
+        enderman_teleported:
 
         // Decrement attack cooldown timer
         if (mob_data[i].move_timer > 0) mob_data[i].move_timer--;
@@ -9031,7 +9096,7 @@ void handleServerTick (int64_t time_since_last_tick) {
         if (dist_to_player < 2.0 && y_diff < 2.0 && has_los) {
           if (mob_data[i].move_timer <= 0) {
             if (closest_player->client_fd != -1) {
-              hurtEntity(closest_player->client_fd, entity_id, D_generic, 1);
+              hurtEntity(closest_player->client_fd, entity_id, D_generic, 3);
             }
             mob_data[i].move_timer = 20;
           }
@@ -9053,7 +9118,7 @@ void handleServerTick (int64_t time_since_last_tick) {
         if (dist_to_player < attack_range && y_diff < 2.0 && has_los) {
           if (mob_data[i].move_timer <= 0) {
             if (closest_player->client_fd != -1) {
-              hurtEntity(closest_player->client_fd, entity_id, D_generic, 1);
+              hurtEntity(closest_player->client_fd, entity_id, D_generic, 4);
             }
             mob_data[i].move_timer = 20;
           }
@@ -9324,7 +9389,7 @@ void handleServerTick (int64_t time_since_last_tick) {
         PlayerData *owner = &player_data[p->owner_index];
         if (owner->client_fd != -1 && owner->dimension == p->dimension) attacker_id = owner->client_fd;
       }
-      hurtEntity(hit_entity, attacker_id, D_arrow, p->damage == 0 ? 4 : p->damage);
+      hurtEntity(hit_entity, attacker_id, p->owner_index == -1 ? D_mob_projectile : D_arrow, p->damage == 0 ? 4 : p->damage);
 
       removeProjectileFromClients(i, p->dimension);
       p->active = 0;

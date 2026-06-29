@@ -623,7 +623,8 @@ static int writeWorldJson(void) {
   cJSON *root = cJSON_CreateObject();
   if (!root) { fclose(file); return 0; }
 
-  cJSON_AddNumberToObject(root, "format_version", 1);
+  cJSON_AddNumberToObject(root, "format_version", 2);
+  cJSON_AddNumberToObject(root, "world_day_time", (double)world_day_time);
 
   cJSON *bc = serializeBlockChanges();
   if (bc) cJSON_AddItemToObject(root, "block_changes", bc);
@@ -743,6 +744,13 @@ int initSerializer(void) {
     terminal_ui_log("Failed to deserialize mob data");
   }
 
+  // Restore world time from saved state (for persistence across restarts)
+  cJSON *wdt = cJSON_GetObjectItem(root, "world_day_time");
+  if (cJSON_IsNumber(wdt)) {
+    world_day_time = (uint64_t)cJSON_GetNumberValue(wdt);
+    world_time = (uint16_t)(world_day_time % 24000);
+  }
+
   // Rebuild any missing special block state entries from block changes.
   // This handles upgrades from older world.json files and any edge cases
   // where block state was not serialized for fences, wall torches, etc.
@@ -811,8 +819,6 @@ void writeBlockChangesToDisk(int from, int to) {
 }
 
 void writePlayerDataToDisk(void) {
-  terminal_ui_log("[SAVE] writePlayerDataToDisk called, sb_count=%d, bc_count=%d",
-    special_blocks_count, block_changes_count);
   writeWorldJson();
 }
 
