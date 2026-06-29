@@ -3547,7 +3547,19 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
 
   uint16_t block = getBlockAt2(x, y, z, player->dimension);
 
-  // If breaking a chest, drop its contents before the block change clears the stored items
+  // If this is a "start mining" packet, the block must be instamine
+  if (action == 0 && !isInstantlyMined(player, block)) return;
+
+  // Read wheat age BEFORE makeBlockChange clears the special block entry.
+  // Generated farms use palette entries B_wheat..B_wheat_7, while planted
+  // crops store age in the special-block table.
+  uint16_t wheat_age = 0;
+  if (isWheatBlock(block)) {
+    wheat_age = wheatBlockAge(block);
+    if (block == B_wheat) wheat_age = special_block_get_state(x, y, z, player->dimension);
+  }
+
+  // If breaking a chest/barrel, drop its contents before makeBlockChange clears stored items
   if (block == B_chest || block == B_barrel) {
     for (int ci = 0; ci < block_changes_count; ci++) {
       if (block_changes[ci].block != block) continue;
@@ -3563,18 +3575,6 @@ void handlePlayerAction (PlayerData *player, int action, short x, short y, short
         break;
       }
     }
-  }
-
-  // If this is a "start mining" packet, the block must be instamine
-  if (action == 0 && !isInstantlyMined(player, block)) return;
-
-  // Read wheat age BEFORE makeBlockChange clears the special block entry.
-  // Generated farms use palette entries B_wheat..B_wheat_7, while planted
-  // crops store age in the special-block table.
-  uint16_t wheat_age = 0;
-  if (isWheatBlock(block)) {
-    wheat_age = wheatBlockAge(block);
-    if (block == B_wheat) wheat_age = special_block_get_state(x, y, z, player->dimension);
   }
 
   // Don't continue if the block change failed
