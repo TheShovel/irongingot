@@ -6517,16 +6517,23 @@ void tickItemEntities (void) {
     }
 
     // Destroy items touching cactus (vanilla behavior)
+    // Item may rest on top, be pushed against the side, or be inside.
     #ifdef ENABLE_CACTUS_DAMAGE
     {
       int ix = (int)floor(item_entity_data[i].x);
       int iy = (int)floor(item_entity_data[i].y);
       int iz = (int)floor(item_entity_data[i].z);
-      if (getBlockAt2(ix, iy, iz, item_entity_data[i].dimension) == B_cactus) {
+      uint8_t dim = item_entity_data[i].dimension;
+      if (getBlockAt2(ix, iy, iz, dim) == B_cactus ||
+          getBlockAt2(ix, iy - 1, iz, dim) == B_cactus ||
+          getBlockAt2(ix + 1, iy, iz, dim) == B_cactus ||
+          getBlockAt2(ix - 1, iy, iz, dim) == B_cactus ||
+          getBlockAt2(ix, iy, iz + 1, dim) == B_cactus ||
+          getBlockAt2(ix, iy, iz - 1, dim) == B_cactus) {
         item_entity_data[i].active = 0;
         for (int j = 0; j < MAX_PLAYERS; j++) {
           if (player_data[j].client_fd == -1) continue;
-          if (player_data[j].dimension != item_entity_data[i].dimension) continue;
+          if (player_data[j].dimension != dim) continue;
           double dx = player_data[j].x - item_entity_data[i].x;
           double dz = player_data[j].z - item_entity_data[i].z;
           if (dx * dx + dz * dz > item_view_dist_sq) continue;

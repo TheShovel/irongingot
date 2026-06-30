@@ -497,7 +497,7 @@ void init_worldgen() {
         pthread_mutex_unlock(&worldgen_init_mutex);
         return;
     }
-    setupGenerator(&g, MC_1_20, 0);
+    setupGenerator(&g, MC_1_21_3, 0);
     applySeed(&g, DIMENSION_OVERWORLD, (uint64_t)world_seed);
     initSurfaceNoise(&surface_noise_biome, DIMENSION_OVERWORLD, (uint64_t)world_seed);
 
