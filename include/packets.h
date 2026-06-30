@@ -47,6 +47,7 @@ void compute_section_block_light(const uint16_t section[4096], uint8_t light_out
 int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension);
 int sc_keepAlive (int client_fd);
 int sc_setContainerSlot (int client_fd, int window_id, uint16_t slot, uint8_t count, uint16_t item);
+int sc_setContainerSlotWithDamage (int client_fd, int window_id, uint16_t slot, uint8_t count, uint16_t item, uint16_t damage);
 int sc_setCursorItem (int client_fd, uint16_t item, uint8_t count);
 int sc_setCursorItemWithDamage (int client_fd, uint16_t item, uint8_t count, uint16_t damage);
 int sc_setHeldItem (int client_fd, uint8_t slot);

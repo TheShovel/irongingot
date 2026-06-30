@@ -51,9 +51,9 @@ static cJSON *serializeBlockChanges(void) {
 
     // Chest inventory slots store raw byte-packed data; serialize as hex
     if (block_changes[i].block == B_chest) {
-      int slots_end = i + 14;
+      int slots_end = i + 15;
       if (slots_end < block_changes_count) {
-        size_t raw_bytes = 14 * sizeof(BlockChange);
+        size_t raw_bytes = 15 * sizeof(BlockChange);
         uint8_t *raw_data = (uint8_t *)&block_changes[i + 1];
         char *hex = (char *)malloc(raw_bytes * 2 + 1);
         if (hex) {
@@ -66,10 +66,10 @@ static cJSON *serializeBlockChanges(void) {
         }
       }
       // Write null placeholders for inventory slots to preserve indices
-      for (int j = 1; j <= 14 && i + j < block_changes_count; j++) {
+      for (int j = 1; j <= 15 && i + j < block_changes_count; j++) {
         cJSON_AddItemToArray(arr, cJSON_CreateNull());
       }
-      i += 14;
+      i += 15;
     }
   }
 
@@ -133,23 +133,43 @@ static int deserializeBlockChanges(cJSON *arr) {
       // Restore chest inventory from hex-encoded slots
       if ((uint16_t)cJSON_GetNumberValue(block) == B_chest) {
         cJSON *slots = cJSON_GetObjectItem(obj, "slots");
-        if (cJSON_IsString(slots) && i + 14 < block_changes_capacity) {
+        uint8_t is_old_format = 0;
+        if (cJSON_IsString(slots) && i + 15 < block_changes_capacity) {
           const char *hex = cJSON_GetStringValue(slots);
           size_t hex_len = strlen(hex);
-          size_t raw_bytes = 14 * sizeof(BlockChange);
-          if (hex_len == raw_bytes * 2) {
+          size_t old_raw_bytes = 14 * sizeof(BlockChange);
+          size_t new_raw_bytes = 15 * sizeof(BlockChange);
+          if (hex_len == new_raw_bytes * 2) {
             uint8_t *raw_data = (uint8_t *)&block_changes[i + 1];
-            for (size_t b = 0; b < raw_bytes; b++) {
+            for (size_t b = 0; b < new_raw_bytes; b++) {
               unsigned int byte_val;
               sscanf(hex + b * 2, "%2x", &byte_val);
               raw_data[b] = (uint8_t)byte_val;
             }
+          } else if (hex_len == old_raw_bytes * 2) {
+            // Upgrade old 3-byte/slot format to 5-byte/slot
+            is_old_format = 1;
+            memset(&block_changes[i + 1], 0, 15 * sizeof(BlockChange));
+            uint8_t *old_raw = (uint8_t *)malloc(old_raw_bytes);
+            if (old_raw) {
+              for (size_t b = 0; b < old_raw_bytes; b++) {
+                unsigned int byte_val;
+                sscanf(hex + b * 2, "%2x", &byte_val);
+                old_raw[b] = (uint8_t)byte_val;
+              }
+              uint8_t *raw_data = (uint8_t *)&block_changes[i + 1];
+              for (int _s = 0; _s < 27; _s++) {
+                memcpy(raw_data + _s * 5,     old_raw + _s * 3,     2);
+                memcpy(raw_data + _s * 5 + 2, old_raw + _s * 3 + 2, 1);
+              }
+              free(old_raw);
+            }
           }
-        } else if (i + 14 < block_changes_capacity) {
-          // No slots hex data (old format); init empty chest
-          memset(&block_changes[i + 1], 0, 14 * sizeof(BlockChange));
+        } else if (i + 15 < block_changes_capacity) {
+          memset(&block_changes[i + 1], 0, 15 * sizeof(BlockChange));
         }
-        i += 14;
+        // Old format had 14 null placeholders; new format has 15.
+        i += is_old_format ? 14 : 15;
       }
     }
   }
@@ -423,7 +443,12 @@ static uint8_t specialBlockHasPersistedBlockChange(short x, uint8_t y, short z, 
       block_changes[i].dimension == dimension
     );
 
-    if (b == B_chest || b == B_barrel) {
+    if (b == B_chest) {
+      if (matches) return 1;
+      i += 15;
+      continue;
+    }
+    if (b == B_barrel) {
       if (matches) return 1;
       i += 14;
       continue;
@@ -800,7 +825,8 @@ int initSerializer(void) {
     // Skip state entries for special blocks
     if (is_stair_block(b) || b == B_furnace || b == B_ender_chest || is_fence_block(b) || is_horizontal_facing_block(b) || b == B_lantern) i += 1;
     else if (is_door_block(b)) i += 2;
-    else if (b == B_chest || b == B_barrel) i += 14;
+    else if (b == B_chest) i += 15;
+    else if (b == B_barrel) i += 14;
   }
 
   int mob_count = 0;

@@ -638,7 +638,7 @@ void getCraftingOutput (PlayerData *player, uint8_t *count, uint16_t *item) {
             player->craft_items[first + 3] == first_item &&
             player->craft_items[first + 4] == first_item
           ) {
-            if (first_item == I_snowball) { *item = I_snow_block; *count = 3; }
+            if (first_item == I_snowball) { *item = I_snow_block; *count = 1; }
             else if (first_item == I_oak_log) { *item = I_oak_wood; *count = 3; }
             else if (first_item == I_spruce_log) { *item = I_spruce_wood; *count = 3; }
             else if (first_item == I_birch_log) { *item = I_birch_wood; *count = 3; }

@@ -117,7 +117,17 @@ Full chunk: 1.80 ms, 90 us/section  (6.6× faster)
 - **Village footprint gate**: `getVillageBlockAt` skips template binary-search + terrain-fill for houses whose xz footprint the query block misses (~80% of village lookups).
 
 ## Game Tick (procedures.c:handleServerTick)
-Order: world time + parallel per-player state → weather → portal/bow → fluid queue → inventory sync + disk-save check → wheat growth → mob AI (move/anger/sounds/look-around; villagers >256 blocks skip AI) → projectiles → XP orbs + item entities → mob spawning.
+Order: world time + parallel per-player state → weather → portal/bow → fluid queue → inventory sync + disk-save check → wheat growth → mob AI (move/anger/sounds/look-around; villagers >256 blocks skip AI; cactus damage for mobs at `#ifdef ENABLE_CACTUS_DAMAGE`; fish move+water clamp) → projectiles → XP orbs + item entities → mob spawning.
+
+Mob spawn cap (`countMobsNearPlayer`): villagers and fish excluded (own lifecycle). Villagers despawn past `MOB_DESPAWN_DISTANCE` like other mobs; respawn via `spawnVillageVillagers` when player returns. Dungeon spawners (`spawnDungeonMobs`) run before general cap check, independent per-type cap (max 4 within 9 blocks). Fish cap: half of `mob_spawn_max_per_player`, separately counted in `spawnFishInWater`.
+
+Fish surface clamp (`fish_surface + 0.7`): allows swimming in 1-block-deep water (prev `fish_surface - 0.3` pushed fish into ground).
+
+Cactus damage: applies to players, mobs (tick loop), and item entities (destroyed on contact). Cactus placement restricted to sand or cactus blocks. Armor durability degrades on cactus damage (removed D_cactus exclusion).
+
+Chest durability (v1.6.5): per-slot storage expanded from 3→5 bytes (`[item(2)][count(1)][damage(2)]`). Chest direction entry moved from +14→+15. `sc_setContainerSlotWithDamage` for chest slot display. `broadcastChestUpdate` reads/stores damage. Damage preserved on cursor→chest and inventor→chest moves; chest→inventory damage transfer via before-snapshot reconciliation.
+
+Biome fix: `getBiomeAtBlockCoords` and `getChunkBiomeRaw` use `mapApproxHeight` result (on success) instead of overwriting with `getBiomeAt(Y=64)`. Snowball recipe: 4 snowballs → 1 snow block (was 3).
 
 Item entity spawn/teleport/despawn/pickup broadcasts are distance-culled to `config.view_distance * 16` blocks (min 64) to avoid flooding send queues when many items exist in entity-dense areas.
 

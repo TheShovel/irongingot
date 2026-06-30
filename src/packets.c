@@ -1071,16 +1071,16 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
 
     if (block_changes_snapshot[i].x < x || block_changes_snapshot[i].x >= x + 16) {
       if (block_changes_snapshot[i].block == B_chest) {
-        if (i + 14 >= block_changes_snapshot_count) continue;
-        i += 14;
+        if (i + 15 >= block_changes_snapshot_count) continue;
+        i += 15;
       } else if (isStairBlock(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_furnace || block_changes_snapshot[i].block == B_lantern) i += 1;
       else if (isDoorBlock(block_changes_snapshot[i].block)) i += 2;
       continue;
     }
     if (block_changes_snapshot[i].z < z || block_changes_snapshot[i].z >= z + 16) {
       if (block_changes_snapshot[i].block == B_chest) {
-        if (i + 14 >= block_changes_snapshot_count) continue;
-        i += 14;
+        if (i + 15 >= block_changes_snapshot_count) continue;
+        i += 15;
       } else if (isStairBlock(block_changes_snapshot[i].block) || block_changes_snapshot[i].block == B_furnace || block_changes_snapshot[i].block == B_lantern) i += 1;
       else if (isDoorBlock(block_changes_snapshot[i].block)) i += 2;
       continue;
@@ -1181,8 +1181,8 @@ int sc_chunkDataAndUpdateLight (int client_fd, int _x, int _z, uint8_t dimension
 
       if (block_changes_snapshot[i].block == B_chest) {
         sendOrientedUpdate(client_fd, block_changes_snapshot[i].x, block_changes_snapshot[i].y, block_changes_snapshot[i].z, block_changes_snapshot[i].block, direction);
-        if (i + 14 >= block_changes_snapshot_count) continue;
-        i += 14;
+        if (i + 15 >= block_changes_snapshot_count) continue;
+        i += 15;
       } else if (block_changes_snapshot[i].block == B_furnace) {
         // Skips state entry (already handled above)
       } else {
@@ -1300,6 +1300,23 @@ int sc_setContainerSlot (int client_fd, int window_id, uint16_t slot, uint8_t co
       else if (window_id != 2 && server_slot >= 41 && server_slot < 50) damage = player->craft_damage[server_slot - 41];
     }
   }
+  writeItemSlotWithDamage(client_fd, count, item, damage);
+
+  endPacket(client_fd);
+
+  return 0;
+
+}
+
+// S->C Set Container Slot with explicit damage (for chest/barrel slots)
+int sc_setContainerSlotWithDamage (int client_fd, int window_id, uint16_t slot, uint8_t count, uint16_t item, uint16_t damage) {
+
+  startPacket(client_fd, 0x14);
+
+  writeVarInt(client_fd, window_id);
+  writeVarInt(client_fd, 0);
+  writeUint16(client_fd, slot);
+
   writeItemSlotWithDamage(client_fd, count, item, damage);
 
   endPacket(client_fd);
@@ -1842,21 +1859,30 @@ mode0_swap:
 
   uint16_t *p_item;
   uint8_t *p_count;
+  uint16_t *p_damage;
 
-	  #ifdef ALLOW_CHESTS
-	  int chest_idx = -1;
-	  memcpy(&chest_idx, player->craft_items, sizeof(chest_idx));
-	  uint8_t is_ender_chest = 0;
-	  if (window_id == 2) {
-	    // Check if this is a container with block_changes storage or ender chest
-	    if (chest_idx >= 0 && chest_idx < block_changes_count &&
-	        (block_changes[chest_idx].block == B_chest || block_changes[chest_idx].block == B_barrel)) {
-	      is_ender_chest = 0;
-	    } else {
-	      is_ender_chest = 1;
-	    }
-	  }
-	  #endif
+		  #ifdef ALLOW_CHESTS
+		  int chest_idx = -1;
+		  memcpy(&chest_idx, player->craft_items, sizeof(chest_idx));
+		  uint8_t is_ender_chest = 0;
+		  uint16_t chest_before_item[27] = {0};
+		  uint8_t  chest_before_count[27] = {0};
+		  uint16_t chest_before_damage[27] = {0};
+		  if (window_id == 2) {
+		    if (chest_idx >= 0 && chest_idx < block_changes_count &&
+		        (block_changes[chest_idx].block == B_chest || block_changes[chest_idx].block == B_barrel)) {
+		      is_ender_chest = 0;
+		      uint8_t *cb = (uint8_t *)&block_changes[chest_idx + 1];
+		      for (int _cs = 0; _cs < 27; _cs++) {
+		        memcpy(&chest_before_item[_cs],  cb + _cs * 5,     2);
+		        memcpy(&chest_before_count[_cs], cb + _cs * 5 + 2, 1);
+		        memcpy(&chest_before_damage[_cs],cb + _cs * 5 + 3, 2);
+		      }
+		    } else {
+		      is_ender_chest = 1;
+		    }
+		  }
+		  #endif
 
 	  for (int i = 0; i < changes_count; i ++) {
 
@@ -1871,11 +1897,13 @@ mode0_swap:
 	    #ifdef ALLOW_CHESTS
 	    if (window_id == 2 && slot > 40 && !is_ender_chest) {
 	      uint8_t *base = (uint8_t *)&block_changes[chest_idx + 1];
-	      p_item = (uint16_t *)(base + (slot - 41) * 3);
-	      p_count = base + (slot - 41) * 3 + 2;
+	      p_item = (uint16_t *)(base + (slot - 41) * 5);
+	      p_count = base + (slot - 41) * 5 + 2;
+	      p_damage = (uint16_t *)(base + (slot - 41) * 5 + 3);
 	    } else if (window_id == 2 && slot > 40 && is_ender_chest) {
 	      p_item = &player->ender_chest_items[slot - 41];
 	      p_count = &player->ender_chest_count[slot - 41];
+	      p_damage = &player->ender_chest_damage[slot - 41];
 	    } else
 	    #endif
 	    {
@@ -1883,13 +1911,15 @@ mode0_swap:
 	      if (slot > 40 && player->flags & 0x80) return 1;
 	      p_item = &player->inventory_items[slot];
 	      p_count = &player->inventory_count[slot];
+	      p_damage = NULL;
 	    }
 
-    if (!present) { // no item?
-      if (slot != 255 && apply_changes) {
-        *p_item = 0;
-        *p_count = 0;
-        if (
+	    if (!present) { // no item?
+	      if (slot != 255 && apply_changes) {
+	        *p_item = 0;
+	        *p_count = 0;
+	        if (p_damage) *p_damage = 0;
+	        if (
           slot == player->hotbar ||
           slot == 40 ||
           (slot >= 36 && slot <= 39)
@@ -1906,6 +1936,24 @@ mode0_swap:
     if (count > 0 && apply_changes) {
       *p_item = item;
       *p_count = count;
+      // For chest slots: preserve damage from the source (inventory or cursor).
+      // Only write damage if a valid source was found — never zero out existing damage.
+      if (p_damage && window_id == 2 && slot > 40) {
+        uint16_t src_damage = 0;
+        if (player->flagval_16 == item && player->flagval_8 > 0 && player->cursor_damage > 0) {
+          src_damage = player->cursor_damage;
+        } else {
+          for (uint8_t _s = 0; _s < 41; _s++) {
+            if (before_inventory_items[_s] == item && before_inventory_count[_s] > 0 &&
+                player->inventory_count[_s] < before_inventory_count[_s] &&
+                before_inventory_damage[_s] > 0) {
+              src_damage = before_inventory_damage[_s];
+              break;
+            }
+          }
+        }
+        if (src_damage > 0) *p_damage = src_damage;
+      }
       if (
         slot == player->hotbar ||
         slot == 40 ||
@@ -1959,7 +2007,88 @@ mode0_swap:
           before_cursor_count == player->inventory_count[_si] && before_cursor_damage > 0) {
         player->inventory_damage[_si] = before_cursor_damage;
       }
+      #ifdef ALLOW_CHESTS
+      // Check if item came from a chest/barrel slot that lost this item
+      if (player->inventory_damage[_si] == 0 && window_id == 2 && chest_idx >= 0 &&
+          chest_idx < block_changes_count && !is_ender_chest) {
+        for (uint8_t _cs = 0; _cs < 27; _cs++) {
+          if (chest_before_damage[_cs] == 0) continue;
+          uint8_t *cb = (uint8_t *)&block_changes[chest_idx + 1];
+          uint16_t _cnow; uint8_t _ccnow;
+          memcpy(&_cnow,  cb + _cs * 5,     2);
+          memcpy(&_ccnow, cb + _cs * 5 + 2, 1);
+          if (chest_before_item[_cs] == player->inventory_items[_si] &&
+              chest_before_count[_cs] == player->inventory_count[_si] &&
+              (_cnow != chest_before_item[_cs] || _ccnow != chest_before_count[_cs])) {
+            player->inventory_damage[_si] = chest_before_damage[_cs];
+            break;
+          }
+        }
+      }
+      #endif
     }
+    #ifdef ALLOW_CHESTS
+    // Reconcile chest slot damage for inventory→chest, chest→chest moves, and lost sources.
+    // Must run after ALL changes are applied (order-independent).
+    if (window_id == 2 && chest_idx >= 0 && chest_idx < block_changes_count && !is_ender_chest) {
+      uint8_t *cb = (uint8_t *)&block_changes[chest_idx + 1];
+      for (uint8_t _cs = 0; _cs < 27; _cs++) {
+        uint16_t _citem; uint8_t _ccount; uint16_t _cdamage;
+        memcpy(&_citem,  cb + _cs * 5,     2);
+        memcpy(&_ccount, cb + _cs * 5 + 2, 1);
+        memcpy(&_cdamage,cb + _cs * 5 + 3, 2);
+        if (_citem == 0 || _ccount == 0 || !isDamageableItem(_citem) || _cdamage != 0) continue;
+
+        uint16_t src_damage = 0;
+        // Check cursor — item moved from cursor to chest (any count)
+        if (before_cursor_item == _citem && before_cursor_count > 0 && before_cursor_damage > 0 &&
+            player->flagval_16 != before_cursor_item) {
+          src_damage = before_cursor_damage;
+        }
+        // Check inventory slots that lost items of this type (count decreased)
+        if (src_damage == 0) {
+          for (uint8_t _s = 0; _s < 41; _s++) {
+            if (before_inventory_items[_s] == _citem && before_inventory_count[_s] > 0 &&
+                before_inventory_damage[_s] > 0 &&
+                player->inventory_count[_s] < before_inventory_count[_s]) {
+              src_damage = before_inventory_damage[_s];
+              break;
+            }
+          }
+        }
+        // Check crafting slots that lost items of this type
+        if (src_damage == 0) {
+          for (uint8_t _s = 0; _s < 9; _s++) {
+            if (before_craft_items[_s] == _citem && before_craft_count[_s] > 0 &&
+                before_craft_damage[_s] > 0 &&
+                player->craft_count[_s] < before_craft_count[_s]) {
+              src_damage = before_craft_damage[_s];
+              break;
+            }
+          }
+        }
+        // Check other chest slots that lost items (chest→chest move)
+        if (src_damage == 0) {
+          for (uint8_t _os = 0; _os < 27; _os++) {
+            if (_os == _cs) continue;
+            if (chest_before_item[_os] == _citem && chest_before_count[_os] > 0 &&
+                chest_before_damage[_os] > 0) {
+              uint16_t _onow; uint8_t _ocnow;
+              memcpy(&_onow,  cb + _os * 5,     2);
+              memcpy(&_ocnow, cb + _os * 5 + 2, 1);
+              if (_ocnow < chest_before_count[_os]) {
+                src_damage = chest_before_damage[_os];
+                break;
+              }
+            }
+          }
+        }
+        if (src_damage > 0) {
+          memcpy(cb + _cs * 5 + 3, &src_damage, 2);
+        }
+      }
+    }
+    #endif
     // Same for craft slots
     for (uint8_t _si = 0; _si < 9; _si++) {
       if (player->craft_items[_si] == 0 || player->craft_count[_si] == 0 ||
@@ -2073,7 +2202,7 @@ skip_normal_processing:
     if (cursor_item == before_cursor_item && cursor_count == before_cursor_count) {
       player->cursor_damage = cursor_damage;
     } else if (cursor_item != 0 && cursor_count > 0 && before_cursor_item == 0) {
-      // Item was picked up from inventory/craft to cursor - transfer damage
+      // Item was picked up from inventory/craft/chest to cursor - transfer damage
       player->cursor_damage = 0;
       for (uint8_t _i = 0; _i < 41; _i++) {
         if (before_inventory_items[_i] == cursor_item && before_inventory_count[_i] == cursor_count &&
@@ -2091,6 +2220,24 @@ skip_normal_processing:
           }
         }
       }
+      #ifdef ALLOW_CHESTS
+      // Check if item was picked up from a chest/barrel slot
+      if (player->cursor_damage == 0 && window_id == 2 && chest_idx >= 0 &&
+          chest_idx < block_changes_count && !is_ender_chest) {
+        uint8_t *cb = (uint8_t *)&block_changes[chest_idx + 1];
+        for (uint8_t _cs = 0; _cs < 27; _cs++) {
+          uint16_t _citem; uint8_t _ccount; uint16_t _cdamage;
+          memcpy(&_citem,  cb + _cs * 5,     2);
+          memcpy(&_ccount, cb + _cs * 5 + 2, 1);
+          memcpy(&_cdamage,cb + _cs * 5 + 3, 2);
+          if (_citem == 0 && chest_before_item[_cs] == cursor_item &&
+              chest_before_count[_cs] == cursor_count && chest_before_damage[_cs] > 0) {
+            player->cursor_damage = chest_before_damage[_cs];
+            break;
+          }
+        }
+      }
+      #endif
     } else {
       player->cursor_damage = 0;
     }

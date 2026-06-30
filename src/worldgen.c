@@ -257,7 +257,7 @@ uint8_t getChunkBiomeRaw (short x, short z) {
   // Get approximate height at this location to sample biome at surface level
   float height;
   int biomeID;
-  if (mapApproxHeight(&height, &biomeID, &g, &surface_noise_biome, surface_x >> 2, surface_z >> 2, 1, 1) == 0) {
+  if (mapApproxHeight(&height, &biomeID, &g, &surface_noise_biome, surface_x >> 2, surface_z >> 2, 1, 1) != 0) {
       // Fallback: sample at Y=64 if mapApproxHeight fails
       biomeID = getBiomeAt(&g, 1, surface_x, 64, surface_z);
   }
@@ -442,7 +442,7 @@ uint8_t getBiomeAtBlockCoords(int x, int z) {
 
   int biomeID;
   float height;
-  if (mapApproxHeight(&height, &biomeID, &g, &surface_noise_biome, x >> 2, z >> 2, 1, 1) == 0) {
+  if (mapApproxHeight(&height, &biomeID, &g, &surface_noise_biome, x >> 2, z >> 2, 1, 1) != 0) {
     biomeID = getBiomeAt(&g, 1, x, 64, z);
   }
 
